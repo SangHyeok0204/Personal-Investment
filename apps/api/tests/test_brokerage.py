@@ -12,8 +12,15 @@ def test_list_connections_seeded(client, seeded):
     assert item["connection_name"] == "키움 기본 연결"
     assert item["environment"] == "REAL"
     assert item["status"] == "CONFIGURED"
-    # No Kiwoom keys are set in the test environment.
+    # Keys are pinned empty by the autouse fixture, so this never depends on
+    # whether the developer's environment happens to have them configured.
     assert item["credentials_configured"] is False
+
+
+def test_credentials_configured_when_keys_present(client, seeded, kiwoom_keys_set):
+    response = client.get("/api/v1/brokerage-connections")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["credentials_configured"] is True
 
 
 def test_list_connections_empty(client):

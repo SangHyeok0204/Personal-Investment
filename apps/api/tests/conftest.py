@@ -79,6 +79,26 @@ def seeded(db):
     return {"broker_id": broker.id, "connection_id": connection.id}
 
 
+@pytest.fixture(autouse=True)
+def _no_kiwoom_keys(monkeypatch):
+    """Pin credentials_configured to False for every test.
+
+    Without this the suite depends on ambient env: the api container carries the
+    user's real KIWOOM_APP_KEY/SECRET, so tests asserting
+    ``credentials_configured is False`` passed on a bare host and failed
+    in-container. Tests must not read the developer's configuration.
+    """
+    monkeypatch.setattr(settings, "KIWOOM_APP_KEY", "")
+    monkeypatch.setattr(settings, "KIWOOM_SECRET_KEY", "")
+
+
+@pytest.fixture()
+def kiwoom_keys_set(monkeypatch):
+    """Opt in to the configured-credentials case."""
+    monkeypatch.setattr(settings, "KIWOOM_APP_KEY", "test-app-key")
+    monkeypatch.setattr(settings, "KIWOOM_SECRET_KEY", "test-secret-key")
+
+
 @pytest.fixture()
 def client(engine, db, tmp_path, monkeypatch):
     storage_dir = tmp_path / "storage"
