@@ -60,9 +60,11 @@ function pnlToneClass(value: number | null): string {
 export function PositionsTable({
   accounts,
   syncStatus,
+  totalSecuritiesKrw,
 }: {
   accounts: PortfolioAccount[];
   syncStatus: SyncStatus;
+  totalSecuritiesKrw: number | undefined;
 }) {
   const [country, setCountry] = useState<string | undefined>(undefined);
   const [accountId, setAccountId] = useState<string | undefined>(undefined);
@@ -85,7 +87,14 @@ export function PositionsTable({
     if (bv == null) return -1;
     return bv - av;
   });
-  const totalKrw = rows.reduce((sum, p) => sum + (p.market_value_krw ?? 0), 0);
+  // 비중 is the share of the WHOLE portfolio, so a row keeps the same weight when
+  // the 국내/미국 filter narrows the table. Falls back to the visible rows only if
+  // the overview total is unavailable.
+  const visibleKrw = rows.reduce((sum, p) => sum + (p.market_value_krw ?? 0), 0);
+  const totalKrw =
+    totalSecuritiesKrw != null && totalSecuritiesKrw > 0
+      ? totalSecuritiesKrw
+      : visibleKrw;
 
   return (
     <Card>

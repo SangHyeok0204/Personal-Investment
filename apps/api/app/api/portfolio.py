@@ -97,17 +97,46 @@ def _cash_out(balance: AccountBalance) -> CashBalanceOut:
         currency=balance.currency,
         cash_balance=balance.cash_balance,
         available_cash=balance.available_cash,
-        total_evaluation_amount_krw=balance.total_evaluation_amount_krw,
+        exchange_rate=balance.exchange_rate,
+        cash_krw=_cash_krw_value(balance),
+        # DB column keeps its name; the API field says what the value actually is.
+        estimated_total_assets_krw=balance.total_evaluation_amount_krw,
         as_of=balance.as_of,
     )
 
 
+def _cash_krw_value(balance: AccountBalance) -> float | None:
+    """KRW value of ONE cash row: cash_balance x the stored FX rate (KRW -> 1.0).
+
+    None when the rate is unknown — FX is never guessed (contract §10).
+
+    Deliberately does NOT read ``total_evaluation_amount_krw``: that column is
+    Kiwoom's 추정예탁자산, an ACCOUNT-level total (cash + securities). Summing it as
+    cash double-counts the securities and doubles 총자산.
+    """
+    rate = _krw_rate(balance.currency, balance.exchange_rate)
+    if balance.cash_balance is None or rate is None:
+        return None
+    return float(balance.cash_balance) * rate
+
+
 def _cash_krw(balances: list[AccountBalance]) -> float:
+    """Total cash in KRW. Rows with an unknown FX rate contribute 0."""
+    return sum((_cash_krw_value(b) or 0.0 for b in balances), 0.0)
+
+
+def _purchase_krw(positions: list[PositionOut]) -> float:
+    """Real purchase total in KRW: the stored per-position purchase amount converted
+    with the stored Kiwoom FX rate.
+
+    Never ``securities - pnl`` — Kiwoom's pnl is net of fees/taxes, so that
+    derivation silently overstated the total (by 15,248 KRW against a live account).
+    """
     total = 0.0
-    for balance in balances:
-        rate = _krw_rate(balance.currency, balance.exchange_rate)
-        if balance.cash_balance is not None and rate is not None:
-            total += float(balance.cash_balance) * rate
+    for position in positions:
+        rate = _krw_rate(position.currency, position.exchange_rate)
+        if position.purchase_amount_local is not None and rate is not None:
+            total += position.purchase_amount_local * rate
     return total
 
 
@@ -139,7 +168,7 @@ def overview(db: Session = Depends(get_db)) -> PortfolioOverviewOut:
     total_unrealized_pnl_krw = sum(
         p.unrealized_pnl_krw for p in positions if p.unrealized_pnl_krw is not None
     )
-    total_purchase_amount_krw = securities_value_krw - total_unrealized_pnl_krw
+    total_purchase_amount_krw = _purchase_krw(positions)
     cash_value_krw = _cash_krw(balances)
     total_assets_krw = securities_value_krw + cash_value_krw
     unrealized_return_pct = (
@@ -157,11 +186,9 @@ def overview(db: Session = Depends(get_db)) -> PortfolioOverviewOut:
             )
     cash_by_account: dict[uuid.UUID, float] = {}
     for b in balances:
-        rate = _krw_rate(b.currency, b.exchange_rate)
-        if b.cash_balance is not None and rate is not None:
-            cash_by_account[b.account_id] = (
-                cash_by_account.get(b.account_id, 0.0) + float(b.cash_balance) * rate
-            )
+        cash_by_account[b.account_id] = cash_by_account.get(b.account_id, 0.0) + (
+            _cash_krw_value(b) or 0.0
+        )
 
     account_items = [
         AccountSummaryOut(

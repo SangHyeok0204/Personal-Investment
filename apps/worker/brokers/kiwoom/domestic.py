@@ -4,10 +4,9 @@ fetch_* call the client (raw pages, for saving); parse_* validate a schema
 (pydantic ValidationError on bad shape -> the handler turns it into a
 KiwoomResponseShapeError with the saved raw path).
 
-Several request fields/enums are marked TO-VERIFY: the reference (§4) confirmed
-the response field NAMES from wrapper source code but could NOT confirm request
-enum VALUES or the ka00001 request/response shape from official docs. These are
-constants so a single real 모의투자 call can pin them.
+Request enums and the ka00001 shape were pinned against the LIVE API on
+2026-07-12 (see the CONFIRMED notes below). The one thing still unproven is
+whether dmst_stex_tp must change for an account holding NXT-listed stock.
 """
 from .exceptions import KiwoomResponseShapeError
 from .schemas.domestic import (
@@ -20,36 +19,61 @@ API_ACCOUNT_LIST = "ka00001"  # 계좌목록/계좌번호 조회
 API_DEPOSIT = "kt00001"  # 예수금상세현황요청
 API_BALANCE = "kt00018"  # 계좌평가잔고내역요청
 
-# Request enum values — TO-VERIFY(모의투자 실호출로 확정), reference §4.2/§4.3 [TV].
+# Request enum values — CONFIRMED (live 2026-07-12): all three return return_code=0
+# with complete data. For kt00018 the returned holdings sum exactly to tot_evlt_amt
+# and poss_rt sums to 100.00%, i.e. nothing is being filtered out by these values.
 BALANCE_QRY_TP = "1"  # kt00018 조회구분
-BALANCE_DMST_STEX_TP = "KRX"  # kt00018 국내거래소구분 (KRX/NXT/통합)
-DEPOSIT_QRY_TP = "3"  # kt00001 조회구분 (3=추정조회 추정)
+# 국내거래소구분. "KRX" returns this account's holdings in full. Whether an account
+# holding NXT-listed stock would need "NXT"/통합 is still unproven — no such holding
+# exists here to test with. TO-VERIFY(NXT 보유 계좌로만 확인 가능).
+BALANCE_DMST_STEX_TP = "KRX"
+DEPOSIT_QRY_TP = "3"  # kt00001 조회구분
 
-# ka00001 request body — TO-VERIFY: request fields unconfirmed (reference §4.1 [TV]).
+# ka00001 takes no request body. CONFIRMED (live 2026-07-12).
 ACCOUNT_LIST_BODY = {}
 
-# The reference lists NO account-number field on kt00018/kt00001 (§4.2/§4.3), yet
-# the design queries per account. We pass the account number under this key so a
-# multi-account token is handled correctly; if the real API names it differently
-# or rejects it, change this ONE constant. TO-VERIFY(실호출로 확정).
-ACCOUNT_NO_REQUEST_FIELD = "acnt_no"
+# The appkey is bound to a single account, and kt00018/kt00001 both answer correctly
+# with NO account number in the request. CONFIRMED (live 2026-07-12) — None = don't
+# send one. If a multi-account key ever needs it, set this to the real field name.
+ACCOUNT_NO_REQUEST_FIELD = None
 
-# Candidate keys for the ka00001 response (all TO-VERIFY, reference §4.1 [TV]).
+# ka00001 carries no name/type, so these are display fallbacks — NOT API data.
+DEFAULT_ACCOUNT_NAME = "위탁종합"
+DEFAULT_ACCOUNT_TYPE = "위탁종합"
+
+# ka00001 response is {"acctNo": "<10 digits>", "return_code": 0, "return_msg": ...}
+# — a camelCase SCALAR, not an array. CONFIRMED (live 2026-07-12).
+# Kiwoom is NOT consistent across TRs (ka00001 camelCase vs kt000xx snake_case), so
+# key lookup below ignores case/underscores and the array form is kept as a fallback.
 _ACCOUNT_LIST_KEYS = ("acnt_list", "accno_list", "acnt", "list", "output", "data")
-_ACCOUNT_NO_KEYS = ("acnt_no", "accno", "acnt_num", "acntno")
-_ACCOUNT_NAME_KEYS = ("acnt_nm", "acnt_name", "accno_nm")
-_ACCOUNT_TYPE_KEYS = ("acnt_tp", "acnt_type", "prod_tp")
+_ACCOUNT_NO_KEYS = ("acctNo", "acnt_no", "accno", "acnt_num")
+_ACCOUNT_NAME_KEYS = ("acctNm", "acnt_nm", "acnt_name")
+_ACCOUNT_TYPE_KEYS = ("acctTp", "acnt_tp", "acnt_type", "prod_tp")
+
+
+def _normalize_key(key):
+    return str(key).replace("_", "").lower()
 
 
 def _first_present(mapping, keys):
+    """First candidate key present, matched ignoring case and underscores.
+
+    Kiwoom mixes naming styles between TRs, so `acctNo` and `acnt_no` must both
+    resolve. Candidate order is still honoured (first listed wins).
+    """
+    normalized = {}
+    for key, value in mapping.items():
+        normalized.setdefault(_normalize_key(key), value)
     for key in keys:
-        value = mapping.get(key)
+        value = normalized.get(_normalize_key(key))
         if value not in (None, ""):
             return value
     return None
 
 
 def _apply_account_no(body, account):
+    if not ACCOUNT_NO_REQUEST_FIELD:
+        return body
     acct_no = account.get("external_account_id")
     if acct_no:
         body[ACCOUNT_NO_REQUEST_FIELD] = acct_no
@@ -63,7 +87,11 @@ def fetch_account_list(client):
 
 
 def parse_account_list(pages):
-    """Extract accounts defensively (ka00001 fields are TO-VERIFY).
+    """Extract accounts from ka00001.
+
+    Live shape (CONFIRMED 2026-07-12): the account number is a TOP-LEVEL scalar
+    (`acctNo`) — one account per appkey, no array, no name/type. We still try an
+    array form first in case a multi-account key answers differently.
 
     Returns a de-duplicated list of {external_account_id, account_name,
     account_type}. Empty list means nothing recognizable was found.
@@ -75,7 +103,7 @@ def parse_account_list(pages):
         array = _first_present(page, _ACCOUNT_LIST_KEYS)
         if isinstance(array, list):
             items.extend(array)
-    # Fallback: a token bound to a single account may return it at the top level.
+    # Live path: single account returned as a top-level scalar.
     if not items:
         for page in pages:
             if isinstance(page, dict) and _first_present(page, _ACCOUNT_NO_KEYS):
@@ -98,8 +126,8 @@ def parse_account_list(pages):
         accounts.append(
             {
                 "external_account_id": external_id,
-                "account_name": str(name).strip() if name else None,
-                "account_type": str(acct_type).strip() if acct_type else None,
+                "account_name": str(name).strip() if name else DEFAULT_ACCOUNT_NAME,
+                "account_type": str(acct_type).strip() if acct_type else DEFAULT_ACCOUNT_TYPE,
             }
         )
     return accounts

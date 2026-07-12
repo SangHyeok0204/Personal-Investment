@@ -242,7 +242,12 @@ export interface CashBalance {
   currency: string;
   cash_balance: number | null;
   available_cash: number | null;
-  total_evaluation_amount_krw: number | null;
+  exchange_rate: number | null;
+  /** This row's cash converted to KRW by Kiwoom's rate. Use this for cash totals. */
+  cash_krw: number | null;
+  /** Kiwoom's 추정예탁자산 (account-level: cash + securities), NOT this row's cash in
+   * KRW. Reconciliation figure only — summing it as cash double-counts securities. */
+  estimated_total_assets_krw: number | null;
   as_of: string | null;
 }
 

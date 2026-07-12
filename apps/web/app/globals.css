@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-canvas-soft font-sans text-ink antialiased;
+    @apply bg-[#f4f6f9] font-sans text-ink antialiased;
   }
 }
 

@@ -12,7 +12,7 @@ Source plan: user's Kiwoom design doc + lead's evaluation (2026-07-12). Kiwoom e
 - Worker stays raw-SQL style (SQLAlchemy text() + `ON CONFLICT` upserts). ORM models for the new tables live in the API app only.
 - Tables in the `public` schema, names as §3. `assets` unique on (country, market, ticker); `asset_identifiers` deferred.
 - Idempotency = query jobs for existing PENDING/RUNNING SYNC_KIWOOM_PORTFOLIO with same connection_id; no time_bucket key.
-- US equities: build IF kiwoom-api-reference confirms REST support with concrete endpoints; otherwise implement a clean NOT_SUPPORTED degradation (domestic-only sync still succeeds, `us_supported=false` surfaced) — do not fabricate endpoints.
+- ~~US equities: build IF kiwoom-api-reference confirms REST support~~ → **SUPERSEDED 2026-07-12 (round 2b): US REST IS CONFIRMED LIVE.** The precondition is met, so US is now IN SCOPE and `us_supported` must become `true`. See §10 (US addendum, binding).
 - n8n: manual-trigger workflow only this round (schedules documented, added after keys work).
 - Without configured keys, everything still runs: UI shows "키 미설정" state; a sync job FAILS cleanly at step `validate_configuration` with a clear message. This is the E2E we verify pre-keys.
 
@@ -122,6 +122,34 @@ Position JSON: the §5 internal model fields, camel/snake — use snake_case lik
 - `scripts/integration-test.sh` updates: read INTERNAL_API_KEY from .env; add header to /internal/jobs step; NEW steps: (a) GET /api/v1/portfolio/overview → 200 & sync_status field present; (b) GET /api/v1/brokerage-connections → 1 item, credentials_configured=false (pre-keys CI reality); (c) POST /api/v1/brokerage-connections/{id}/sync → job created; poll until FAILED and error mentions "not configured" (THIS IS EXPECTED PASS pre-keys — print clearly "PASS: sync fails cleanly without keys"). Keep existing steps green.
 - `workflows/n8n/README.md` += new workflow entry + note on adding Schedule Trigger later (장전 08:30 / 장후 16:00 / 미장후 06:30 KST 예시).
 - `README.md` += "키움 API 키 설정" 섹션: 키움 REST API 신청 경로(키움증권 홈페이지 → Open API 신청), .env 4개 키 입력, `docker compose up -d --force-recreate api worker`, 대시보드에서 동기화 버튼, 문제 시 Data Operations 작업 로그 확인.
+
+## 10. US equities addendum (round 2b — BINDING, supersedes the §0 NOT_SUPPORTED decision)
+
+Confirmed live (2026-07-12, read-only probe with real keys; all return_code=0):
+- `POST /api/us/acnt` with api-id `ust21070` (해외 잔고), `ust21110` (해외 예수금), `ust21160` (예수금 상세). No account number in the request (appkey is account-bound, same as domestic).
+- `ust21070` → top-level `tot_evlt_amt(_krw)`, `tot_prch_amt(_krw)`, `tot_pl_amt(_krw)`, `tot_pl_rt`; `result_list[]` per holding: `stk_cd`, `frgn_stk_nm`, **`poss_qty`** (⚠️ see below), `qty`, `sell_alowq`, `frgn_stk_book_uv` (매입단가), `now_pric`, `evlt_amt`, `pl_amt`, `pl_rt`, `evlt_amt_krw`, `pl_amt_krw`, `exch_rate`, `natn_nm`, `stex_nm`.
+- ⚠️ **quantity = `poss_qty`, NOT `qty`.** `qty` omits unsettled buys. Live proof: SKHYV `qty`=0 / `poss_qty`=2 — using `qty` silently DROPS a 504,030 KRW position; GLW `qty`=1 / `poss_qty`=4. `evlt_amt / now_pric == poss_qty` on every row.
+- `ust21110` → `krw_entra` + `result_list[{crnc_code, fc_entra, fc_pymn_alowa, fc_ord_alowa, fc_booka}]`. **It carries NO FX rate.**
+- **`ust21160` is REQUIRED** (not optional): it is the only source of BOTH `usd_exch_rate` (comma-formatted, e.g. "1,484.10") AND the settled **D+2** USD balance (`d2_usd_fx_entr`).
+
+Pins:
+- **KRW conversion comes FROM KIWOOM** (`evlt_amt_krw`, `pl_amt_krw`, `exch_rate`). NEVER compute or guess FX. Store `exchange_rate` per position from `exch_rate`.
+- ⚠️ **Kiwoom uses TWO different USD rates and both are authoritative — do not unify them.** Positions: `exch_rate` = **1500.00** flat (Kiwoom's own `evlt_amt_krw` is computed with it — matching HTS). USD cash: `usd_exch_rate` = **1,484.10** (ust21160). Storing either one over the other would misstate money. Kiwoom also rounds each holding's KRW separately AND the grand total separately, so Σ(rows) ≠ their total by ±1~60 KRW — that is THEIR rounding; do not "fix" it by recomputing.
+- **assets.market for US = `"US"`** (constant) — the response carries no NASDAQ/NYSE field (only `stex_nm`/`natn_nm`); use `stex_nm` ONLY if it cleanly yields NASDAQ/NYSE/AMEX, else `"US"`. This supersedes §5's "market from response". country=`"US"`, currency=`"USD"`, ticker = `stk_cd` normalized (strip any exchange suffix/prefix; keep the plain symbol, e.g. GOOGL).
+- **USD cash row**: `account_balances` (UNIQUE account_id+currency) gets a USD row. `exchange_rate` = `usd_exch_rate` (ust21160) so USD cash CAN be counted in KRW totals (previously NULL/excluded). Do **NOT** repurpose `total_evaluation_amount_*` for this (see the ⚠️ below).
+- ⚠️ **USD `cash_balance` = the SETTLED D+2 balance (`ust21160.d2_usd_fx_entr`), NOT `fc_entra` (D+0).** Live proof: fc_entra 4,905.44 vs d2 3,976.74; the 928.70 gap is exactly the pending buys (`d1+d2_usd_buy_excta`) for shares ALREADY counted in `poss_qty`. Using fc_entra double-counts **1,378,284 KRW** — the same bug class as the domestic `entr`/D+2 trap. (An earlier draft of this section said fc_entra; that was WRONG, caught live by kw-worker.) A negative D+2 KRW balance (e.g. −1,027 after a KRW→USD 환전) is truthful, not a bug.
+- ⚠️ **`account_balances.total_evaluation_amount_local/_krw` is Kiwoom's 추정예탁자산 — an ACCOUNT-level total (cash + securities), NOT the cash row's KRW value.** Live proof: KRW row has `cash_balance` 2,495 but `total_evaluation_amount_krw` 6,597,287 (≈ the securities). **Never use it as cash** — doing so double-counts securities and doubles 총자산 (this is the same class of bug as the `entr` double-count). It may only be surfaced as a reconciliation figure (키움 추정예탁자산) or ignored.
+- ⚠️ **"Never sum 추정예탁자산 as cash" applies to EVERY consumer, not just the API.** It bit in three places: (1) the API summary, (2) the worker's `account_balances` writes, and (3) **`portfolio_snapshots.cash_value_krw`**, which was summing that column — fixing only (1) and (2) would have relocated the double-count into the snapshot table (총자산 would have read ~51.9M instead of 45.3M). Every cash total, in any layer, is `Σ(cash_balance × exchange_rate)`. Snapshot and API summary must agree by construction.
+- ⚠️ **KRW cash row must stay = `kt00001.d2_entra` (settled D+2 cash).** `ust21110.krw_entra` is a different figure; because `account_balances` is UNIQUE(account_id, currency), upserting it would silently OVERWRITE the correct KRW row and re-introduce the double-count. Take the USD row from the US TR; leave the KRW row to `kt00001`.
+- Job result: `us_supported: true`, `us_positions: n`. Steps `fetch_us_balance` / `fetch_us_positions` do real work (no more SKIPPED). Raw responses saved per §4 naming (`ust21070_balance_*.json` etc.).
+- Partial-failure rule (§4) stands: domestic committed per-account tx; a US failure still FAILS the job with a clear message and connection→ERROR, but domestic data stays.
+
+Summary/aggregation corrections (kw-api, binding):
+- `summary.total_purchase_amount_krw` MUST be the real purchase total (sum of positions' purchase amounts in KRW / Kiwoom's `tot_pur_amt` + `tot_prch_amt_krw`) — **NOT** the old derivation `securities − pnl` (which was off by 15,248 KRW live).
+- `summary.cash_value_krw` = **Σ(cash_balance × exchange_rate)** over balance rows; KRW rate defaults to 1.0 when null; a row with no rate contributes 0 (never guess FX). ~~Σ(total_evaluation_amount_krw where present…)~~ — **that earlier formula was WRONG** (it summed 추정예탁자산 = cash + securities into "cash"; caught by kw-web before shipping).
+- `CashBalanceOut` MUST expose `exchange_rate` (nullable) and `cash_krw` (= cash_balance × exchange_rate, null when no rate) so the UI can show a USD card's KRW sub-line without inventing FX.
+- `market_breakdown` must list both KR and US rows.
+- Reconciliation invariant (verify stage): `summary.total_assets_krw` ≈ (키움 국내 tot_evlt_amt + 미국 tot_evlt_amt_krw) + (D+2 KRW cash + USD cash × FX). It must NOT approach the sum of those plus 추정예탁자산.
 
 ## 9. File ownership (round 2)
 

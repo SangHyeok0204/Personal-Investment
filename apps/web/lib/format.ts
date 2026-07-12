@@ -32,14 +32,17 @@ const USD_FMT = new Intl.NumberFormat("ko-KR", {
 });
 const QTY_FMT = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 6 });
 
+// Negative amounts read as -₩379,148 (sign ahead of the symbol), not ₩-379,148.
 export function formatKrw(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
-  return `₩${KRW_FMT.format(value)}`;
+  const sign = value < 0 ? "-" : "";
+  return `${sign}₩${KRW_FMT.format(Math.abs(value))}`;
 }
 
 export function formatUsd(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
-  return `$${USD_FMT.format(value)}`;
+  const sign = value < 0 ? "-" : "";
+  return `${sign}$${USD_FMT.format(Math.abs(value))}`;
 }
 
 export function formatMoney(

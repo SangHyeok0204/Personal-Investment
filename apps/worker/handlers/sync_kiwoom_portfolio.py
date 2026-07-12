@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 
 from brokers.kiwoom import auth, domestic, us_equities
-from brokers.kiwoom.adapter import normalize_domestic_account
+from brokers.kiwoom.adapter import normalize_account
 from brokers.kiwoom.client import KiwoomClient
 from brokers.kiwoom.exceptions import KiwoomConfigError, KiwoomResponseShapeError
 from repositories import accounts as accounts_repo
@@ -37,7 +37,6 @@ from repositories import snapshots as snapshots_repo
 
 DEFAULT_BASE_URL = "https://api.kiwoom.com"
 CONFIG_ERROR_MESSAGE = "KIWOOM_APP_KEY/KIWOOM_SECRET_KEY is not configured"
-US_SKIP_MESSAGE = "SKIPPED: US REST support unconfirmed (see kiwoom-api-reference §5)"
 
 
 # ---- connection helpers (no dedicated repo per contract §5 structure) ---------
@@ -225,11 +224,55 @@ def run(engine, job_id, payload, storage_dir, log_job):
             log_job(engine, job_id, "INFO", "fetch_domestic_positions",
                     f"Fetched {total_holdings} holding row(s)")
 
-            # 6/7. fetch_us_balance / fetch_us_positions — SKIPPED ------------
-            if us_equities.US_SUPPORTED:  # pragma: no cover - disabled this round
-                raise KiwoomResponseShapeError("US path enabled but not implemented")
-            log_job(engine, job_id, "INFO", "fetch_us_balance", US_SKIP_MESSAGE)
-            log_job(engine, job_id, "INFO", "fetch_us_positions", US_SKIP_MESSAGE)
+            # 6. fetch_us_balance (ust21110 예수금 + ust21160 예수금상세) -------
+            # ust21160 is required, not optional: it is the ONLY source of
+            # usd_exch_rate AND of the settled D+2 USD balance.
+            for entry in per_account:
+                account = entry["account"]
+                index = entry["index"]
+
+                us_deposit_pages = us_equities.fetch_deposit(client, account)
+                for rel_path, digest in _save_pages(
+                    abs_dir, rel_dir, f"ust21110_us_deposit_{index}", us_deposit_pages
+                ):
+                    raw_registrations.append(("us", us_equities.API_US_DEPOSIT, rel_path, digest))
+
+                us_detail_pages = us_equities.fetch_deposit_detail(client, account)
+                for rel_path, digest in _save_pages(
+                    abs_dir, rel_dir, f"ust21160_us_deposit_detail_{index}", us_detail_pages
+                ):
+                    raw_registrations.append(
+                        ("us", us_equities.API_US_DEPOSIT_DETAIL, rel_path, digest)
+                    )
+
+                try:
+                    entry["us_deposit"] = us_equities.parse_deposit(us_deposit_pages)
+                    entry["us_detail"] = us_equities.parse_deposit_detail(us_detail_pages)
+                except ValidationError as exc:
+                    raise KiwoomResponseShapeError(
+                        f"unexpected response shape "
+                        f"(raw saved: {_last_saved_path(raw_registrations)})"
+                    ) from exc
+            log_job(engine, job_id, "INFO", "fetch_us_balance",
+                    f"Fetched US deposits for {len(per_account)} account(s)")
+
+            # 7. fetch_us_positions (ust21070 해외 잔고) -----------------------
+            for entry in per_account:
+                us_balance_pages = us_equities.fetch_positions(client, entry["account"])
+                for rel_path, digest in _save_pages(
+                    abs_dir, rel_dir, f"ust21070_us_balance_{entry['index']}", us_balance_pages
+                ):
+                    raw_registrations.append(("us", us_equities.API_US_POSITIONS, rel_path, digest))
+                try:
+                    entry["us_balance"] = us_equities.parse_positions(us_balance_pages)
+                except ValidationError as exc:
+                    raise KiwoomResponseShapeError(
+                        f"unexpected response shape "
+                        f"(raw saved: {_last_saved_path(raw_registrations)})"
+                    ) from exc
+            total_us_holdings = sum(len(e["us_balance"].result_list) for e in per_account)
+            log_job(engine, job_id, "INFO", "fetch_us_positions",
+                    f"Fetched {total_us_holdings} US holding row(s)")
 
         # 8. save_raw_responses (register rows BEFORE portfolio DB writes) -----
         with engine.begin() as conn:
@@ -242,13 +285,24 @@ def run(engine, job_id, payload, storage_dir, log_job):
 
         # 9. normalize_assets --------------------------------------------------
         normalized = [
-            normalize_domestic_account(e["account"], e["balance"], e["deposit"])
+            normalize_account(
+                e["account"],
+                e["balance"],
+                e["deposit"],
+                us_balance=e.get("us_balance"),
+                us_deposit=e.get("us_deposit"),
+                us_detail=e.get("us_detail"),
+            )
             for e in per_account
         ]
-        total_positions = sum(len(n["positions"]) for n in normalized)
+        all_positions = [p for n in normalized for p in n["positions"]]
+        total_positions = len(all_positions)
         total_balances = sum(len(n["balances"]) for n in normalized)
+        domestic_positions = sum(1 for p in all_positions if p["country"] == "KR")
+        us_positions = sum(1 for p in all_positions if p["country"] == "US")
         log_job(engine, job_id, "INFO", "normalize_assets",
-                f"Normalized {total_positions} position(s), {total_balances} balance(s)")
+                f"Normalized {domestic_positions} domestic + {us_positions} US position(s), "
+                f"{total_balances} balance(s)")
 
         # 10/11/12. per-account transaction (all-or-nothing): accounts, balances,
         # assets, positions, delete sold rows, snapshots.
@@ -291,8 +345,8 @@ def run(engine, job_id, payload, storage_dir, log_job):
         _update_connection_success(engine, connection_id)
         result = {
             "accounts_synced": len(normalized),
-            "domestic_positions": total_positions,
-            "us_positions": 0,
+            "domestic_positions": domestic_positions,
+            "us_positions": us_positions,
             "cash_balances": total_balances,
             "snapshots_created": snapshots_created,
             "us_supported": us_equities.US_SUPPORTED,
@@ -300,7 +354,7 @@ def run(engine, job_id, payload, storage_dir, log_job):
         }
         log_job(engine, job_id, "INFO", "complete",
                 f"Sync complete: {result['accounts_synced']} account(s), "
-                f"{result['domestic_positions']} position(s)")
+                f"{domestic_positions} domestic + {us_positions} US position(s)")
         return result
 
     except Exception as exc:

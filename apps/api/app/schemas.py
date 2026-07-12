@@ -153,7 +153,12 @@ class CashBalanceOut(BaseModel):
     currency: str
     cash_balance: float | None
     available_cash: float | None
-    total_evaluation_amount_krw: float | None
+    exchange_rate: float | None
+    cash_krw: float | None
+    # Kiwoom's 추정예탁자산 (account-level: cash + securities). NOT this row's cash
+    # in KRW — never sum it as cash (that double-counts securities). Reconciliation
+    # figure only; the UI must use cash_krw.
+    estimated_total_assets_krw: float | None
     as_of: datetime | None
 
 
