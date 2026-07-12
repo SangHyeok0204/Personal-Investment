@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+
+# Python
+__pycache__/
+*.pyc
+.venv*
+
+# Environment (never commit real secrets)
+.env
+
+# Storage: keep folder structure, ignore uploaded/processed files
+storage/raw/*
+storage/processed/*
+!storage/**/.gitkeep
+
+# Windows / WSL artifacts
+*Zone.Identifier
+
+# macOS
+.DS_Store
