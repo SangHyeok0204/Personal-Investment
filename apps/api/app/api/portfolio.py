@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Select, nullslast, select
+from sqlalchemy import Date, Select, case, cast, func, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -15,6 +16,8 @@ from app.models import (
     BrokerageConnection,
     CurrentPosition,
     Job,
+    PortfolioSnapshot,
+    PositionSnapshot,
 )
 from app.schemas import (
     AccountPortfolioOut,
@@ -22,7 +25,9 @@ from app.schemas import (
     AssetClassBreakdownOut,
     CashBalanceOut,
     ConnectionBriefOut,
+    HistoryPointOut,
     MarketBreakdownOut,
+    PortfolioHistoryOut,
     PortfolioOverviewOut,
     PortfolioSummaryOut,
     PositionListOut,
@@ -349,6 +354,162 @@ def list_positions(
 
     items = _positions_from(db, stmt)
     return PositionListOut(items=items, total=len(items))
+
+
+def _kst_day(column):
+    """KST calendar day of a UTC timestamp.
+
+    The DB stores UTC, but the day boundary that matters is Asia/Seoul
+    (UTC 15:00 = KST midnight the next day).
+    """
+    return cast(func.timezone("Asia/Seoul", column), Date)
+
+
+def _parse_exclude_tickers(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [ticker.strip().upper() for ticker in raw.split(",") if ticker.strip()]
+
+
+@router.get("/history", response_model=PortfolioHistoryOut)
+def portfolio_history(
+    days: int = Query(90, ge=1, le=730),
+    exclude_tickers: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioHistoryOut:
+    """Daily total-assets series from portfolio_snapshots.
+
+    One point per KST day — that day's LAST sync — summed across accounts. With
+    ``exclude_tickers`` the securities figures are recomputed from position_snapshots
+    so a dashboard that hides those tickers shows a chart matching its own cards;
+    otherwise the cards and the chart would quietly disagree.
+    """
+    excluded = _parse_exclude_tickers(exclude_tickers)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    kst_day = _kst_day(PortfolioSnapshot.snapshot_at)
+    ranked = (
+        select(
+            PortfolioSnapshot.id.label("id"),
+            PortfolioSnapshot.snapshot_at.label("snapshot_at"),
+            PortfolioSnapshot.cash_value_krw.label("cash_value_krw"),
+            PortfolioSnapshot.securities_value_krw.label("securities_value_krw"),
+            PortfolioSnapshot.total_assets_krw.label("total_assets_krw"),
+            PortfolioSnapshot.total_purchase_amount_krw.label("total_purchase_amount_krw"),
+            PortfolioSnapshot.total_unrealized_pnl_krw.label("total_unrealized_pnl_krw"),
+            kst_day.label("kst_day"),
+            func.row_number()
+            .over(
+                partition_by=(PortfolioSnapshot.account_id, kst_day),
+                order_by=(
+                    PortfolioSnapshot.snapshot_at.desc(),
+                    PortfolioSnapshot.id.desc(),
+                ),
+            )
+            .label("rn"),
+        )
+        .where(PortfolioSnapshot.snapshot_at >= since)
+        .subquery()
+    )
+    # Each account's last snapshot of each day: syncing six times a day still yields
+    # a single point.
+    chosen = select(ranked).where(ranked.c.rn == 1).subquery()
+
+    # Span of EVERY snapshot in the window (not just the chosen ones) — the UI shows
+    # "최초 기록" from this while the series is still accumulating.
+    first_snapshot_at, last_snapshot_at = db.execute(
+        select(
+            func.min(PortfolioSnapshot.snapshot_at),
+            func.max(PortfolioSnapshot.snapshot_at),
+        ).where(PortfolioSnapshot.snapshot_at >= since)
+    ).one()
+
+    rows = db.execute(
+        select(
+            chosen.c.kst_day,
+            func.max(chosen.c.snapshot_at).label("snapshot_at"),
+            func.coalesce(func.sum(chosen.c.cash_value_krw), 0).label("cash"),
+            func.coalesce(func.sum(chosen.c.securities_value_krw), 0).label("securities"),
+            func.coalesce(func.sum(chosen.c.total_assets_krw), 0).label("total"),
+            func.coalesce(func.sum(chosen.c.total_purchase_amount_krw), 0).label("purchase"),
+            func.coalesce(func.sum(chosen.c.total_unrealized_pnl_krw), 0).label("pnl"),
+        )
+        .group_by(chosen.c.kst_day)
+        .order_by(chosen.c.kst_day.asc())
+    ).all()
+
+    recomputed: dict = {}
+    if excluded:
+        # position_snapshots has no purchase-amount column, so purchase is derived as
+        # quantity x average_purchase_price x exchange_rate. The rate is stored on the
+        # row (Kiwoom's own), so this converts rather than invents FX; KRW -> 1.0.
+        rate = func.coalesce(
+            PositionSnapshot.exchange_rate,
+            case((PositionSnapshot.currency == "KRW", 1.0)),
+        )
+        recomputed = {
+            row.kst_day: (float(row.securities), float(row.purchase), float(row.pnl))
+            for row in db.execute(
+                select(
+                    chosen.c.kst_day,
+                    func.coalesce(func.sum(PositionSnapshot.market_value_krw), 0).label(
+                        "securities"
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            PositionSnapshot.quantity
+                            * PositionSnapshot.average_purchase_price
+                            * rate
+                        ),
+                        0,
+                    ).label("purchase"),
+                    func.coalesce(func.sum(PositionSnapshot.unrealized_pnl_krw), 0).label(
+                        "pnl"
+                    ),
+                )
+                .select_from(chosen)
+                .join(
+                    PositionSnapshot,
+                    PositionSnapshot.portfolio_snapshot_id == chosen.c.id,
+                )
+                .join(Asset, Asset.id == PositionSnapshot.asset_id)
+                .where(Asset.ticker.notin_(excluded))
+                .group_by(chosen.c.kst_day)
+            ).all()
+        }
+
+    points: list[HistoryPointOut] = []
+    for row in rows:
+        cash = float(row.cash)
+        if excluded:
+            # A ticker filter never touches cash — only securities are recomputed.
+            securities, purchase, pnl = recomputed.get(row.kst_day, (0.0, 0.0, 0.0))
+            total = securities + cash
+        else:
+            securities = float(row.securities)
+            purchase = float(row.purchase)
+            pnl = float(row.pnl)
+            total = float(row.total)
+        points.append(
+            HistoryPointOut(
+                date=row.kst_day,
+                snapshot_at=row.snapshot_at,
+                total_assets_krw=total,
+                securities_value_krw=securities,
+                cash_value_krw=cash,
+                total_purchase_amount_krw=purchase,
+                total_unrealized_pnl_krw=pnl,
+                unrealized_return_pct=(pnl / purchase * 100.0) if purchase else None,
+            )
+        )
+
+    return PortfolioHistoryOut(
+        points=points,
+        distinct_days=len(points),
+        first_snapshot_at=first_snapshot_at,
+        last_snapshot_at=last_snapshot_at,
+        excluded_tickers=excluded,
+    )
 
 
 @accounts_router.get("/{account_id}/portfolio", response_model=AccountPortfolioOut)

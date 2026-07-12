@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -230,3 +230,32 @@ class AssetUpdateRequest(BaseModel):
     # Plain str (not an Enum/Literal): the spec pins an invalid value to 400
     # VALIDATION_ERROR, and pydantic would raise 422 before the handler runs.
     asset_type: str
+
+
+# ---------------------------------------------------------------------------
+# Asset history (round 4) — performance-chart-spec §1.
+# One point per KST day, from portfolio_snapshots.
+# ---------------------------------------------------------------------------
+
+
+class HistoryPointOut(BaseModel):
+    # KST calendar day (the DB stores UTC; the day boundary is Asia/Seoul).
+    date: date
+    # The snapshot this point was taken from — that day's LAST sync.
+    snapshot_at: datetime
+    total_assets_krw: float
+    securities_value_krw: float
+    cash_value_krw: float
+    total_purchase_amount_krw: float
+    total_unrealized_pnl_krw: float
+    unrealized_return_pct: float | None
+
+
+class PortfolioHistoryOut(BaseModel):
+    points: list[HistoryPointOut]
+    distinct_days: int
+    # Span of EVERY snapshot in the window, not just the points — the UI shows
+    # "최초 기록" from this while the series is still accumulating.
+    first_snapshot_at: datetime | None
+    last_snapshot_at: datetime | None
+    excluded_tickers: list[str]

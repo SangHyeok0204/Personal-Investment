@@ -14,7 +14,14 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Topbar } from "@/components/layout/topbar";
-import { getHealth, getJobStats, getPortfolioOverview } from "@/lib/api";
+import { PerformanceChart } from "@/components/portfolio/performance-chart";
+import type { PortfolioHistory } from "@/lib/api";
+import {
+  getHealth,
+  getJobStats,
+  getPortfolioHistory,
+  getPortfolioOverview,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatKrw, formatPercent, formatRelativeTime } from "@/lib/format";
 
@@ -35,12 +42,29 @@ const events = [
 // Dashboard-only presentation filter. These positions remain in the source DB,
 // sync results, and detailed portfolio APIs.
 const EXCLUDED_DASHBOARD_TICKERS = new Set(["000660", "SKHYV", "388720", "GLD"]);
+// The same filter is sent to /portfolio/history so the chart and the cards on
+// this screen describe the same portfolio (performance-chart-spec §1.2).
+const EXCLUDED_TICKER_LIST = [...EXCLUDED_DASHBOARD_TICKERS];
+const HISTORY_DAYS = 90;
 
 export default function OverviewPage() {
   const overview = useQuery({
     queryKey: ["portfolio", "overview"],
     queryFn: getPortfolioOverview,
     refetchInterval: 5000,
+  });
+  const history = useQuery({
+    queryKey: [
+      "portfolio",
+      "history",
+      { days: HISTORY_DAYS, exclude: EXCLUDED_TICKER_LIST },
+    ],
+    queryFn: () =>
+      getPortfolioHistory({
+        days: HISTORY_DAYS,
+        exclude_tickers: EXCLUDED_TICKER_LIST,
+      }),
+    refetchInterval: 60000,
   });
   const health = useQuery({
     queryKey: ["health"],
@@ -129,7 +153,13 @@ export default function OverviewPage() {
         />
 
         <NewsPanel />
-        <PerformancePanel best={best} worst={worst} />
+        <PerformancePanel
+          best={best}
+          worst={worst}
+          history={history.data}
+          loading={history.isLoading}
+          isError={history.isError}
+        />
         <EventsPanel />
         <SystemPanel
           apiOk={!health.isError && health.data?.status === "ok"}
@@ -284,13 +314,42 @@ function NewsPanel() {
   );
 }
 
-function PerformancePanel({ best, worst }: { best: { ticker: string | null; unrealized_return: number | null } | undefined; worst: { ticker: string | null; unrealized_return: number | null } | undefined }) {
+function PerformancePanel({
+  best,
+  worst,
+  history,
+  loading,
+  isError,
+}: {
+  best: { ticker: string | null; unrealized_return: number | null } | undefined;
+  worst: { ticker: string | null; unrealized_return: number | null } | undefined;
+  history: PortfolioHistory | undefined;
+  loading: boolean;
+  isError: boolean;
+}) {
   return (
     <Card className="overflow-hidden">
-      <PanelTitle title="최근 성과 분석" action={<button type="button" className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-500">6개월 <ChevronDown className="h-3 w-3" /></button>} />
+      <PanelTitle
+        title="최근 성과 분석"
+        action={<span className="text-[11px] text-slate-400">최근 {HISTORY_DAYS}일</span>}
+      />
       <div className="px-5">
-        <div className="flex items-center justify-between text-[10px] text-slate-400"><span>누적 수익률 (%)</span><span className="flex gap-3"><i className="inline-block h-0.5 w-3 bg-blue-500" />나의 포트폴리오 <i className="inline-block h-0.5 w-3 bg-slate-400" />벤치마크</span></div>
-        <PerformanceChart />
+        <div className="flex items-center justify-between text-[10px] text-slate-400">
+          <span>총자산 (KRW)</span>
+          <span className="flex items-center gap-3">
+            <span className="flex items-center gap-1.5">
+              <i className="inline-block h-0.5 w-3 bg-blue-500" />
+              나의 포트폴리오
+            </span>
+            {/* No price source for an index yet — a benchmark line would be fiction. */}
+            <span className="text-slate-300">벤치마크 미연동</span>
+          </span>
+        </div>
+        <PerformanceChart
+          history={history}
+          loading={loading}
+          isError={isError}
+        />
         <div className="mt-2 grid grid-cols-2 gap-2">
           <PerformanceBadge label="Best" position={best} positive />
           <PerformanceBadge label="Worst" position={worst} />
@@ -302,10 +361,6 @@ function PerformancePanel({ best, worst }: { best: { ticker: string | null; unre
       </div>
     </Card>
   );
-}
-
-function PerformanceChart() {
-  return <svg viewBox="0 0 420 142" className="mt-2 h-36 w-full" aria-label="성과 추이 프리뷰"><g stroke="#e5e7eb" strokeWidth="1"><line x1="0" y1="20" x2="420" y2="20" /><line x1="0" y1="55" x2="420" y2="55" /><line x1="0" y1="90" x2="420" y2="90" /><line x1="0" y1="125" x2="420" y2="125" /></g><path d="M0 95 C22 100 34 91 52 93 S83 86 100 82 S130 69 151 65 S182 54 204 60 S235 45 250 51 S280 38 302 44 S334 28 355 35 S389 31 420 20" fill="none" stroke="#2878f0" strokeWidth="3" /><path d="M0 98 C20 100 39 97 58 101 S92 94 108 96 S139 82 157 88 S193 76 212 79 S251 70 272 78 S311 61 330 68 S374 59 420 57" fill="none" stroke="#94a3b8" strokeWidth="2.5" /><g fill="#94a3b8" fontSize="9"><text x="0" y="140">'25.11</text><text x="76" y="140">'25.12</text><text x="154" y="140">'26.01</text><text x="232" y="140">'26.02</text><text x="310" y="140">'26.03</text><text x="386" y="140">'26.04</text></g></svg>;
 }
 
 function PerformanceBadge({ label, position, positive }: { label: string; position: { ticker: string | null; unrealized_return: number | null } | undefined; positive?: boolean }) {

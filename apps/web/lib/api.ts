@@ -304,6 +304,49 @@ export interface PositionFilters {
   currency?: string;
 }
 
+// 자산 추이 (performance-chart-spec §1). One point per KST day — the day's last
+// snapshot. Snapshots only exist from the first sync onward; history is never
+// backfilled.
+export interface HistoryPoint {
+  date: string;
+  snapshot_at: string;
+  total_assets_krw: number;
+  securities_value_krw: number;
+  cash_value_krw: number;
+  total_purchase_amount_krw: number;
+  total_unrealized_pnl_krw: number;
+  unrealized_return_pct: number | null;
+}
+
+export interface PortfolioHistory {
+  points: HistoryPoint[];
+  distinct_days: number;
+  first_snapshot_at: string | null;
+  last_snapshot_at: string | null;
+  excluded_tickers: string[];
+}
+
+export interface HistoryFilters {
+  days?: number;
+  /** Recomputes each point without these tickers, so a screen that hides
+   * positions shows a chart that agrees with its own cards (§1.2). */
+  exclude_tickers?: string[];
+}
+
+export function getPortfolioHistory(
+  filters: HistoryFilters = {},
+): Promise<PortfolioHistory> {
+  const q = new URLSearchParams();
+  if (filters.days != null) q.set("days", String(filters.days));
+  if (filters.exclude_tickers?.length) {
+    q.set("exclude_tickers", filters.exclude_tickers.join(","));
+  }
+  const qs = q.toString();
+  return request<PortfolioHistory>(
+    `/api/v1/portfolio/history${qs ? `?${qs}` : ""}`,
+  );
+}
+
 export function getBrokerageConnections(): Promise<BrokerageConnectionListResponse> {
   return request<BrokerageConnectionListResponse>(
     "/api/v1/brokerage-connections",
