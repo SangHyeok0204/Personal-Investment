@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, Upload, FileText } from "lucide-react";
 import { ApiError, createTestJob, getJobs, uploadCsv } from "@/lib/api";
 import { formatDateTime, shortId } from "@/lib/format";
-import { PageContainer, PageHeader } from "@/components/layout/page-header";
+import { PageContainer } from "@/components/layout/page-header";
+import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,19 +55,23 @@ export default function DataOperationsPage() {
   });
 
   return (
-    <PageContainer>
-      <PageHeader
-        title="Data Operations"
-        description="Run background jobs and import portfolio CSV files."
+    <>
+      <Topbar
+        title="데이터 작업"
+        subtitle="Run background jobs and import portfolio CSV files."
         actions={
-          <Button onClick={() => testJob.mutate()} disabled={testJob.isPending}>
+          <Button
+            size="sm"
+            onClick={() => testJob.mutate()}
+            disabled={testJob.isPending}
+          >
             <Play className="h-4 w-4" />
             {testJob.isPending ? "Starting…" : "Run test job"}
           </Button>
         }
       />
-
-      {jobs.isError && (
+      <PageContainer>
+        {jobs.isError && (
         <div className="mb-6">
           <ApiErrorBanner error={jobs.error} />
         </div>
@@ -187,12 +192,13 @@ export default function DataOperationsPage() {
         </CardContent>
       </Card>
 
-      {selectedJobId && (
-        <JobDetailDrawer
-          jobId={selectedJobId}
-          onClose={() => setSelectedJobId(null)}
-        />
-      )}
-    </PageContainer>
+        {selectedJobId && (
+          <JobDetailDrawer
+            jobId={selectedJobId}
+            onClose={() => setSelectedJobId(null)}
+          />
+        )}
+      </PageContainer>
+    </>
   );
 }

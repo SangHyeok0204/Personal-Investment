@@ -606,6 +606,59 @@ def test_sold_position_removed_on_next_sync(db, tmp_path, patch_client):
     assert _count(db, "assets") == 5
 
 
+def test_sync_preserves_user_asset_classification(db, tmp_path, patch_client):
+    """asset_type belongs to the USER — a re-sync must never stomp it back to STOCK.
+
+    Kiwoom does not report 자산군, so the worker only seeds 'STOCK' when a ticker is
+    seen for the FIRST time. If asset_type were in the ON CONFLICT DO UPDATE list,
+    every sync would silently reset the user's classification and revert the 자산군
+    도넛 (portfolio-detail-spec §4).
+    """
+    _broker_id, connection_id = _seed_broker_and_connection(db)
+
+    patch_client(FakeHttpClient(_happy_responses([SAMSUNG, HYNIX])))
+    _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+
+    seeded = {r["ticker"]: r["asset_type"] for r in _query(db, "SELECT ticker, asset_type FROM assets")}
+    assert seeded == {t: "STOCK" for t in ("005930", "000660", "AAPL", "MSFT", "SKHYV")}
+
+    # the user re-classifies two of them in the UI (PATCH /api/v1/assets/{id})
+    with db.begin() as conn:
+        conn.execute(text("UPDATE assets SET asset_type='BOND' WHERE ticker='AAPL'"))
+        conn.execute(text("UPDATE assets SET asset_type='DERIVATIVE' WHERE ticker='005930'"))
+
+    # second sync: same holdings, but Kiwoom renamed AAPL and a new ticker appeared
+    renamed_aapl = dict(US_AAPL, frgn_stk_nm="애플 (신규 표기)")
+    brand_new = _us_holding(
+        "TSLA", "테슬라", "3", "3", "3", "100.00", "300.00",
+        "110.00", "330.00", "30.00", "10.00", "000000495000", "000000045000",
+    )
+    patch_client(
+        FakeHttpClient(
+            _happy_responses(
+                [SAMSUNG, HYNIX], us_holdings=[renamed_aapl, US_MSFT, US_ZERO, brand_new]
+            )
+        )
+    )
+    job2 = _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+    assert _get_job(db, job2)["status"] == "SUCCESS", _get_job(db, job2)["error_message"]
+
+    assets = {r["ticker"]: r for r in _query(db, "SELECT ticker, asset_type, name FROM assets")}
+    # the user's classification survives the re-sync — the whole point of this test
+    assert assets["AAPL"]["asset_type"] == "BOND"
+    assert assets["005930"]["asset_type"] == "DERIVATIVE"
+    # assets the user never touched keep the seeded default
+    assert assets["MSFT"]["asset_type"] == "STOCK"
+    # a brand-new ticker still gets the STOCK default on INSERT
+    assert assets["TSLA"]["asset_type"] == "STOCK"
+    # ...and the REST of the row is still refreshed from Kiwoom: exactly ONE column is
+    # frozen. (A lazy DO NOTHING would also preserve asset_type, but would stop
+    # refreshing the name — and would break RETURNING id on conflict.)
+    assert assets["AAPL"]["name"] == "애플 (신규 표기)"
+
+
 def test_us_sync_does_not_overwrite_krw_cash_row(db, tmp_path, patch_client):
     """ust21110 also returns krw_entra (a D+0 figure, 5,000,000 in the fixture).
 

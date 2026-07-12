@@ -168,6 +168,18 @@ class MarketBreakdownOut(BaseModel):
     position_count: int
 
 
+class AssetClassBreakdownOut(BaseModel):
+    """One donut slice. All five classes are always present (zeros included) in the
+    fixed order STOCK, BOND, DERIVATIVE, OTHER, CASH — see portfolio-detail-spec §3.
+    """
+
+    asset_class: str
+    value_krw: float
+    weight_pct: float
+    # Cash is not a holding, so it has no position count.
+    position_count: int | None
+
+
 class ConnectionBriefOut(BaseModel):
     id: uuid.UUID
     status: str
@@ -181,6 +193,7 @@ class PortfolioOverviewOut(BaseModel):
     positions: list[PositionOut]
     cash_balances: list[CashBalanceOut]
     market_breakdown: list[MarketBreakdownOut]
+    asset_class_breakdown: list[AssetClassBreakdownOut]
     last_synced_at: datetime | None
     sync_status: str
     connection: ConnectionBriefOut | None
@@ -191,3 +204,29 @@ class AccountPortfolioOut(BaseModel):
     positions: list[PositionOut]
     cash_balances: list[CashBalanceOut]
     last_synced_at: datetime | None
+
+
+# ---------------------------------------------------------------------------
+# Asset classification (round 3) — portfolio-detail-spec §2/§3.
+# Kiwoom does not supply an asset class, so the user maintains it by hand and the
+# worker must never overwrite it.
+# ---------------------------------------------------------------------------
+
+
+class AssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    country: str
+    market: str
+    ticker: str
+    name: str | None
+    asset_type: str | None
+    currency: str
+    is_active: bool
+
+
+class AssetUpdateRequest(BaseModel):
+    # Plain str (not an Enum/Literal): the spec pins an invalid value to 400
+    # VALIDATION_ERROR, and pydantic would raise 422 before the handler runs.
+    asset_type: str

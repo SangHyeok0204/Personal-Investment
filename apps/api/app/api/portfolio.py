@@ -19,6 +19,7 @@ from app.models import (
 from app.schemas import (
     AccountPortfolioOut,
     AccountSummaryOut,
+    AssetClassBreakdownOut,
     CashBalanceOut,
     ConnectionBriefOut,
     MarketBreakdownOut,
@@ -35,6 +36,11 @@ SYNC_JOB_TYPE = "SYNC_KIWOOM_PORTFOLIO"
 _ACTIVE_STATUSES = ("PENDING", "RUNNING")
 ALLOWED_COUNTRIES = {"KR", "US"}
 ALLOWED_CURRENCIES = {"KRW", "USD"}
+
+# Donut classes. The first four are assets.asset_type values; CASH comes from
+# account_balances. Order is fixed — the legend always shows five slots.
+SECURITY_ASSET_CLASSES = ("STOCK", "BOND", "DERIVATIVE", "OTHER")
+CASH_ASSET_CLASS = "CASH"
 
 
 def _credentials_configured() -> bool:
@@ -138,6 +144,50 @@ def _purchase_krw(positions: list[PositionOut]) -> float:
         if position.purchase_amount_local is not None and rate is not None:
             total += position.purchase_amount_local * rate
     return total
+
+
+def _asset_class_breakdown(
+    positions: list[PositionOut],
+    cash_value_krw: float,
+    total_assets_krw: float,
+) -> list[AssetClassBreakdownOut]:
+    """Fixed five-slot donut: STOCK, BOND, DERIVATIVE, OTHER, CASH.
+
+    Empty classes are still returned with 0 so the legend never changes shape.
+    An unclassified position (null/unknown asset_type) falls into OTHER rather than
+    being dropped, so the slices always add up to securities + cash = total assets.
+    """
+    values = {asset_class: 0.0 for asset_class in SECURITY_ASSET_CLASSES}
+    counts = {asset_class: 0 for asset_class in SECURITY_ASSET_CLASSES}
+    for position in positions:
+        asset_class = position.asset_type if position.asset_type in values else "OTHER"
+        if position.market_value_krw is not None:
+            values[asset_class] += position.market_value_krw
+        counts[asset_class] += 1
+
+    def weight_pct(value: float) -> float:
+        if not total_assets_krw:
+            return 0.0
+        return round(value / total_assets_krw * 100.0, 1)
+
+    rows = [
+        AssetClassBreakdownOut(
+            asset_class=asset_class,
+            value_krw=values[asset_class],
+            weight_pct=weight_pct(values[asset_class]),
+            position_count=counts[asset_class],
+        )
+        for asset_class in SECURITY_ASSET_CLASSES
+    ]
+    rows.append(
+        AssetClassBreakdownOut(
+            asset_class=CASH_ASSET_CLASS,
+            value_krw=cash_value_krw,
+            weight_pct=weight_pct(cash_value_krw),
+            position_count=None,
+        )
+    )
+    return rows
 
 
 def _sync_status(db: Session) -> str:
@@ -250,6 +300,9 @@ def overview(db: Session = Depends(get_db)) -> PortfolioOverviewOut:
         positions=positions,
         cash_balances=[_cash_out(b) for b in balances],
         market_breakdown=market_breakdown,
+        asset_class_breakdown=_asset_class_breakdown(
+            positions, cash_value_krw, total_assets_krw
+        ),
         last_synced_at=last_synced_at,
         sync_status=_sync_status(db),
         connection=connection_brief,

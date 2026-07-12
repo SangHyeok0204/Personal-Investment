@@ -257,6 +257,26 @@ export interface MarketBreakdown {
   position_count: number;
 }
 
+// 자산군 (portfolio-detail-spec §2). Cash is not a holding, so it is an asset
+// CLASS (donut slice) but never an asset TYPE a user can assign to a position.
+export type AssetType = "STOCK" | "BOND" | "DERIVATIVE" | "OTHER";
+export type AssetClass = AssetType | "CASH";
+
+export interface AssetClassBreakdown {
+  asset_class: AssetClass;
+  value_krw: number;
+  weight_pct: number;
+  /** null for CASH — cash has no positions. */
+  position_count: number | null;
+}
+
+export interface Asset {
+  id: string;
+  ticker: string | null;
+  name: string | null;
+  asset_type: AssetType;
+}
+
 export interface ConnectionBrief {
   id: string;
   status: ConnectionStatus;
@@ -270,6 +290,9 @@ export interface PortfolioOverview {
   positions: Position[];
   cash_balances: CashBalance[];
   market_breakdown: MarketBreakdown[];
+  /** Always five slices, fixed order, zeros included. The API is the single
+   * source of this aggregation — the web never recomputes it. */
+  asset_class_breakdown: AssetClassBreakdown[];
   last_synced_at: string | null;
   sync_status: SyncStatus;
   connection: ConnectionBrief | null;
@@ -300,6 +323,19 @@ export function syncConnection(id: string): Promise<SyncTriggerResponse> {
 
 export function getPortfolioOverview(): Promise<PortfolioOverview> {
   return request<PortfolioOverview>("/api/v1/portfolio/overview");
+}
+
+/** 자산군 수동 지정 (portfolio-detail-spec §2/§3). The worker never overwrites
+ * asset_type, so a user's choice survives the next sync. */
+export function updateAssetType(
+  assetId: string,
+  assetType: AssetType,
+): Promise<Asset> {
+  return request<Asset>(`/api/v1/assets/${assetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset_type: assetType }),
+  });
 }
 
 export function getPositions(

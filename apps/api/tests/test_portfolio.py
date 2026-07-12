@@ -414,3 +414,180 @@ def test_cash_value_is_cash_balance_times_rate(client, seeded, db):
     # Null rate -> null cash_krw, so the UI omits the KRW sub-line instead of faking it.
     assert by_currency["JPY"]["exchange_rate"] is None
     assert by_currency["JPY"]["cash_krw"] is None
+
+
+# ---------------------------------------------------------------------------
+# Asset class breakdown (round 3) — portfolio-detail-spec §3.
+# ---------------------------------------------------------------------------
+
+DONUT_ORDER = ["STOCK", "BOND", "DERIVATIVE", "OTHER", "CASH"]
+
+
+def _load_migration_seed():
+    """The classification map that migration 0003 actually applies.
+
+    Imported from the migration itself (not copied) so a typo there fails a test
+    rather than silently shipping a wrong donut.
+    """
+    from importlib import util
+    from pathlib import Path
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = (
+            parent / "database" / "migrations" / "versions" / "0003_asset_classification.py"
+        )
+        if candidate.exists():
+            spec = util.spec_from_file_location("migration_0003", candidate)
+            module = util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.ASSET_TYPE_BY_TICKER
+    return None
+
+
+def test_asset_class_breakdown_empty_state(client, seeded):
+    breakdown = client.get("/api/v1/portfolio/overview").json()["asset_class_breakdown"]
+    # The legend always has five slots in a fixed order, even with nothing held.
+    assert [row["asset_class"] for row in breakdown] == DONUT_ORDER
+    assert all(row["value_krw"] == 0.0 for row in breakdown)
+    assert all(row["weight_pct"] == 0.0 for row in breakdown)
+    assert breakdown[-1]["position_count"] is None
+
+
+def test_asset_class_breakdown(client, seeded, db):
+    account, now = _make_account(db, seeded, "ACC-CLASSES")
+    holdings = [
+        ("SCHD", "STOCK", Decimal("5000000")),
+        ("SGOV", "BOND", Decimal("2000000")),
+        ("TSL", "DERIVATIVE", Decimal("1000000")),
+        ("GLD", "OTHER", Decimal("1000000")),
+    ]
+    for ticker, asset_type, market_value_krw in holdings:
+        asset = Asset(
+            country="US",
+            market="US",
+            ticker=ticker,
+            name=ticker,
+            asset_type=asset_type,
+            currency="USD",
+        )
+        db.add(asset)
+        db.flush()
+        db.add(
+            CurrentPosition(
+                account_id=account.id,
+                asset_id=asset.id,
+                quantity=Decimal("1"),
+                market_value_krw=market_value_krw,
+                exchange_rate=Decimal("1484.10"),
+                as_of=now,
+            )
+        )
+    db.add(
+        AccountBalance(
+            account_id=account.id,
+            currency="KRW",
+            cash_balance=Decimal("1000000"),
+            exchange_rate=Decimal("1.0"),
+            as_of=now,
+        )
+    )
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/overview").json()
+    assert body["summary"]["total_assets_krw"] == 10000000.0
+
+    breakdown = body["asset_class_breakdown"]
+    assert [row["asset_class"] for row in breakdown] == DONUT_ORDER
+    by_class = {row["asset_class"]: row for row in breakdown}
+
+    assert by_class["STOCK"]["value_krw"] == 5000000.0
+    assert by_class["STOCK"]["weight_pct"] == 50.0
+    assert by_class["STOCK"]["position_count"] == 1
+    assert by_class["BOND"]["value_krw"] == 2000000.0
+    assert by_class["BOND"]["weight_pct"] == 20.0
+    assert by_class["DERIVATIVE"]["value_krw"] == 1000000.0
+    assert by_class["DERIVATIVE"]["weight_pct"] == 10.0
+    assert by_class["OTHER"]["value_krw"] == 1000000.0
+    # Cash is not a holding, so it carries no position count.
+    assert by_class["CASH"]["value_krw"] == 1000000.0
+    assert by_class["CASH"]["weight_pct"] == 10.0
+    assert by_class["CASH"]["position_count"] is None
+
+    # The donut must account for every won of total assets.
+    assert sum(row["value_krw"] for row in breakdown) == body["summary"]["total_assets_krw"]
+    assert sum(row["weight_pct"] for row in breakdown) == pytest.approx(100.0)
+
+
+def test_asset_class_breakdown_unclassified_falls_into_other(client, seeded, db):
+    account, now = _make_account(db, seeded, "ACC-UNCLASSIFIED")
+    asset = Asset(
+        country="KR",
+        market="KRX",
+        ticker="999999",
+        name="미분류",
+        asset_type=None,
+        currency="KRW",
+    )
+    db.add(asset)
+    db.flush()
+    db.add(
+        CurrentPosition(
+            account_id=account.id,
+            asset_id=asset.id,
+            quantity=Decimal("1"),
+            market_value_krw=Decimal("3000000"),
+            exchange_rate=Decimal("1.0"),
+            as_of=now,
+        )
+    )
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/overview").json()
+    breakdown = body["asset_class_breakdown"]
+    by_class = {row["asset_class"]: row for row in breakdown}
+    # Unclassified value lands in OTHER instead of vanishing from the donut.
+    assert by_class["OTHER"]["value_krw"] == 3000000.0
+    assert by_class["OTHER"]["position_count"] == 1
+    assert by_class["STOCK"]["value_krw"] == 0.0
+    assert sum(row["value_krw"] for row in breakdown) == body["summary"]["total_assets_krw"]
+
+
+def test_migration_seed_classification_produces_expected_donut(client, seeded, db):
+    """The 12 holdings migration 0003 seeds must land as 9 STOCK / 1 BOND /
+    1 DERIVATIVE / 1 OTHER (portfolio-detail-spec §2)."""
+    seed = _load_migration_seed()
+    assert seed is not None, "migration 0003 not found from the test tree"
+    assert len(seed) == 12
+
+    account, now = _make_account(db, seeded, "ACC-SEED")
+    for ticker, asset_type in seed.items():
+        domestic = ticker.isdigit()
+        asset = Asset(
+            country="KR" if domestic else "US",
+            market="KRX" if domestic else "US",
+            ticker=ticker,
+            name=ticker,
+            asset_type=asset_type,
+            currency="KRW" if domestic else "USD",
+        )
+        db.add(asset)
+        db.flush()
+        db.add(
+            CurrentPosition(
+                account_id=account.id,
+                asset_id=asset.id,
+                quantity=Decimal("1"),
+                market_value_krw=Decimal("1000000"),
+                exchange_rate=Decimal("1.0"),
+                as_of=now,
+            )
+        )
+    db.commit()
+
+    breakdown = client.get("/api/v1/portfolio/overview").json()["asset_class_breakdown"]
+    counts = {row["asset_class"]: row["position_count"] for row in breakdown}
+    assert counts["STOCK"] == 9
+    assert counts["BOND"] == 1  # SGOV
+    assert counts["DERIVATIVE"] == 1  # TSL
+    assert counts["OTHER"] == 1  # GLD
+    assert counts["CASH"] is None

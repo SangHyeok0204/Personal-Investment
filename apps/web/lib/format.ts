@@ -52,6 +52,27 @@ export function formatMoney(
   return currency === "USD" ? formatUsd(value) : formatKrw(value);
 }
 
+// 45,275,026 → "4,528만원"; 145,275,026 → "1.45억원". For headline totals only —
+// tables keep the exact formatKrw value.
+export function formatKrwCompact(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 100_000_000) {
+    return `${sign}${(abs / 100_000_000).toFixed(2)}억원`;
+  }
+  if (abs >= 10_000) {
+    return `${sign}${KRW_FMT.format(Math.round(abs / 10_000))}만원`;
+  }
+  return formatKrw(value);
+}
+
+// FX rate exactly as Kiwoom reports it (e.g. 1484.1 → "1,484.10"). Never derived.
+export function formatRate(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return USD_FMT.format(value);
+}
+
 export function formatQuantity(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return QTY_FMT.format(value);

@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Topbar } from "@/components/layout/topbar";
 import { getHealth, getJobStats, getPortfolioOverview } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatKrw, formatPercent, formatRelativeTime } from "@/lib/format";
@@ -107,7 +108,9 @@ export default function OverviewPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] px-5 py-5 xl:px-6">
+    <>
+      <Topbar title="메인 대시보드" />
+      <div className="mx-auto w-full max-w-[1480px] px-5 py-5 xl:px-6">
       <div className="grid gap-4 xl:grid-cols-3">
         <PortfolioPanel
           loading={overview.isLoading}
@@ -135,7 +138,8 @@ export default function OverviewPage() {
           jobs={jobStats.data}
         />
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
