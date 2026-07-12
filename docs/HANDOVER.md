@@ -192,7 +192,7 @@ docker compose build worker && docker compose up -d worker
 ## 5. 다음 개발 로드맵 (설계 문서와의 연결)
 
 1. **Phase 4 — 첫 실제 도메인** (아키텍처 §21): 계좌·거래·보유자산 테이블(portfolio 스키마) + CSV를 실제 포트폴리오에 적재하는 handler + Portfolio 화면.
-2. **키움증권 연동** (이번 단계에서 의도적으로 제외 — init.md §2-11 vs §18 모순은 §18 우선으로 결정): 키움 OpenAPI+(COM)는 Linux 컨테이너에서 불가하므로 **키움 REST API** 방식 권장. 붙일 때 `/internal/*` 인증(간단한 API 키 헤더)부터 추가할 것.
+2. **키움증권 연동** — ✅ 2라운드에서 구현 완료 (2026-07-12). REST API 기반 `SYNC_KIWOOM_PORTFOLIO` 작업 + 포트폴리오 화면 + `/internal` 키 인증까지 반영. 인터페이스 계약은 `docs/architecture/contract-kiwoom.md`, 키움 API 필드 근거는 `docs/architecture/kiwoom-api-reference.md`, 키 설정 방법은 README §15. 남은 것: 실키 입력 후 TO-VERIFY 상수(enum 값·숫자 스케일) 모의투자 확정, 미국주식은 공식 문서 확인 후 활성화(`us_supported=false` 게이트).
 3. **시장 데이터 수집**: §3.3 레시피 그대로. 데이터가 커지면 그때 Parquet + DuckDB 도입(아키텍처 §4.5).
 4. **뉴스·공시 수집** → research 스키마.
 5. 지금 넣지 않기로 한 것(init.md §18: Redis, Celery, AI, 백테스트, 자동매매 등)은 필요성이 명확해질 때까지 추가하지 않는다.

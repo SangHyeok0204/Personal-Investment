@@ -1,0 +1,315 @@
+import uuid
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import Select, nullslast, select
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.errors import AppError
+from app.db.session import get_db
+from app.models import (
+    Account,
+    AccountBalance,
+    Asset,
+    Broker,
+    BrokerageConnection,
+    CurrentPosition,
+    Job,
+)
+from app.schemas import (
+    AccountPortfolioOut,
+    AccountSummaryOut,
+    CashBalanceOut,
+    ConnectionBriefOut,
+    MarketBreakdownOut,
+    PortfolioOverviewOut,
+    PortfolioSummaryOut,
+    PositionListOut,
+    PositionOut,
+)
+
+router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
+accounts_router = APIRouter(prefix="/api/v1/accounts", tags=["portfolio"])
+
+SYNC_JOB_TYPE = "SYNC_KIWOOM_PORTFOLIO"
+_ACTIVE_STATUSES = ("PENDING", "RUNNING")
+ALLOWED_COUNTRIES = {"KR", "US"}
+ALLOWED_CURRENCIES = {"KRW", "USD"}
+
+
+def _credentials_configured() -> bool:
+    return bool(settings.KIWOOM_APP_KEY and settings.KIWOOM_SECRET_KEY)
+
+
+def _krw_rate(currency: str | None, exchange_rate) -> float | None:
+    """Effective FX for KRW conversion. Domestic (KRW) defaults to 1.0 when the
+    worker left the rate null; a null rate on a foreign currency stays unknown."""
+    if exchange_rate is not None:
+        return float(exchange_rate)
+    if currency == "KRW":
+        return 1.0
+    return None
+
+
+def _position_query() -> Select:
+    """Position rows joined to asset + broker; keys match PositionOut fields."""
+    return (
+        select(
+            CurrentPosition.account_id,
+            CurrentPosition.asset_id,
+            Broker.code.label("broker"),
+            Asset.country,
+            Asset.market,
+            Asset.ticker,
+            Asset.name.label("asset_name"),
+            Asset.asset_type,
+            Asset.currency,
+            CurrentPosition.quantity,
+            CurrentPosition.available_quantity,
+            CurrentPosition.average_purchase_price,
+            CurrentPosition.purchase_amount_local,
+            CurrentPosition.current_price,
+            CurrentPosition.market_value_local,
+            CurrentPosition.unrealized_pnl_local,
+            CurrentPosition.unrealized_return,
+            CurrentPosition.exchange_rate,
+            CurrentPosition.market_value_krw,
+            CurrentPosition.unrealized_pnl_krw,
+            CurrentPosition.as_of,
+            CurrentPosition.source_job_id,
+        )
+        .join(Account, CurrentPosition.account_id == Account.id)
+        .join(Asset, CurrentPosition.asset_id == Asset.id)
+        .join(Broker, Account.broker_id == Broker.id)
+    )
+
+
+def _positions_from(db: Session, stmt: Select) -> list[PositionOut]:
+    rows = db.execute(
+        stmt.order_by(nullslast(CurrentPosition.market_value_krw.desc()))
+    ).all()
+    return [PositionOut(**dict(row._mapping)) for row in rows]
+
+
+def _cash_out(balance: AccountBalance) -> CashBalanceOut:
+    return CashBalanceOut(
+        account_id=balance.account_id,
+        currency=balance.currency,
+        cash_balance=balance.cash_balance,
+        available_cash=balance.available_cash,
+        total_evaluation_amount_krw=balance.total_evaluation_amount_krw,
+        as_of=balance.as_of,
+    )
+
+
+def _cash_krw(balances: list[AccountBalance]) -> float:
+    total = 0.0
+    for balance in balances:
+        rate = _krw_rate(balance.currency, balance.exchange_rate)
+        if balance.cash_balance is not None and rate is not None:
+            total += float(balance.cash_balance) * rate
+    return total
+
+
+def _sync_status(db: Session) -> str:
+    active = db.execute(
+        select(Job.id).where(
+            Job.job_type == SYNC_JOB_TYPE, Job.status.in_(_ACTIVE_STATUSES)
+        )
+    ).first()
+    if active is not None:
+        return "RUNNING"
+    last = db.execute(
+        select(Job)
+        .where(Job.job_type == SYNC_JOB_TYPE)
+        .order_by(Job.created_at.desc())
+    ).scalars().first()
+    return last.status if last is not None else "NEVER_SYNCED"
+
+
+@router.get("/overview", response_model=PortfolioOverviewOut)
+def overview(db: Session = Depends(get_db)) -> PortfolioOverviewOut:
+    positions = _positions_from(db, _position_query())
+    accounts = db.execute(select(Account)).scalars().all()
+    balances = db.execute(select(AccountBalance)).scalars().all()
+
+    securities_value_krw = sum(
+        p.market_value_krw for p in positions if p.market_value_krw is not None
+    )
+    total_unrealized_pnl_krw = sum(
+        p.unrealized_pnl_krw for p in positions if p.unrealized_pnl_krw is not None
+    )
+    total_purchase_amount_krw = securities_value_krw - total_unrealized_pnl_krw
+    cash_value_krw = _cash_krw(balances)
+    total_assets_krw = securities_value_krw + cash_value_krw
+    unrealized_return_pct = (
+        total_unrealized_pnl_krw / total_purchase_amount_krw * 100.0
+        if total_purchase_amount_krw
+        else None
+    )
+
+    # Per-account totals: securities from positions + cash from balances.
+    sec_by_account: dict[uuid.UUID, float] = {}
+    for p in positions:
+        if p.market_value_krw is not None:
+            sec_by_account[p.account_id] = (
+                sec_by_account.get(p.account_id, 0.0) + p.market_value_krw
+            )
+    cash_by_account: dict[uuid.UUID, float] = {}
+    for b in balances:
+        rate = _krw_rate(b.currency, b.exchange_rate)
+        if b.cash_balance is not None and rate is not None:
+            cash_by_account[b.account_id] = (
+                cash_by_account.get(b.account_id, 0.0) + float(b.cash_balance) * rate
+            )
+
+    account_items = [
+        AccountSummaryOut(
+            id=a.id,
+            account_name=a.account_name,
+            account_number_masked=a.account_number_masked,
+            account_type=a.account_type,
+            base_currency=a.base_currency,
+            total_assets_krw=sec_by_account.get(a.id, 0.0) + cash_by_account.get(a.id, 0.0),
+            last_synced_at=a.last_synced_at,
+        )
+        for a in accounts
+    ]
+
+    breakdown: dict[str | None, list] = {}
+    for p in positions:
+        entry = breakdown.setdefault(p.country, [0.0, 0])
+        if p.market_value_krw is not None:
+            entry[0] += p.market_value_krw
+        entry[1] += 1
+    market_breakdown = [
+        MarketBreakdownOut(country=country, securities_value_krw=value, position_count=count)
+        for country, (value, count) in sorted(
+            breakdown.items(), key=lambda kv: kv[1][0], reverse=True
+        )
+    ]
+
+    synced_times = [a.last_synced_at for a in accounts if a.last_synced_at is not None]
+    last_synced_at = max(synced_times) if synced_times else None
+
+    connection = db.execute(
+        select(BrokerageConnection).order_by(BrokerageConnection.created_at.asc())
+    ).scalars().first()
+    connection_brief = (
+        ConnectionBriefOut(
+            id=connection.id,
+            status=connection.status,
+            credentials_configured=_credentials_configured(),
+            last_error=connection.last_error,
+        )
+        if connection is not None
+        else None
+    )
+
+    summary = PortfolioSummaryOut(
+        total_assets_krw=total_assets_krw,
+        securities_value_krw=securities_value_krw,
+        cash_value_krw=cash_value_krw,
+        total_purchase_amount_krw=total_purchase_amount_krw,
+        total_unrealized_pnl_krw=total_unrealized_pnl_krw,
+        unrealized_return_pct=unrealized_return_pct,
+        position_count=len(positions),
+        account_count=len(accounts),
+    )
+
+    return PortfolioOverviewOut(
+        summary=summary,
+        accounts=account_items,
+        positions=positions,
+        cash_balances=[_cash_out(b) for b in balances],
+        market_breakdown=market_breakdown,
+        last_synced_at=last_synced_at,
+        sync_status=_sync_status(db),
+        connection=connection_brief,
+    )
+
+
+@router.get("/positions", response_model=PositionListOut)
+def list_positions(
+    account_id: str | None = Query(default=None),
+    country: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PositionListOut:
+    stmt = _position_query()
+
+    if account_id is not None:
+        try:
+            parsed = uuid.UUID(account_id)
+        except ValueError:
+            raise AppError(
+                400, "VALIDATION_ERROR", "Malformed account_id.", {"account_id": account_id}
+            )
+        stmt = stmt.where(CurrentPosition.account_id == parsed)
+
+    if country is not None:
+        if country not in ALLOWED_COUNTRIES:
+            raise AppError(
+                400,
+                "VALIDATION_ERROR",
+                "Invalid country filter.",
+                {"allowed": sorted(ALLOWED_COUNTRIES)},
+            )
+        stmt = stmt.where(Asset.country == country)
+
+    if currency is not None:
+        if currency not in ALLOWED_CURRENCIES:
+            raise AppError(
+                400,
+                "VALIDATION_ERROR",
+                "Invalid currency filter.",
+                {"allowed": sorted(ALLOWED_CURRENCIES)},
+            )
+        stmt = stmt.where(Asset.currency == currency)
+
+    items = _positions_from(db, stmt)
+    return PositionListOut(items=items, total=len(items))
+
+
+@accounts_router.get("/{account_id}/portfolio", response_model=AccountPortfolioOut)
+def account_portfolio(
+    account_id: str, db: Session = Depends(get_db)
+) -> AccountPortfolioOut:
+    try:
+        parsed = uuid.UUID(account_id)
+    except ValueError:
+        raise AppError(
+            400, "VALIDATION_ERROR", "Malformed account id.", {"account_id": account_id}
+        )
+
+    account = db.get(Account, parsed)
+    if account is None:
+        raise AppError(
+            404, "ACCOUNT_NOT_FOUND", "Account not found.", {"account_id": account_id}
+        )
+
+    positions = _positions_from(
+        db, _position_query().where(CurrentPosition.account_id == parsed)
+    )
+    balances = db.execute(
+        select(AccountBalance).where(AccountBalance.account_id == parsed)
+    ).scalars().all()
+
+    securities = sum(p.market_value_krw for p in positions if p.market_value_krw is not None)
+    total_assets_krw = securities + _cash_krw(balances)
+
+    account_summary = AccountSummaryOut(
+        id=account.id,
+        account_name=account.account_name,
+        account_number_masked=account.account_number_masked,
+        account_type=account.account_type,
+        base_currency=account.base_currency,
+        total_assets_krw=total_assets_krw,
+        last_synced_at=account.last_synced_at,
+    )
+    return AccountPortfolioOut(
+        account=account_summary,
+        positions=positions,
+        cash_balances=[_cash_out(b) for b in balances],
+        last_synced_at=account.last_synced_at,
+    )

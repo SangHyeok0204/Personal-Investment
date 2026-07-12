@@ -1,5 +1,7 @@
 # Initial Implementation Contract (BINDING)
 
+> Round 2 (Kiwoom REST API portfolio sync): see `contract-kiwoom.md` — extends this contract.
+
 This document pins every cross-service interface for the initial skeleton.
 Builders implement AGAINST this contract; do not renegotiate it unilaterally.
 Full requirements: `init.md` (spec), `DESIGN.md` (UI system), `personal_investment_dashboard_architecture.md` (context), `CLAUDE.md` (coding rules).

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import imports, internal, jobs, system
+from app.api import brokerage, imports, internal, jobs, portfolio, system
 from app.core.errors import register_exception_handlers
 
 app = FastAPI(title="Personal Investment Platform API", version="0.1.0")
@@ -19,3 +19,6 @@ app.include_router(system.router)
 app.include_router(jobs.router)
 app.include_router(imports.router)
 app.include_router(internal.router)
+app.include_router(brokerage.router)
+app.include_router(portfolio.router)
+app.include_router(portfolio.accounts_router)

@@ -25,6 +25,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       STORAGE_DIR: ${STORAGE_DIR}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      KIWOOM_APP_KEY: ${KIWOOM_APP_KEY:-}
+      KIWOOM_SECRET_KEY: ${KIWOOM_SECRET_KEY:-}
     ports:
       - "8000:8000"
     volumes:
@@ -47,6 +50,10 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       STORAGE_DIR: ${STORAGE_DIR}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS}
+      KIWOOM_APP_KEY: ${KIWOOM_APP_KEY:-}
+      KIWOOM_SECRET_KEY: ${KIWOOM_SECRET_KEY:-}
+      KIWOOM_API_BASE_URL: ${KIWOOM_API_BASE_URL:-https://api.kiwoom.com}
+      KIWOOM_ENVIRONMENT: ${KIWOOM_ENVIRONMENT:-REAL}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -81,6 +88,8 @@ services:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
       N8N_SECURE_COOKIE: "false"
       GENERIC_TIMEZONE: Asia/Seoul
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
     ports:
       - "5678:5678"
     volumes:

@@ -155,3 +155,157 @@ export function uploadCsv(file: File): Promise<CsvImportResponse> {
     body: form,
   });
 }
+
+// ── Kiwoom portfolio (round 2) ─────────────────────────────────────────────
+// Shapes mirror docs/architecture/contract-kiwoom.md §6. snake_case, ISO8601 UTC.
+// Numeric fields serialize as JSON numbers; KRW-converted / FX-dependent fields
+// are nullable (US rows may lack an FX rate until known).
+
+export type ConnectionStatus = "CONFIGURED" | "CONNECTED" | "ERROR";
+export type SyncStatus = "NEVER_SYNCED" | "SUCCESS" | "FAILED" | "RUNNING";
+
+export interface Position {
+  account_id: string;
+  asset_id: string;
+  broker: string | null;
+  country: string | null;
+  market: string | null;
+  ticker: string | null;
+  asset_name: string | null;
+  asset_type: string | null;
+  currency: string | null;
+  quantity: number | null;
+  available_quantity: number | null;
+  average_purchase_price: number | null;
+  purchase_amount_local: number | null;
+  current_price: number | null;
+  market_value_local: number | null;
+  unrealized_pnl_local: number | null;
+  unrealized_return: number | null;
+  exchange_rate: number | null;
+  market_value_krw: number | null;
+  unrealized_pnl_krw: number | null;
+  as_of: string | null;
+  source_job_id: string | null;
+}
+
+export interface PositionListResponse {
+  items: Position[];
+  total: number;
+}
+
+export interface BrokerageConnection {
+  id: string;
+  broker_code: string;
+  connection_name: string;
+  environment: string;
+  status: ConnectionStatus;
+  last_connected_at: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+  credentials_configured: boolean;
+}
+
+export interface BrokerageConnectionListResponse {
+  items: BrokerageConnection[];
+}
+
+export interface SyncTriggerResponse {
+  job_id: string;
+  status: JobStatus;
+  reused: boolean;
+}
+
+export interface PortfolioSummary {
+  total_assets_krw: number;
+  securities_value_krw: number;
+  cash_value_krw: number;
+  total_purchase_amount_krw: number;
+  total_unrealized_pnl_krw: number;
+  unrealized_return_pct: number | null;
+  position_count: number;
+  account_count: number;
+}
+
+export interface PortfolioAccount {
+  id: string;
+  account_name: string | null;
+  account_number_masked: string | null;
+  account_type: string | null;
+  base_currency: string | null;
+  total_assets_krw: number | null;
+  last_synced_at: string | null;
+}
+
+export interface CashBalance {
+  account_id: string;
+  currency: string;
+  cash_balance: number | null;
+  available_cash: number | null;
+  total_evaluation_amount_krw: number | null;
+  as_of: string | null;
+}
+
+export interface MarketBreakdown {
+  country: string | null;
+  securities_value_krw: number;
+  position_count: number;
+}
+
+export interface ConnectionBrief {
+  id: string;
+  status: ConnectionStatus;
+  credentials_configured: boolean;
+  last_error: string | null;
+}
+
+export interface PortfolioOverview {
+  summary: PortfolioSummary;
+  accounts: PortfolioAccount[];
+  positions: Position[];
+  cash_balances: CashBalance[];
+  market_breakdown: MarketBreakdown[];
+  last_synced_at: string | null;
+  sync_status: SyncStatus;
+  connection: ConnectionBrief | null;
+}
+
+export interface PositionFilters {
+  account_id?: string;
+  country?: string;
+  currency?: string;
+}
+
+export function getBrokerageConnections(): Promise<BrokerageConnectionListResponse> {
+  return request<BrokerageConnectionListResponse>(
+    "/api/v1/brokerage-connections",
+  );
+}
+
+export function getBrokerageConnection(id: string): Promise<BrokerageConnection> {
+  return request<BrokerageConnection>(`/api/v1/brokerage-connections/${id}`);
+}
+
+export function syncConnection(id: string): Promise<SyncTriggerResponse> {
+  return request<SyncTriggerResponse>(
+    `/api/v1/brokerage-connections/${id}/sync`,
+    { method: "POST" },
+  );
+}
+
+export function getPortfolioOverview(): Promise<PortfolioOverview> {
+  return request<PortfolioOverview>("/api/v1/portfolio/overview");
+}
+
+export function getPositions(
+  filters: PositionFilters = {},
+): Promise<PositionListResponse> {
+  const q = new URLSearchParams();
+  if (filters.account_id) q.set("account_id", filters.account_id);
+  if (filters.country) q.set("country", filters.country);
+  if (filters.currency) q.set("currency", filters.currency);
+  const qs = q.toString();
+  return request<PositionListResponse>(
+    `/api/v1/portfolio/positions${qs ? `?${qs}` : ""}`,
+  );
+}

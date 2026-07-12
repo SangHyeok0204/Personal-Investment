@@ -183,11 +183,56 @@ make clean     # docker compose down -v
 - 개발 편의를 위해 PostgreSQL 포트(5432)를 외부로 열어 두었다. 운영 환경에서는 `docker-compose.yml`의 postgres `ports` 항목을 제거해 외부 노출을 막을 수 있다.
 - 비밀번호·암호화 키는 `.env`에만 두고 코드·이미지에 하드코딩하지 않는다.
 
-## 다음 단계 (키움증권 연동 보류)
+## 15. 키움 REST API 연동
 
-init.md §2-11은 키움증권 API로 계좌 자산 현황을 불러오는 기능을 예정하지만, 이 단계에서는 **보류**한다.
+키움증권 **REST API**로 계좌·잔고·보유종목을 불러와 대시보드 첫 화면(`/`)의 포트폴리오 영역에 표시한다. (키움 **OpenAPI+**는 Windows 전용 COM 컴포넌트라 Linux 컨테이너에서 직접 구동할 수 없어 REST 방식을 쓴다.) 키를 넣지 않아도 화면과 작업 파이프라인은 모두 동작하며, 동기화만 "키 미설정" 상태로 깨끗하게 실패한다.
 
-- 키움 **OpenAPI+**는 Windows 전용 COM(OCX) 컴포넌트라 Linux 컨테이너(api/worker)에서 직접 구동할 수 없다.
-- init.md §18은 "실제 증권사 API 사용 금지"를 명시하고 있어 이번 골격 단계의 범위와도 충돌한다.
+### 1) 키 발급
 
-다음 단계에서는 키움 **REST API** 방식으로 별도 연동 모듈을 두거나, Windows 측 브리지 프로세스가 계좌 데이터를 받아 `POST /internal/jobs`로 흘려보내는 구조를 권장한다.
+키움증권 홈페이지 → **Open API** → **REST API** 사용 신청 후 `APP KEY`와 `SECRET KEY`를 발급받는다.
+
+### 2) `.env`에 키 입력
+
+`.env`에 아래 값을 채운다 (`.env.example` 참고). `KIWOOM_APP_KEY`/`KIWOOM_SECRET_KEY`만 발급값으로 바꾸면 되고, 나머지는 기본값을 그대로 둔다.
+
+```env
+KIWOOM_APP_KEY=발급받은_APP_KEY
+KIWOOM_SECRET_KEY=발급받은_SECRET_KEY
+KIWOOM_API_BASE_URL=https://api.kiwoom.com
+KIWOOM_ENVIRONMENT=REAL
+
+INTERNAL_API_KEY=change_me_internal   # 내부 API 인증 키(임의의 강한 값 권장). n8n·통합테스트와 값이 같아야 한다
+```
+
+**이미 `.env`가 있는 경우** — 이번 라운드에서 키가 5개(KIWOOM_* 4개 + `INTERNAL_API_KEY`) 새로 생겼다. 기존 `.env`에는 없으므로 `.env.example`을 보고 누락된 키를 이어붙여야 한다. 아래 한 줄이면 `.env.example`에는 있지만 `.env`에는 없는 키만 추가한다(값이 채워진 기존 키는 건드리지 않는다):
+
+```bash
+awk -F= 'NR==FNR{if($1 ~ /^[A-Z]/)seen[$1]=1; next} /^[A-Z]/ && !($1 in seen){print}' .env .env.example >> .env
+```
+
+이후 `.env`를 열어 `KIWOOM_APP_KEY`/`KIWOOM_SECRET_KEY`에 실제 발급값을 채운다.
+
+### 3) 서비스 재기동
+
+새 환경변수를 컨테이너에 반영한다.
+
+```bash
+docker compose up -d --force-recreate api worker n8n
+```
+
+(스키마가 아직이면 `docker compose exec api alembic upgrade head`로 마이그레이션을 먼저 끝낸다.)
+
+### 4) 동기화 실행
+
+http://localhost:3000 (대시보드 `/`) 상단 포트폴리오 영역에서 **[키움 계좌 동기화]** 버튼을 누른다. 작업이 PENDING → RUNNING → SUCCESS로 끝나면 요약 카드와 보유종목 테이블이 채워진다.
+
+### 5) 문제 확인
+
+- 동기화가 실패하면 대시보드 **Data Operations**의 해당 작업 로그(단계별 `step`과 오류 메시지)를 확인한다.
+- 키 미설정 시 오류 메시지는 `KIWOOM_APP_KEY/KIWOOM_SECRET_KEY is not configured`이다 — `.env` 입력과 서비스 재기동을 다시 확인한다.
+- n8n `Sync Kiwoom Portfolio` 워크플로에서 401이 나면 `.env`의 `INTERNAL_API_KEY`가 api·n8n 양쪽에 동일하게 반영됐는지 확인한다.
+
+### 보안 주의
+
+- APP/SECRET 키와 발급되는 액세스 토큰은 **`.env`와 메모리에만** 둔다. 토큰은 디스크·DB·로그에 기록되지 않는다.
+- `.env`는 **Git에 커밋하지 않는다.** 로그와 원본 응답 저장 파일에는 appkey/secret/token/전체 계좌번호가 남지 않도록 되어 있다.
