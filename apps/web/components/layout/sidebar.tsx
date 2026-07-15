@@ -21,7 +21,7 @@ type NavItem = {
   label: string;
   icon: LucideIcon;
   href?: string;
-  children?: { label: string }[];
+  children?: { label: string; href?: string }[];
 };
 
 const navItems: NavItem[] = [
@@ -59,7 +59,10 @@ const navItems: NavItem[] = [
   {
     label: "기타",
     icon: LayoutGrid,
-    children: [{ label: "AI token usage" }, { label: "LAN dashboard" }],
+    children: [
+      { label: "AI token usage", href: "/ai-token-usage" },
+      { label: "LAN dashboard" },
+    ],
   },
   {
     label: "설정",
@@ -181,16 +184,33 @@ export function Sidebar() {
                         {item.label}
                       </span>
                     </div>
-                    {item.children.map((child, i) => (
-                      <button
-                        key={`${child.label}-${i}`}
-                        type="button"
-                        className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-[14px] font-extrabold text-ge-navy transition-colors hover:bg-ge-blue-bg"
-                      >
-                        {child.label}
-                        <ChevronRight className="h-4 w-4 text-ge-point" />
-                      </button>
-                    ))}
+                    {item.children.map((child, i) => {
+                      const childClass =
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-[14px] font-extrabold text-ge-navy transition-colors hover:bg-ge-blue-bg";
+                      const childInner = (
+                        <>
+                          {child.label}
+                          <ChevronRight className="h-4 w-4 text-ge-point" />
+                        </>
+                      );
+                      return child.href ? (
+                        <Link
+                          key={`${child.label}-${i}`}
+                          href={child.href}
+                          className={childClass}
+                        >
+                          {childInner}
+                        </Link>
+                      ) : (
+                        <button
+                          key={`${child.label}-${i}`}
+                          type="button"
+                          className={childClass}
+                        >
+                          {childInner}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}

@@ -16,5 +16,8 @@ class Settings(BaseSettings):
     # Internal API auth shared with the worker/n8n; guards the /internal router.
     INTERNAL_API_KEY: str = "change_me_internal"
 
+    # Upstream AI usage monitor (Claude/Codex account meters) that /api/v1/ai-token-usage proxies.
+    AI_USAGE_MONITOR_BASE_URL: str = "http://192.168.199.120:8002"
+
 
 settings = Settings()

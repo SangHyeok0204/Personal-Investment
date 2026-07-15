@@ -60,6 +60,32 @@ export interface CsvImportResponse {
   original_filename: string;
 }
 
+export interface AiUsageMeter {
+  label: string;
+  subtitle: string | null;
+  pct: number;
+  remaining_pct: number | null;
+}
+
+export interface AiUsageAccount {
+  account_num: number;
+  email: string | null;
+  plan: string | null;
+  captured_at: string | null;
+  age_seconds: number | null;
+  stale: boolean;
+  items: AiUsageMeter[];
+}
+
+export interface AiTokenUsageResponse {
+  monitor_base_url: string;
+  reachable: boolean;
+  error: string | null;
+  fetched_at: string;
+  claude: AiUsageAccount[];
+  codex: AiUsageAccount[];
+}
+
 interface ApiErrorEnvelope {
   error: {
     code: string;
@@ -154,4 +180,8 @@ export function uploadCsv(file: File): Promise<CsvImportResponse> {
     method: "POST",
     body: form,
   });
+}
+
+export function getAiTokenUsage(): Promise<AiTokenUsageResponse> {
+  return request<AiTokenUsageResponse>("/api/v1/ai-token-usage");
 }

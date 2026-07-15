@@ -65,3 +65,29 @@ class ImportCreateOut(BaseModel):
     job_id: uuid.UUID
     import_id: uuid.UUID
     original_filename: str
+
+
+class AiUsageMeterOut(BaseModel):
+    label: str
+    subtitle: str | None = None
+    pct: float
+    remaining_pct: float | None = None
+
+
+class AiUsageAccountOut(BaseModel):
+    account_num: int
+    email: str | None = None
+    plan: str | None = None
+    captured_at: str | None = None
+    age_seconds: float | None = None
+    stale: bool
+    items: list[AiUsageMeterOut] = []
+
+
+class AiUsageOut(BaseModel):
+    monitor_base_url: str
+    reachable: bool
+    error: str | None = None
+    fetched_at: str
+    claude: list[AiUsageAccountOut] = []
+    codex: list[AiUsageAccountOut] = []
