@@ -52,7 +52,7 @@ const navItems: NavItem[] = [
     ],
   },
   {
-    label: "historical",
+    label: "track record",
     icon: History,
     children: [{ label: "FUND1" }, { label: "FUND2" }, { label: "FUND3" }],
   },
