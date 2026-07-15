@@ -50,9 +50,9 @@ export default function AiTokenUsagePage() {
         )}
 
         {usage.isLoading ? (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-5">
             {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-56 w-full rounded-xl" />
+              <Skeleton key={i} className="h-80 w-full rounded-2xl" />
             ))}
           </div>
         ) : usage.isError ? (
@@ -60,7 +60,7 @@ export default function AiTokenUsagePage() {
             API가 응답하지 않아 사용량 데이터를 표시할 수 없습니다.
           </p>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-5">
             {(data?.claude ?? []).map((a) => (
               <UsageCard key={`c-${a.account_num}`} provider="Claude" account={a} />
             ))}
@@ -94,16 +94,16 @@ function UsageCard({
   const weekly = pickMeter(account.items, ["모든", "주간"]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline bg-canvas">
-      {/* GE hero-card 시그니처: 6px 포인트블루 상단 바 */}
-      <div className="h-1.5 bg-ge-point" />
-      <div className="px-5 pb-5 pt-4">
+    <div className="overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-[0_2px_10px_rgba(36,59,94,0.05)]">
+      {/* GE hero-card 시그니처: 포인트블루 상단 바 */}
+      <div className="h-2 bg-ge-point" />
+      <div className="px-7 pb-7 pt-6">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[19px] font-extrabold tracking-tight text-ge-point">
+            <div className="text-[24px] font-extrabold tracking-tight text-ge-point">
               {provider} · account{account.account_num}
             </div>
-            <div className="mt-0.5 truncate text-[11.5px] font-semibold text-ink-faint">
+            <div className="mt-1 truncate text-[13px] font-semibold text-ink-faint">
               {account.email ?? "—"}
               {account.plan ? ` · ${account.plan}` : ""}
             </div>
@@ -111,7 +111,7 @@ function UsageCard({
           <FreshnessBadge account={account} />
         </div>
 
-        <div className="mt-4 flex items-start justify-around gap-2">
+        <div className="mt-7 flex items-start justify-around gap-3">
           <Gauge meter={current} label="current" muted={account.stale} />
           <Gauge meter={weekly} label="weekly" muted={account.stale} />
         </div>
@@ -142,10 +142,10 @@ function Gauge({
   const stroke = pct == null || muted ? "#B7C0CE" : gaugeColor(pct);
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      <div className="relative h-[92px] w-[92px]">
+    <div className="flex flex-col items-center gap-2.5">
+      <div className="relative h-[150px] w-[150px]">
         <svg viewBox="0 0 80 80" className="h-full w-full -rotate-90">
-          <circle cx="40" cy="40" r={r} fill="none" stroke="#E7F0FB" strokeWidth="8" />
+          <circle cx="40" cy="40" r={r} fill="none" stroke="#E7F0FB" strokeWidth="7.5" />
           {pct != null && (
             <circle
               cx="40"
@@ -153,7 +153,7 @@ function Gauge({
               r={r}
               fill="none"
               stroke={stroke}
-              strokeWidth="8"
+              strokeWidth="7.5"
               strokeLinecap="round"
               strokeDasharray={`${dash} ${circ}`}
             />
@@ -161,20 +161,20 @@ function Gauge({
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
           <span
-            className="text-[23px] font-extrabold tabular-nums"
+            className="text-[42px] font-extrabold leading-none tabular-nums"
             style={{ color: stroke }}
           >
             {pct != null ? Math.round(pct) : "—"}
-            {pct != null && <span className="text-[13px] font-bold"> %</span>}
+            {pct != null && <span className="text-[19px] font-bold"> %</span>}
           </span>
         </div>
       </div>
-      <span className="text-[11px] font-bold uppercase tracking-wide text-ink-muted">
+      <span className="text-[13px] font-bold uppercase tracking-wide text-ink-muted">
         {label}
       </span>
       {meter?.subtitle && (
         <span
-          className="max-w-[104px] truncate text-[10px] text-ink-faint"
+          className="max-w-[140px] truncate text-[11.5px] text-ink-faint"
           title={meter.subtitle}
         >
           {meter.subtitle}
@@ -187,7 +187,7 @@ function Gauge({
 function FreshnessBadge({ account }: { account: AiUsageAccount }) {
   if (!account.captured_at) {
     return (
-      <span className="inline-flex shrink-0 items-center rounded-full border border-hairline bg-canvas-soft px-2 py-0.5 text-[11px] font-medium text-ink-faint">
+      <span className="inline-flex shrink-0 items-center rounded-full border border-hairline bg-canvas-soft px-2.5 py-1 text-[12px] font-medium text-ink-faint">
         데이터 없음
       </span>
     );
@@ -195,7 +195,7 @@ function FreshnessBadge({ account }: { account: AiUsageAccount }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[12px] font-medium",
         account.stale
           ? "border-amber-400/40 bg-amber-400/[0.10] text-amber-700"
           : "border-status-success/30 bg-status-success/[0.08] text-status-success",
