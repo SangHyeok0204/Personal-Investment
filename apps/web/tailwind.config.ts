@@ -1,34 +1,58 @@
 import type { Config } from "tailwindcss";
 
+// GE 하우스 스타일 (S:\GE\_Team\07_회의자료\기타\GE_template.md).
+// 하나의 블루 계열만 구조색으로 쓰고, 그레이 캔버스 위 흰색 카드 + 헤어라인으로 구획한다.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        canvas: "#ffffff",
-        "canvas-soft": "#f6f5f4",
-        ink: "#000000",
-        "ink-secondary": "#31302e",
-        "ink-muted": "#615d59",
-        "ink-faint": "#a39e98",
-        hairline: "#e6e6e6",
-        primary: "#0075de",
-        "primary-active": "#005bab",
-        "status-success": "#1aae39",
-        "status-running": "#62aef0",
-        "status-failed": "#e03e3e",
+        // 서피스
+        canvas: "#ffffff", // 흰색 카드/패널
+        "canvas-soft": "#f4f6f9", // 페이지 캔버스 (page-bg)
+        // 텍스트
+        ink: "#3a4150", // 기본 본문
+        "ink-secondary": "#5a6573",
+        "ink-muted": "#8a94a6", // 보조 (sub)
+        "ink-faint": "#9aa3b0", // 더 연한 보조 (sub-2)
+        hairline: "#dde2e8", // 테두리·구분선 (line)
+        // 구조색 — 블루 한 계열
+        primary: "#4a7ab5", // 포인트 블루 — 액션·강조·액티브
+        "primary-active": "#3a6199",
+        // GE 브랜드 토큰
+        "ge-main": "#6390bf", // 메인 블루 (헤더/브랜드)
+        "ge-point": "#4a7ab5", // 포인트 블루
+        "ge-navy": "#243b5e", // 딥 네이비 (제목/딥 배경)
+        "ge-blue-bg": "#e7f0fb", // 연블루 강조 배경
+        "ge-today": "#f0f6ff",
+        "ge-th": "#eef2f7", // 표 헤더 배경
+        "ge-line-soft": "#d2d8e0",
+        // 상태색 (감성형)
+        "status-success": "#27ae60",
+        "status-running": "#4a7ab5",
+        "status-failed": "#e74c3c",
       },
       borderRadius: {
-        sm: "4px",
-        md: "8px",
+        sm: "6px",
+        md: "9px",
         lg: "12px",
+        xl: "14px",
       },
       boxShadow: {
-        card: "0 1px 2px 0 rgba(0, 0, 0, 0.03)",
-        panel: "0 8px 30px rgba(0, 0, 0, 0.08)",
+        card: "0 1px 2px 0 rgba(36, 59, 94, 0.05)",
+        panel: "0 8px 30px rgba(80, 110, 170, 0.10)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        sans: [
+          "Pretendard Variable",
+          "Pretendard",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "system-ui",
+          "Malgun Gothic",
+          "Apple SD Gothic Neo",
+          "sans-serif",
+        ],
       },
     },
   },

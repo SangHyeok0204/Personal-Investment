@@ -1,120 +1,197 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart3,
-  BookOpen,
-  Bot,
-  CalendarDays,
-  ChartNoAxesCombined,
-  Database,
-  Globe2,
-  LayoutDashboard,
-  LineChart,
-  Moon,
-  Search,
+  ChevronRight,
+  LayoutGrid,
+  Newspaper,
   Settings,
+  Sigma,
+  TrendingUp,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// Items with `href` navigate; the rest are placeholders for pages not built yet.
-const navGroups = [
+// 5개 분류 체계 (시장 모니터링 / 뉴스 모니터링 / Quant / 기타 / 설정).
+// href 가 있는 항목만 실제 라우팅되고, 나머지는 아직 준비 중인 placeholder 다.
+type NavItem = {
+  label: string;
+  icon: LucideIcon;
+  href?: string;
+  children?: { label: string }[];
+};
+
+const navItems: NavItem[] = [
   {
-    title: "My",
-    items: [
-      { label: "메인 대시보드", icon: LayoutDashboard, href: "/" },
-      { label: "포트폴리오 상세", icon: ChartNoAxesCombined, href: "/portfolio" },
-      { label: "데이터 작업", icon: Database, href: "/data-operations" },
+    label: "시장 모니터링",
+    icon: TrendingUp,
+    href: "/",
+    children: [{ label: "iNAV" }, { label: "WRAP" }],
+  },
+  {
+    label: "뉴스 모니터링",
+    icon: Newspaper,
+    children: [
+      { label: "기사" },
+      { label: "텔레그램" },
+      { label: "placeholder" },
+      { label: "placeholder" },
     ],
   },
   {
-    title: "Realtime",
-    items: [
-      { label: "실시간 시장 분석", icon: LineChart },
-      { label: "실시간 뉴스", icon: BookOpen },
+    label: "Quant",
+    icon: Sigma,
+    children: [
+      { label: "모멘텀" },
+      { label: "재무" },
+      { label: "기술적 분석" },
+      { label: "sentiment" },
     ],
   },
   {
-    title: "???",
-    items: [
-      { label: "매크로", icon: Globe2 },
-      { label: "종목 분석", icon: Search },
-      { label: "주요 이벤트 분석", icon: CalendarDays },
-    ],
+    label: "기타",
+    icon: LayoutGrid,
+    children: [{ label: "AI token usage" }, { label: "LAN dashboard" }],
   },
   {
-    title: "Study",
-    items: [
-      { label: "AI / ML / DL", icon: Bot },
-      { label: "CS", icon: Database },
-      { label: "Math", icon: BarChart3 },
-      { label: "Finance", icon: ChartNoAxesCombined },
-      { label: "Others", icon: LayoutDashboard },
-    ],
+    label: "설정",
+    icon: Settings,
+    href: "/settings",
+    children: [{ label: "placeholder" }, { label: "placeholder" }],
   },
-] as const;
+];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [openLabel, setOpenLabel] = useState<string | null>(null);
 
   return (
-    <aside className="flex w-[216px] shrink-0 flex-col bg-[#071426] text-slate-200 shadow-[2px_0_24px_rgba(4,18,38,0.14)]">
-      <div className="flex items-center gap-3 px-5 pb-5 pt-5">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-400 via-blue-600 to-indigo-700 shadow-lg shadow-blue-950/40">
-          <ChartNoAxesCombined className="h-6 w-6 text-white" strokeWidth={1.7} />
+    <aside className="relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main via-ge-point to-ge-navy py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]">
+      {/* 브랜드 */}
+      <div className="mb-7 flex items-center gap-2.5 px-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
+          <TrendingUp className="h-5 w-5 text-white" strokeWidth={2.2} />
         </div>
-        <div>
-          <div className="text-[17px] font-semibold tracking-tight text-white">Invest AI</div>
-          <div className="text-[11px] font-medium tracking-wide text-slate-400">INTELLIGENCE</div>
-        </div>
-      </div>
-
-      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto px-3 pb-5">
-        {navGroups.map((group) => (
-          <div key={group.title}>
-            <div className="px-1 pb-1.5 text-sm font-semibold text-blue-400">{group.title}</div>
-            <div className="space-y-1">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const href = "href" in item ? item.href : undefined;
-                const active = href != null && pathname === href;
-                const rowClass = cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
-                  active
-                    ? "bg-gradient-to-r from-blue-600/35 to-blue-500/15 font-medium text-blue-100 shadow-inner shadow-blue-300/5"
-                    : "text-slate-300 hover:bg-white/[0.075] hover:text-white",
-                );
-                const inner = (
-                  <>
-                    <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-blue-400" : "text-slate-400")} strokeWidth={1.7} />
-                    <span>{item.label}</span>
-                  </>
-                );
-
-                return href ? (
-                  <Link key={item.label} href={href} className={rowClass}>
-                    {inner}
-                  </Link>
-                ) : (
-                  <button key={item.label} type="button" className={rowClass}>
-                    {inner}
-                  </button>
-                );
-              })}
-            </div>
+        <div className="leading-tight">
+          <div className="text-[15px] font-extrabold tracking-tight text-white">
+            GE Dashboard
           </div>
-        ))}
-      </nav>
-
-      <div className="m-3 flex items-center rounded-lg border border-white/10 bg-white/[0.025] p-1.5">
-        <button type="button" className="flex flex-1 items-center justify-center gap-2 rounded-md py-2 text-xs text-slate-300 hover:bg-white/[0.07]">
-          <Moon className="h-4 w-4" /> 테마
-        </button>
-        <Link href="/settings" className="flex flex-1 items-center justify-center gap-2 rounded-md py-2 text-xs text-slate-300 hover:bg-white/[0.07]">
-          <Settings className="h-4 w-4" /> 설정
-        </Link>
+          <div className="text-[10px] font-semibold tracking-[0.18em] text-white/70">
+            INVEST INTELLIGENCE
+          </div>
+        </div>
       </div>
+
+      <nav className="flex flex-1 flex-col gap-1.5">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const active = item.href != null && pathname === item.href;
+          const open = openLabel === item.label;
+          const rowClass = cn(
+            "flex items-center gap-3 rounded-r-[24px] py-3 pl-6 pr-4 transition-colors",
+            active
+              ? "bg-white text-ge-point shadow-[0_8px_20px_rgba(36,59,94,0.18)]"
+              : "text-white/90 hover:bg-white/10",
+          );
+          const inner = (
+            <>
+              <span
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]",
+                  active ? "bg-ge-blue-bg" : "bg-white/25",
+                )}
+              >
+                <Icon
+                  className={cn(
+                    "h-[19px] w-[19px]",
+                    active ? "text-ge-point" : "text-white",
+                  )}
+                  strokeWidth={2}
+                />
+              </span>
+              <span
+                className={cn(
+                  "text-[15px]",
+                  active ? "font-extrabold" : "font-bold",
+                )}
+              >
+                {item.label}
+              </span>
+            </>
+          );
+
+          return (
+            <div
+              key={item.label}
+              className="relative"
+              onMouseEnter={
+                item.children ? () => setOpenLabel(item.label) : undefined
+              }
+              onMouseLeave={
+                item.children ? () => setOpenLabel(null) : undefined
+              }
+              onFocus={
+                item.children ? () => setOpenLabel(item.label) : undefined
+              }
+              onBlur={
+                item.children
+                  ? (e) => {
+                      if (
+                        !e.currentTarget.contains(e.relatedTarget as Node | null)
+                      ) {
+                        setOpenLabel(null);
+                      }
+                    }
+                  : undefined
+              }
+            >
+              {item.href ? (
+                <Link href={item.href} className={rowClass}>
+                  {inner}
+                </Link>
+              ) : (
+                <button type="button" className={cn(rowClass, "w-full text-left")}>
+                  {inner}
+                </button>
+              )}
+
+              {/* 버튼 또는 이 패널에 커서/포커스가 있으면 열리고(스르륵 슬라이드),
+                  둘 다 벗어나면 즉시 닫힌다(닫힘 duration-0). pl-2 가 버튼↔패널 hover 간격을 잇는다. */}
+              {item.children && (
+                <div
+                  className={cn(
+                    "absolute left-full top-0 z-50 pl-2 transition-all ease-out",
+                    open
+                      ? "pointer-events-auto translate-x-0 opacity-100 duration-200"
+                      : "pointer-events-none -translate-x-2 opacity-0 duration-0",
+                  )}
+                >
+                  <div className="min-w-[184px] rounded-2xl bg-white p-3 shadow-[0_16px_36px_rgba(36,59,94,0.26)] ring-1 ring-hairline">
+                    <div className="mb-1.5 flex items-center gap-2 px-2 pb-1.5">
+                      <Icon className="h-4 w-4 text-ge-point" strokeWidth={2.6} />
+                      <span className="text-[11px] font-bold tracking-wide text-ge-point">
+                        {item.label}
+                      </span>
+                    </div>
+                    {item.children.map((child, i) => (
+                      <button
+                        key={`${child.label}-${i}`}
+                        type="button"
+                        className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-[14px] font-extrabold text-ge-navy transition-colors hover:bg-ge-blue-bg"
+                      >
+                        {child.label}
+                        <ChevronRight className="h-4 w-4 text-ge-point" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
     </aside>
   );
 }

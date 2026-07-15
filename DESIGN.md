@@ -1,98 +1,112 @@
 ---
-version: alpha
-name: Notion Analysis
-description: An analysis of Notion's design language — a warm, paper-calm productivity system built on an off-white canvas, near-black Inter type, and a single confident blue, punctuated by a playful multi-color sticker palette that does all the personality work while the chrome stays quiet.
+version: v1
+name: GE Dashboard Design Tokens
+description: GE 하우스 스타일(07_회의자료/기타/GE_template.md)을 적용한 대시보드 디자인 토큰 — 그레이 캔버스 위 흰색 카드 + 헤어라인으로 정보를 구획하고, 하나의 블루 계열(메인/포인트 블루)과 딥 네이비 제목으로만 강조하는 Pretendard 기반 시스템.
 
 colors:
-  primary: "#0075de"
-  primary-active: "#005bab"
-  secondary: "#213183"
-  on-primary: "#ffffff"
-  canvas: "#ffffff"
-  canvas-soft: "#f6f5f4"
-  surface: "#ffffff"
-  ink: "#000000"
-  ink-secondary: "#31302e"
-  ink-muted: "#615d59"
-  ink-faint: "#a39e98"
-  hairline: "#e6e6e6"
-  accent-sky: "#62aef0"
-  accent-purple: "#d6b6f6"
-  accent-purple-deep: "#391c57"
-  accent-pink: "#ff64c8"
-  accent-orange: "#dd5b00"
-  accent-orange-deep: "#793400"
-  accent-teal: "#2a9d99"
-  accent-green: "#1aae39"
-  accent-brown: "#523410"
+  # ── GE 하우스 스타일 팔레트 (GE_template.md) ──
+  main-blue: "#6390BF"       # 헤더 밴드·브랜드 대표색
+  point-blue: "#4A7AB5"      # 포인트 — 액티브·배지·좌측 강조선
+  deep-navy: "#243B5E"       # 제목/헤딩·딥 풀블리드 배경
+  blue-bg: "#E7F0FB"         # 연블루 강조 배경 (강조 카드/칩)
+  today-bg: "#F0F6FF"        # 오늘/현재 강조 배경
+  page-bg: "#F4F6F9"         # 페이지 캔버스
+  card: "#FFFFFF"            # 흰색 카드/패널
+  line: "#DDE2E8"            # 카드 테두리·구분선
+  line-soft: "#D2D8E0"       # 더 연한 구분선
+  th-bg: "#EEF2F7"           # 표 헤더 배경
+  ink: "#3A4150"             # 기본 본문 글자
+  sub: "#8A94A6"             # 보조 글자
+  sub-2: "#9AA3B0"           # 더 연한 보조 (자리표시자)
+  # ── 시맨틱 (리포트/상태 유형별 택1) ──
+  up-kr: "#C0392B"           # 상승(한국식 = 적색)
+  down-kr: "#2E6FA8"         # 하락(한국식 = 청색)
+  sent-pos: "#27AE60"        # 감성 긍정
+  sent-neg: "#E74C3C"        # 감성 부정
+  sent-neu: "#95A5A6"        # 감성 중립
+  warn: "#D08A2E"            # 주의/단독 강조
+  # ── 앱 테마 브리지 키 (아래 컴포넌트 섹션의 {colors.*} 참조 호환) ──
+  primary: "#4A7AB5"         # = point-blue (구조색·액션)
+  primary-active: "#3A6199"
+  secondary: "#243B5E"       # = deep-navy
+  on-primary: "#FFFFFF"
+  canvas: "#FFFFFF"          # = card (흰색 서피스)
+  canvas-soft: "#F4F6F9"     # = page-bg (캔버스)
+  surface: "#FFFFFF"         # = card
+  ink-secondary: "#5A6573"
+  ink-muted: "#8A94A6"       # = sub
+  ink-faint: "#9AA3B0"       # = sub-2
+  hairline: "#DDE2E8"        # = line
 
 typography:
-  display-1:
-    fontFamily: NotionInter
+  fontFamily: "'Pretendard Variable', 'Pretendard', -apple-system, 'Malgun Gothic', sans-serif"
+  cdn: "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css"
+  display-1:                 # 표지 대제목
+    fontFamily: Pretendard
     fontSize: 64px
-    fontWeight: 700
-    lineHeight: 1.0
-    letterSpacing: -2.125px
-  display-2:
-    fontFamily: NotionInter
-    fontSize: 54px
-    fontWeight: 700
-    lineHeight: 1.04
-    letterSpacing: -1.875px
-  heading-1:
-    fontFamily: NotionInter
-    fontSize: 40px
-    fontWeight: 700
+    fontWeight: 800
+    lineHeight: 1.05
+    letterSpacing: -1.5px
+  display-2:                 # 큰 섹션 헤드라인
+    fontFamily: Pretendard
+    fontSize: 48px
+    fontWeight: 800
     lineHeight: 1.1
+    letterSpacing: -1.25px
+  heading-1:                 # 리드 헤드라인·질문 제목
+    fontFamily: Pretendard
+    fontSize: 34px
+    fontWeight: 800
+    lineHeight: 1.2
     letterSpacing: -1px
-  heading-2:
-    fontFamily: NotionInter
+  heading-2:                 # 서브 섹션 헤딩
+    fontFamily: Pretendard
     fontSize: 26px
-    fontWeight: 700
-    lineHeight: 1.23
-    letterSpacing: -0.625px
-  heading-3:
-    fontFamily: NotionInter
-    fontSize: 22px
-    fontWeight: 700
-    lineHeight: 1.27
-    letterSpacing: -0.25px
-  title:
-    fontFamily: NotionInter
+    fontWeight: 800
+    lineHeight: 1.25
+    letterSpacing: -0.6px
+  heading-3:                 # 카드 제목
+    fontFamily: Pretendard
     fontSize: 20px
-    fontWeight: 600
+    fontWeight: 800
+    lineHeight: 1.3
+    letterSpacing: -0.3px
+  title:                     # 피처 타이틀·콜아웃
+    fontFamily: Pretendard
+    fontSize: 18px
+    fontWeight: 700
     lineHeight: 1.4
-    letterSpacing: -0.125px
-  body-md:
-    fontFamily: NotionInter
-    fontSize: 16px
-    fontWeight: 400
-    lineHeight: 1.5
-    letterSpacing: 0
-  body-sm:
-    fontFamily: NotionInter
-    fontSize: 15px
-    fontWeight: 400
-    lineHeight: 1.33
-    letterSpacing: 0
-  button:
-    fontFamily: NotionInter
+    letterSpacing: -0.2px
+  body-md:                   # 기본 본문
+    fontFamily: Pretendard
     fontSize: 16px
     fontWeight: 500
     lineHeight: 1.5
     letterSpacing: 0
-  caption:
-    fontFamily: NotionInter
-    fontSize: 14px
-    fontWeight: 400
-    lineHeight: 1.43
+  body-sm:                   # 조밀한 본문·표 행·내비
+    fontFamily: Pretendard
+    fontSize: 15px
+    fontWeight: 500
+    lineHeight: 1.5
     letterSpacing: 0
-  eyebrow:
-    fontFamily: NotionInter
-    fontSize: 12px
+  button:                    # 버튼 라벨
+    fontFamily: Pretendard
+    fontSize: 15px
+    fontWeight: 700
+    lineHeight: 1.5
+    letterSpacing: 0
+  caption:                   # 캡션·부제·메타
+    fontFamily: Pretendard
+    fontSize: 13.5px
     fontWeight: 600
+    lineHeight: 1.45
+    letterSpacing: 0
+  eyebrow:                   # 라벨·꼬리표
+    fontFamily: Pretendard
+    fontSize: 12px
+    fontWeight: 800
     lineHeight: 1.33
-    letterSpacing: 0.125px
+    letterSpacing: 1px
 
 rounded:
   xs: 4px
@@ -268,62 +282,60 @@ Surfaces are defined by hairlines and the faintest layered shadows rather than h
 
 ## Colors
 
-> Source pages analysed: the Notion home page plus Pricing, Enterprise, Product (AI), Product (Agents), and Startups. Every secondary page resolved to the same core palette — Notion runs one tightly-scoped system across the marketing site.
+> 출처: GE 하우스 스타일 정본 `S:\GE\_Team\07_회의자료\기타\GE_template.md`. 대부분을 회색·네이비로 조용히 두고, 강조는 오직 블루 한 계열로만 준다.
 
-### Brand & Accent
-- **Notion Blue** (`{colors.primary}` — #0075de): the single structural accent. Primary CTA fill ("Get Notion free"), inline link colour, active-tab and focus signal. This is the only colour that ever paints an action.
-- **Pressed Blue** (`{colors.primary-active}` — #005bab): the darker press state of the primary CTA.
-- **Deep Indigo** (`{colors.secondary}` — #213183): the dark hero "night" band background and its sticker-constellation field; a deep brand-blue used for full-bleed inverted sections.
+### 브랜드 & 포인트
+- **메인 블루** (`{colors.main-blue}` — #6390BF): 상단 헤더 밴드와 브랜드 대표색. 화면·리포트의 얼굴.
+- **포인트 블루** (`{colors.point-blue}` / `{colors.primary}` — #4A7AB5): 유일한 구조색. 사이드바 액티브, 카드 좌측 강조선, 배지·칩, 링크·포커스 신호. 액션을 칠하는 색은 이것뿐이다.
+- **딥 네이비** (`{colors.deep-navy}` / `{colors.secondary}` — #243B5E): 모든 제목·헤딩·강조 수치와 표지 풀블리드 배경.
 
-The remaining colours form Notion's **decorative sticker palette** — they appear only as illustrated blocks, app stickers and category dots, never as CTAs or structural fills:
-- **Sticker Sky** (`{colors.accent-sky}` — #62aef0)
-- **Sticker Purple** (`{colors.accent-purple}` — #d6b6f6) / **Deep Purple** (`{colors.accent-purple-deep}` — #391c57)
-- **Sticker Pink** (`{colors.accent-pink}` — #ff64c8)
-- **Sticker Orange** (`{colors.accent-orange}` — #dd5b00) / **Deep Orange** (`{colors.accent-orange-deep}` — #793400)
-- **Sticker Teal** (`{colors.accent-teal}` — #2a9d99)
-- **Sticker Green** (`{colors.accent-green}` — #1aae39)
-- **Sticker Brown** (`{colors.accent-brown}` — #523410)
+### 배경 강조
+- **연블루 배경** (`{colors.blue-bg}` — #E7F0FB): 강조 카드/핵심 요약 밴드/키워드 칩 배경.
+- **오늘 강조 배경** (`{colors.today-bg}` — #F0F6FF): 캘린더의 오늘 등 "현재" 셀.
 
-### Surface
-- **White** (`{colors.canvas}` / `{colors.surface}` — #ffffff): card and panel surfaces, nav bar, form fields.
-- **Warm Paper** (`{colors.canvas-soft}` — #f6f5f4): the signature page canvas and the footer band — a warm off-white that gives the whole site its document-like calm.
-- **Hairline** (`{colors.hairline}` — #e6e6e6): 1px card borders and dividers, a black-at-10%-on-white blend kept solid for token reuse.
+### 서피스
+- **카드/흰색** (`{colors.card}` / `{colors.canvas}` / `{colors.surface}` — #FFFFFF): 카드·패널·폼 필드 서피스.
+- **캔버스** (`{colors.page-bg}` / `{colors.canvas-soft}` — #F4F6F9): 페이지 바탕. 순백이 아닌 은은한 그레이가 시스템의 기본 톤이다.
+- **구분선** (`{colors.line}` / `{colors.hairline}` — #DDE2E8) / **연한 구분선** (`{colors.line-soft}` — #D2D8E0): 1px 테두리·구분선.
+- **표 헤더** (`{colors.th-bg}` — #EEF2F7): thead·주말 요일 배경.
 
-### Text
-- **Ink** (`{colors.ink}` — #000000): primary headings and body text (rendered at ~95% alpha for a soft true-black).
-- **Warm Charcoal** (`{colors.ink-secondary}` — #31302e): secondary body copy and footer text.
-- **Stone** (`{colors.ink-muted}` — #615d59): supporting / muted copy.
-- **Ash** (`{colors.ink-faint}` — #a39e98): captions, metadata, placeholder text.
+### 텍스트
+- **본문** (`{colors.ink}` — #3A4150): 기본 본문. (제목·강조 수치는 딥 네이비를 쓴다.)
+- **보조** (`{colors.sub}` / `{colors.ink-muted}` — #8A94A6): 부제·라벨·메타.
+- **더 연한 보조** (`{colors.sub-2}` / `{colors.ink-faint}` — #9AA3B0): 자리표시자·희미한 메타.
 
-### Semantic
-Notion's marketing surfaces do not expose a dedicated error/success palette in the system chrome — status is carried by the sticker palette (e.g. `{colors.accent-green}` for affirmative ticks) rather than a separate semantic ramp.
+### 시맨틱 (택1)
+화면/리포트 성격에 따라 **한 세트만** 쓴다.
+- **시세형**: 상승 `{colors.up-kr}` (#C0392B, 적색) / 하락 `{colors.down-kr}` (#2E6FA8, 청색) — 한국 시장 관례.
+- **감성형**: 긍정 `{colors.sent-pos}` (#27AE60) / 부정 `{colors.sent-neg}` (#E74C3C) / 중립 `{colors.sent-neu}` (#95A5A6).
+- **주의/단독**: 앰버 `{colors.warn}` (#D08A2E) — 놓치기 쉬운·특이 항목 강조.
 
 ## Typography
 
 ### Font Family
-The entire system is set in **`NotionInter`** — Notion's tuned cut of Inter — with a fallback stack of `Inter, -apple-system, system-ui, "Segoe UI", Helvetica, Arial`. A single family carries everything from 64px display headlines to 12px eyebrows; there is no serif, no monospace display face. OpenType `lnum` (lining numerals) and `locl` features are enabled on body and heading roles.
+전 구간 **Pretendard** 단일 패밀리로 조판한다. 폴백 스택은 `'Pretendard Variable', 'Pretendard', -apple-system, 'Malgun Gothic', sans-serif`. CDN은 front-matter `typography.cdn`(jsDelivr Pretendard Variable) 참조. 별도 serif/mono 없이 한 패밀리가 64px 표지 제목부터 12px 꼬리표까지 모두 감당한다. 숫자 정렬이 필요한 곳에는 `font-variant-numeric: tabular-nums`를 쓴다.
 
 ### Hierarchy
 
-| Token | Size | Weight | Line Height | Letter Spacing | Use |
-|---|---|---|---|---|---|
-| `{typography.display-1}` | 64px | 700 | 1.0 | −2.125px | Hero headline ("Meet the night shift") |
-| `{typography.display-2}` | 54px | 700 | 1.04 | −1.875px | Large section headlines |
-| `{typography.heading-1}` | 40px | 700 | 1.1 | −1px | Section headlines ("Plans and features") |
-| `{typography.heading-2}` | 26px | 700 | 1.23 | −0.625px | Sub-section headings |
-| `{typography.heading-3}` | 22px | 700 | 1.27 | −0.25px | Card titles |
-| `{typography.title}` | 20px | 600 | 1.4 | −0.125px | Feature titles, callouts |
-| `{typography.body-md}` | 16px | 400 | 1.5 | 0 | Default body copy |
-| `{typography.body-sm}` | 15px | 400 | 1.33 | 0 | Dense body, table rows, nav |
-| `{typography.button}` | 16px | 500 | 1.5 | 0 | Button labels |
-| `{typography.caption}` | 14px | 400 | 1.43 | 0 | Captions, footnotes |
-| `{typography.eyebrow}` | 12px | 600 | 1.33 | +0.125px | Pill badges, small labels |
+| 토큰 | 크기 | 굵기 | 자간 | 용도 |
+|---|---|---|---|---|
+| `{typography.display-1}` | 64px | 800 | −1.5px | 표지 대제목 |
+| `{typography.display-2}` | 48px | 800 | −1.25px | 큰 섹션 헤드라인 |
+| `{typography.heading-1}` | 34px | 800 | −1px | 리드 헤드라인·질문 제목 |
+| `{typography.heading-2}` | 26px | 800 | −0.6px | 서브 섹션 헤딩 |
+| `{typography.heading-3}` | 20px | 800 | −0.3px | 카드 제목 |
+| `{typography.title}` | 18px | 700 | −0.2px | 피처 타이틀·콜아웃 |
+| `{typography.body-md}` | 16px | 500 | 0 | 기본 본문 |
+| `{typography.body-sm}` | 15px | 500 | 0 | 조밀한 본문·표 행·내비 |
+| `{typography.button}` | 15px | 700 | 0 | 버튼 라벨 |
+| `{typography.caption}` | 13.5px | 600 | 0 | 캡션·부제·메타 |
+| `{typography.eyebrow}` | 12px | 800 | +1px | 배지·라벨·꼬리표 |
 
 ### Principles
-Notion's type voice is **tight, heavy, and quiet-confident**. Headlines lean on weight 700 and aggressive negative tracking (more negative the larger the size) so display copy feels set, not stretched. Body copy stays at a comfortable 1.5 line-height for document readability. The contrast between a heavy 700 headline and a calm 400 body is the primary expressive lever — there is no decorative typography, only a clear hierarchy.
+헤딩은 **무겁고 타이트하게**(800 + 음의 자간), 본문은 **가볍게**(500, line-height 1.5) 유지해 위계를 만든다. 강조는 굵기와 색(딥 네이비 제목 / 포인트 블루 포인트)으로만 주고, 장식 서체는 쓰지 않는다. 무거운 800은 헤딩·수치의 몫이며, 본문을 무거운 굵기로 채우지 않는다.
 
 ### Note on Font Substitutes
-`NotionInter` is a proprietary tuning of the open-source **Inter** family — substitute Inter directly. To approximate Notion's display tightness, apply the negative letter-spacing values in the table above explicitly (Inter at default tracking will read looser than `NotionInter`).
+Pretendard는 오픈소스 웹폰트로 CDN(`typography.cdn`)만 링크하면 바로 쓸 수 있다. 브랜드 리포트(GE_template.md)와 동일 패밀리를 공유하므로 화면·인쇄물의 타이포가 일관된다.
 
 ## Layout
 
