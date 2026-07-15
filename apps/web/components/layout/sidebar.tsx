@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ChevronRight,
+  History,
   LayoutGrid,
   Newspaper,
   Settings,
@@ -49,6 +50,11 @@ const navItems: NavItem[] = [
       { label: "기술적 분석" },
       { label: "sentiment" },
     ],
+  },
+  {
+    label: "historical",
+    icon: History,
+    children: [{ label: "FUND1" }, { label: "FUND2" }, { label: "FUND3" }],
   },
   {
     label: "기타",
