@@ -24,6 +24,17 @@ export function PageHeader({
   );
 }
 
-export function PageContainer({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto max-w-5xl px-8 py-10">{children}</div>;
+export function PageContainer({
+  children,
+  wide = false,
+}: {
+  children: React.ReactNode;
+  // wide=true: 모니터링 화면용 — 폭 제한 없이 메인 영역을 꽉 채운다.
+  wide?: boolean;
+}) {
+  return (
+    <div className={wide ? "w-full px-6 py-6" : "mx-auto max-w-5xl px-8 py-10"}>
+      {children}
+    </div>
+  );
 }

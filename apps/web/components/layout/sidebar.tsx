@@ -26,10 +26,13 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   {
+    // 메인(/)은 브랜드 로고 클릭으로만 진입 — 이 항목은 플라이아웃 전용.
     label: "시장 모니터링",
     icon: TrendingUp,
-    href: "/",
-    children: [{ label: "iNAV" }, { label: "WRAP" }],
+    children: [
+      { label: "iNAV 모니터", href: "/inav" },
+      { label: "WRAP", href: "/wrap" },
+    ],
   },
   {
     label: "뉴스 모니터링",
@@ -78,8 +81,11 @@ export function Sidebar() {
 
   return (
     <aside className="relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main via-ge-point to-ge-navy py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]">
-      {/* 브랜드 */}
-      <div className="mb-7 flex items-center gap-2.5 px-6">
+      {/* 브랜드 — 클릭 시 메인(/) 이동 */}
+      <Link
+        href="/"
+        className="mb-7 flex items-center gap-2.5 px-6 transition-opacity hover:opacity-85"
+      >
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
           <TrendingUp className="h-5 w-5 text-white" strokeWidth={2.2} />
         </div>
@@ -91,7 +97,7 @@ export function Sidebar() {
             INVEST INTELLIGENCE
           </div>
         </div>
-      </div>
+      </Link>
 
       <nav className="flex flex-1 flex-col gap-1.5">
         {navItems.map((item) => {

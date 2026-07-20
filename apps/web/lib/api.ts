@@ -86,6 +86,145 @@ export interface AiTokenUsageResponse {
   codex: AiUsageAccount[];
 }
 
+export interface InavEtf {
+  ticker: string;
+  name: string;
+  inav_per_share: number | null;
+  kr_etf_price: number | null;
+  change_pct: number | null;
+  prev_close: number | null;
+  trade_value_krw: number | null;
+  aum_krw: number | null;
+  expense_pct: number | null;
+  annual_fee_krw: number | null;
+  deviation_pct: number | null;
+  priced_weight_pct: number | null;
+  component_count: number | null;
+  price_candidate_count: number | null;
+  priced_component_count: number | null;
+  intraday_dev_pct: number | null;
+  lp_value_krw: number | null;
+}
+
+// ACE 프리픽스(자사 ETF)만 합산한 헤더 합계.
+export interface InavSums {
+  aum_krw: number | null;
+  trade_value_krw: number | null;
+  annual_fee_krw: number | null;
+}
+
+export interface InavStaleness {
+  fx_age_s: number | null;
+  price_age_s: number | null;
+  twse_age_s: number | null;
+  kr_etf_age_s: number | null;
+  compute_age_s: number | null;
+  basket_basis_date: string | null;
+  basket_source: string | null;
+  token_valid: boolean;
+  token_ttl_s: number | null;
+}
+
+export interface InavComponentRow {
+  isin: string | null;
+  name: string;
+  exchange: string | null;
+  currency: string | null;
+  quantity: number | null;
+  basePrice: number | null;
+  livePrice: number | null;
+  krwPrice: number | null;
+  weightPct: number | null;
+  tradeTime: string | null;
+  isCash: boolean;
+  valueSource: string;
+}
+
+export interface InavEtfComponents {
+  etfName: string;
+  inavTotalKrw: number | null;
+  components: InavComponentRow[];
+}
+
+export interface InavComponentsPayload {
+  generatedAt: string;
+  timestamp: number;
+  fxRates: Record<string, number>;
+  byEtf: Record<string, InavEtfComponents>;
+}
+
+// WRAP 포트폴리오 실시간 수익률 (구 wrap.js 스키마 + holdings_source/basis_date).
+export interface WrapHolding {
+  ticker: string;
+  name: string | null;
+  exchange: string | null;
+  weight_pct: number;
+  prev_close: number | null;
+  livePrice: number | null;
+  return_pct: number | null;
+  contribution_pct: number | null;
+  matched: boolean;
+  tradeTime: string | null;
+  cat1: string;
+  cat2: string;
+  cat3: string;
+}
+
+export interface WrapPortfolio {
+  key: string;
+  name: string;
+  return_pct: number;
+  matched_weight_pct: number;
+  total_weight_pct: number;
+  n_matched: number;
+  n_total: number;
+  holdings: WrapHolding[];
+  holdings_source: "SOURCE" | "PDF_FALLBACK" | null;
+  basis_date: string | null;
+}
+
+export interface WrapPayload {
+  date: string;
+  generatedAt: string;
+  timestamp: number;
+  priceGeneratedAt: string;
+  portfolios: WrapPortfolio[];
+}
+
+export interface InavSnapshot {
+  date: string;
+  generated_at: string;
+  timestamp: number;
+  market_status: string | null;
+  setup_done: boolean | null;
+  etf_count: number | null;
+  etfs: InavEtf[];
+  fx: Record<string, number>;
+  sums: InavSums | null;
+  staleness: InavStaleness;
+}
+
+// CHECK 에이전트 호가 envelope (data.js pass-through — camelCase 무변경).
+// asks = [매도5→매도1], bids = [매수1→매수5] 잔량(주) — 구 뷰어와 동일 인덱스 매핑.
+export interface HogaEtf {
+  code: string;
+  name: string;
+  asks: number[];
+  bids: number[];
+  obThreshold: number | null;
+  premiumIntra: number | null;
+  premiumActual: number | null;
+}
+
+export interface InavHoga {
+  payload: { etfs: HogaEtf[] } | null;
+  source_timestamp: string | null;
+  sent_at: string | null;
+  seq: number | null;
+  hoga_last_received_age_s: number | null;
+  hoga_source_age_s: number | null;
+}
+
 interface ApiErrorEnvelope {
   error: {
     code: string;
@@ -184,4 +323,22 @@ export function uploadCsv(file: File): Promise<CsvImportResponse> {
 
 export function getAiTokenUsage(): Promise<AiTokenUsageResponse> {
   return request<AiTokenUsageResponse>("/api/v1/ai-token-usage");
+}
+
+// Proxied from the collector profile service. Throws ApiError(503) when the
+// collector is stopped/unreachable so the page can render a degraded notice.
+export function getInavSnapshot(): Promise<InavSnapshot> {
+  return request<InavSnapshot>("/api/v1/inav/snapshot");
+}
+
+export function getInavComponents(): Promise<InavComponentsPayload> {
+  return request<InavComponentsPayload>("/api/v1/inav/components");
+}
+
+export function getWrapSnapshot(): Promise<WrapPayload> {
+  return request<WrapPayload>("/api/v1/inav/wrap");
+}
+
+export function getInavHoga(): Promise<InavHoga> {
+  return request<InavHoga>("/api/v1/inav/hoga");
 }

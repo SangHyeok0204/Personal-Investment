@@ -12,6 +12,10 @@ ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Local-dev only: corporate TLS interception (Somansa CA) makes next/font's build-time
+# fetch of Google Fonts fail with SELF_SIGNED_CERT_IN_CHAIN. Disable TLS verify for the
+# build step only (this ENV stays in the builder stage, not the runtime image).
+ENV NODE_TLS_REJECT_UNAUTHORIZED=0
 RUN npm run build
 
 FROM node:22-alpine AS runner

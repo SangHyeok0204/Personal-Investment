@@ -31,6 +31,11 @@ const config: Config = {
         "status-success": "#27ae60",
         "status-running": "#4a7ab5",
         "status-failed": "#e74c3c",
+        // 호가창 — 구 뷰어 semantics(매도=시안/매수=레드)의 GE 라이트 번역
+        ask: "#0a9bc4",
+        "ask-soft": "#e6f4f9",
+        bid: "#e74c3c",
+        "bid-soft": "#fdefec",
       },
       borderRadius: {
         sm: "6px",
