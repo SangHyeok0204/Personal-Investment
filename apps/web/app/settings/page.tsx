@@ -46,7 +46,8 @@ export default function SettingsPage() {
             </dl>
             <p className="mt-4 text-xs text-ink-faint">
               Settings are read-only in this phase. Configuration is managed
-              through environment variables.
+              through environment variables.{" "}
+              <span className="text-white">Hi Gayeong</span>
             </p>
           </CardContent>
         </Card>

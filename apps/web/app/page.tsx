@@ -1,8 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CalendarDays, Clock, Menu, Search, User } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  CalendarDays,
+  Clock,
+  Menu,
+  Scale,
+  Search,
+  User,
+  X,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import {
+  getInavHoga,
+  getInavSnapshot,
+  type HogaEtf,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +90,9 @@ export default function HomePage() {
             <Box tone="plain" label="주요 지표" />
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 xl:gap-5">
-            <Box tone="plain" label="모니터링 A" />
+            <Box tone="plain" label="모니터링 A">
+              <MonitoringAAlerts />
+            </Box>
             <Box tone="plain" label="모니터링 B" />
           </div>
         </div>
@@ -112,15 +129,17 @@ export default function HomePage() {
   );
 }
 
-/** 빈 콘텐츠 박스 (레이아웃 골격). */
+/** 콘텐츠 박스 (children 없으면 빈 골격 문구). */
 function Box({
   tone,
   label,
   className,
+  children,
 }: {
   tone: "plain" | "blue";
   label: string;
   className?: string;
+  children?: React.ReactNode;
 }) {
   return (
     <section
@@ -137,7 +156,197 @@ function Box({
         <span className="text-[13px] font-extrabold text-ge-navy">{label}</span>
       </div>
       <div className="flex flex-1 items-center justify-center p-4 text-xs font-semibold text-ink-faint">
-        콘텐츠 준비 중
+        {children ?? "콘텐츠 준비 중"}
+      </div>
+    </section>
+  );
+}
+
+/* ── 모니터링 A — CHECK 호가 알림 (iNAV 카드의 부족 표시 이관, 2026-07-20) ──
+   산식은 구 호가모니터링-대시보드.html 로직 그대로:
+   · 물량부족: 매도/매수 5단 잔량합 < obThreshold (양쪽 각각 판정)
+   · 괴리차이: |장중괴리(hoga premiumIntra) − 실제괴리(snapshot deviation_pct)| ≥ 1.0%p
+     (구 뷰어의 실제괴리도 가격×KIS iNAV 클라이언트 병합값 — hoga의 premiumActual
+      필드는 상시 0이라 쓰지 않는다) */
+
+const DEV_DIFF_ALERT_PCT = 1.0;
+
+// 경고 원인 5종 (2026-07-20 사용자 정의). "LP 호가가 시장가에서 멀어짐"은
+// 현재 피드가 호가 가격 없이 잔량만 제공해 판정 산식 미정 — 예약만 해 둔다.
+const CAUSE_ASK_LOW = "LP 매도 호가 물량 부족";
+const CAUSE_BID_LOW = "LP 매수 호가 물량 부족";
+const CAUSE_BOTH_LOW = "LP 매수/매도 호가 물량 부족";
+const CAUSE_DEV_DIFF = "괴리율 심화";
+
+interface HogaAlert {
+  key: string;
+  name: string;
+  status: string;
+  cause: string;
+  tooltip: string;
+}
+
+function sumLevels(levels: number[] | null | undefined): number {
+  return (levels ?? []).reduce(
+    (s, v) => s + (Number.isFinite(v) ? Number(v) : 0),
+    0,
+  );
+}
+
+function signedPct(v: number): string {
+  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+function MonitoringAAlerts() {
+  const hogaQuery = useQuery({
+    queryKey: ["inavHoga"],
+    queryFn: getInavHoga,
+    refetchInterval: 1000,
+    retry: false,
+  });
+  const snapQuery = useQuery({
+    queryKey: ["inavSnapshot"],
+    queryFn: getInavSnapshot,
+    refetchInterval: 1000,
+    retry: false,
+  });
+
+  const etfs: HogaEtf[] = hogaQuery.data?.payload?.etfs ?? [];
+  const feedDown = hogaQuery.isError || hogaQuery.data?.payload == null;
+
+  const devByCode = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of snapQuery.data?.etfs ?? []) {
+      if (e.deviation_pct != null) map.set(e.ticker, e.deviation_pct);
+    }
+    return map;
+  }, [snapQuery.data]);
+
+  const { obAlerts, devAlerts } = useMemo(() => {
+    const ob: HogaAlert[] = [];
+    const dev: HogaAlert[] = [];
+    for (const e of etfs) {
+      const threshold = e.obThreshold ?? 0;
+      const totalAsk = sumLevels(e.asks);
+      const totalBid = sumLevels(e.bids);
+      const askLow = threshold > 0 && totalAsk < threshold;
+      const bidLow = threshold > 0 && totalBid < threshold;
+      if (askLow || bidLow) {
+        const both = askLow && bidLow;
+        ob.push({
+          key: `ob:${e.code}`,
+          name: e.name,
+          status: both ? "매도·매수부족" : askLow ? "매도부족" : "매수부족",
+          cause: both ? CAUSE_BOTH_LOW : askLow ? CAUSE_ASK_LOW : CAUSE_BID_LOW,
+          tooltip: `총매도 ${totalAsk.toLocaleString("ko-KR")}주 / 총매수 ${totalBid.toLocaleString("ko-KR")}주 (기준 ${threshold.toLocaleString("ko-KR")}주)`,
+        });
+      }
+      const intra = e.premiumIntra;
+      const actual = devByCode.get(e.code);
+      if (typeof intra === "number" && actual != null) {
+        const diff = Math.abs(intra - actual);
+        if (diff >= DEV_DIFF_ALERT_PCT) {
+          dev.push({
+            key: `dev:${e.code}`,
+            name: e.name,
+            status: "괴리차이",
+            cause: CAUSE_DEV_DIFF,
+            tooltip: `장중 ${signedPct(intra)} · 실제 ${signedPct(actual)} · 차이 ${diff.toFixed(2)}%p`,
+          });
+        }
+      }
+    }
+    return { obAlerts: ob, devAlerts: dev };
+  }, [etfs, devByCode]);
+
+  // X 로 닫은 알림 — 조건이 해소되면 기록을 지워 재발 시 다시 뜨게 한다.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const active = new Set([...obAlerts, ...devAlerts].map((a) => a.key));
+    setDismissed((prev) => {
+      const next = new Set([...prev].filter((k) => active.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [obAlerts, devAlerts]);
+
+  const dismiss = (key: string) =>
+    setDismissed((prev) => new Set(prev).add(key));
+
+  return (
+    <div className="flex h-1/2 w-full flex-col gap-3 self-start">
+      <AlertBox
+        title="매수·매도 물량 부족"
+        icon={AlertTriangle}
+        alerts={obAlerts.filter((a) => !dismissed.has(a.key))}
+        onDismiss={dismiss}
+        emptyText={feedDown ? "호가 미수신" : "물량 부족 없음"}
+      />
+      <AlertBox
+        title="괴리 차이 (장중 vs 실제)"
+        icon={Scale}
+        alerts={devAlerts.filter((a) => !dismissed.has(a.key))}
+        onDismiss={dismiss}
+        emptyText={feedDown ? "호가 미수신" : "괴리 차이 정상"}
+      />
+    </div>
+  );
+}
+
+function AlertBox({
+  title,
+  icon: Icon,
+  alerts,
+  onDismiss,
+  emptyText,
+}: {
+  title: string;
+  icon: LucideIcon;
+  alerts: HogaAlert[];
+  onDismiss: (key: string) => void;
+  emptyText: string;
+}) {
+  return (
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-hairline bg-canvas-soft">
+      <div className="flex shrink-0 items-center gap-2 px-3.5 pb-1.5 pt-3">
+        <Icon className="h-6 w-6 shrink-0 text-ge-point" strokeWidth={2.2} />
+        <span className="text-[18pt] font-extrabold leading-tight text-ge-navy">
+          {title}
+        </span>
+        {alerts.length > 0 && (
+          <span className="ml-auto rounded-full bg-status-failed/[0.12] px-2.5 py-0.5 text-[13px] font-bold tabular-nums text-status-failed">
+            {alerts.length}
+          </span>
+        )}
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-2.5 pb-2.5">
+        {alerts.length === 0 ? (
+          <div className="flex flex-1 items-center justify-center text-[11px] font-semibold text-ink-faint">
+            {emptyText}
+          </div>
+        ) : (
+          alerts.map((a) => (
+            <div
+              key={a.key}
+              title={a.tooltip}
+              className="notif-in relative shrink-0 rounded-lg border border-hairline bg-canvas px-3.5 py-2 shadow-card"
+            >
+              <div className="truncate pr-7 text-[15px] leading-snug">
+                <span className="font-extrabold text-ge-navy">{a.name}</span>
+                <span className="font-bold text-ink">
+                  : {a.status} · {a.cause}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onDismiss(a.key)}
+                title="알림 닫기"
+                className="absolute right-1.5 top-1.5 rounded p-0.5 text-ink-faint transition-colors hover:bg-ge-th hover:text-ink"
+              >
+                <X className="h-3 w-3" strokeWidth={2.5} />
+              </button>
+            </div>
+          ))
+        )}
       </div>
     </section>
   );
