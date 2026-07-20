@@ -14,6 +14,19 @@ class InternalJobRequest(BaseModel):
     payload: dict[str, Any] | None = None
 
 
+class CheckHogaEnvelope(BaseModel):
+    """CHECK-agent 호가(orderbook) envelope v1. ``payload`` stays a loosely typed
+    pass-through dict — the collector owns its shape, the api only validates the
+    transport wrapper before forwarding."""
+
+    schema_version: int
+    source: str
+    source_timestamp: str
+    sent_at: str
+    seq: int | None = None
+    payload: dict[str, Any]
+
+
 class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

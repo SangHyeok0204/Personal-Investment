@@ -1,0 +1,18 @@
+# 버전 핀: CHECK PC 런타임과 일치 (2026-07-16 실측 — Python 3.14.6 / pandas 3.0.3).
+# replay 패리티(rel<=1e-9)의 전제이므로 pandas는 정확 핀. 변경 시 패리티 재검증 필수.
+pandas==3.0.3
+requests>=2.32,<3
+urllib3>=2.2,<3
+python-dotenv>=1.0
+cryptography>=42
+pyarrow>=18
+# kis_prices.py(resolve_instruments) 가 top-level 에서 openpyxl 를 import 한다
+# (Global_Monitor xlsm 리더용). collector 는 그 함수만 쓰지만 모듈 import 를 위해 필요.
+openpyxl>=3.1
+# KIS 실시간(WebSocket) 시세 레인 — kis_api.websocket_client 가 import (구시스템 핀과 동일).
+websockets>=12.0
+# collector 내부 HTTP 엔드포인트 (api 서비스가 프록시)
+fastapi>=0.115
+uvicorn>=0.30
+# WRAP 데이장 가격 타깃 판단(batch.build_price_targets 지연 import) — 구시스템 핀과 동일.
+pandas_market_calendars>=5.4.0

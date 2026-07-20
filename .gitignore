@@ -12,6 +12,9 @@ __pycache__/
 # Environment (never commit real secrets)
 .env
 
+# Corporate root CA — copied into build context locally, never committed
+apps/collector/somansa-root.crt
+
 # Storage: keep folder structure, ignore uploaded/processed files
 storage/raw/*
 storage/processed/*

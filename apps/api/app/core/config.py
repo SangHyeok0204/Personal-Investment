@@ -19,5 +19,8 @@ class Settings(BaseSettings):
     # Upstream AI usage monitor (Claude/Codex account meters) that /api/v1/ai-token-usage proxies.
     AI_USAGE_MONITOR_BASE_URL: str = "http://192.168.199.120:8002"
 
+    # Upstream ETF iNAV collector (profile service) that /api/v1/inav/snapshot proxies.
+    COLLECTOR_URL: str = "http://collector:8100"
+
 
 settings = Settings()

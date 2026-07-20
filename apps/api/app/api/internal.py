@@ -1,11 +1,19 @@
+import asyncio
+
+import httpx
 from fastapi import APIRouter, Depends, Header
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import Job
-from app.schemas import InternalJobRequest, JobOut
+from app.schemas import CheckHogaEnvelope, InternalJobRequest, JobOut
+
+# Hard wall-clock budget for the collector forward, mirroring the inav proxy: a
+# stopped collector must fail fast (503) rather than hang the agent's POST.
+COLLECTOR_TIMEOUT_S = 2.0
 
 
 def require_internal_api_key(
@@ -31,3 +39,28 @@ def create_internal_job(body: InternalJobRequest, db: Session = Depends(get_db))
     db.commit()
     db.refresh(job)
     return job
+
+
+@router.post("/check/hoga")
+async def ingest_check_hoga(body: CheckHogaEnvelope) -> Response:
+    """Forward a validated CHECK-agent 호가 envelope to the collector.
+
+    Reuses the /internal API-key guard for auth and the inav proxy's 2s
+    wall-clock budget so a stopped collector degrades to a fast 503 (the agent
+    backs off) instead of hanging this request.
+    """
+    url = f"{settings.COLLECTOR_URL}/ingest/hoga"
+    try:
+        async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT_S) as client:
+            upstream = await asyncio.wait_for(
+                client.post(url, json=body.model_dump()),
+                timeout=COLLECTOR_TIMEOUT_S,
+            )
+    except (httpx.HTTPError, asyncio.TimeoutError):
+        return JSONResponse(status_code=503, content={"detail": "collector unavailable"})
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type", "application/json"),
+    )
