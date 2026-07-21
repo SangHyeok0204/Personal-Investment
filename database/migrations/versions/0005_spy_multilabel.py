@@ -5,7 +5,6 @@
 (source,author) 단일 유니크는 인제스트 dict 키잉과 함께 라벨을 유실시키므로
 원본 semantics 로 교정한다. 프론트는 원본 UI 처럼 (source,author) 로 그룹핑한다.
 """
-import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.

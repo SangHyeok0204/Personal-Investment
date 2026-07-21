@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import type { SdSource, SdSpy } from "@/lib/stock-discussion";
-import { SOURCE_STYLE } from "./brand";
+import { sourceStyle } from "./brand";
 
 interface SpyGroup {
   author: string;
@@ -72,8 +72,8 @@ export function SpyPanel({
                 <span
                   className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
                   style={{
-                    color: SOURCE_STYLE[g.source].color,
-                    background: SOURCE_STYLE[g.source].bg,
+                    color: sourceStyle(g.source).color,
+                    background: sourceStyle(g.source).bg,
                   }}
                 >
                   {g.source}

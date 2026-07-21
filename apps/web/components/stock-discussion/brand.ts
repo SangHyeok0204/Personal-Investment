@@ -31,6 +31,21 @@ export const SOURCE_STYLE: Record<
   토스증권: { color: "#3182f6", bg: "rgba(49,130,246,0.12)", label: "토스증권" },
 };
 
+// 미등록 소스가 와도 크래시 없이 muted 로 렌더 (API 데이터를 신뢰하지 않는다).
+export function sourceStyle(source: string): {
+  color: string;
+  bg: string;
+  label: string;
+} {
+  return (
+    SOURCE_STYLE[source as SdSource] ?? {
+      color: "#8a94a6",
+      bg: "rgba(138,148,166,0.14)",
+      label: source,
+    }
+  );
+}
+
 // 감성 pill — 긍정 success / 부정 failed / 중립 muted (GE 상태색).
 export const SENTIMENT_STYLE: Record<
   SdSentiment,

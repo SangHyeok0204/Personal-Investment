@@ -94,7 +94,7 @@ class Import(Base):
     __table_args__ = (Index("ix_imports_job_id", "job_id"),)
 
 
-# ── 종토방(stock discussion) 읽기 서빙 사본 (push-ingest, alembic 0002) ──────
+# ── 종토방(stock discussion) 읽기 서빙 사본 (push-ingest, alembic 0004·0005) ──
 # 정본 = 개발 PC SQLite. 아래 테이블들은 push 로 받은 read-replica 다.
 
 
