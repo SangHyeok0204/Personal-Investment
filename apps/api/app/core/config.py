@@ -22,5 +22,11 @@ class Settings(BaseSettings):
     # Upstream ETF iNAV collector (profile service) that /api/v1/inav/snapshot proxies.
     COLLECTOR_URL: str = "http://collector:8100"
 
+    # 종토방 read-replica: push 신선도(staleness) 판정 + keyword 렌더 상한.
+    # 임계 = SD_PUSH_INTERVAL_HINT * SD_STALE_FACTOR (단일 파생, D11).
+    SD_PUSH_INTERVAL_HINT: int = 60
+    SD_STALE_FACTOR: int = 3
+    SD_KEYWORD_RENDER_MAX: int = 500
+
 
 settings = Settings()
