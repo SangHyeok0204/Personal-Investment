@@ -117,7 +117,12 @@ services:
       # COLLECTOR_ALLOW_FETCH=1: 오늘자 레거시 KRX 캐시 CSV 가 없으면 KRX 에서 직접
       #   가져와 /app/.cache/krx/{date}/ 에 동일 포맷으로 저장(basket_source=SELF_FETCH).
       #   =0: 레거시 캐시만 읽음(KRX 무접속, Phase-1 동작).
-      COLLECTOR_ALLOW_FETCH: "1"
+      # ⚠️ 2026-07-22 임시 "0": KRX per-ticker PDF 셀프수집이 전패(빈 pdf csv 를
+      #   SELF_FETCH 로 반환 → 엔진 raise 크래시루프)하고, 구시스템 아침잡도 7/21부터
+      #   krx_etf_pdf 를 안 만듦(list/market 만). STALE 캐시(0720)로 기동 — 실시간
+      #   바스켓은 CHECK 에이전트 POST 가 소유하므로 시드 지연 무해. 셀프수집 원인
+      #   해결 후 "1" 복귀할 것.
+      COLLECTOR_ALLOW_FETCH: "0"
       # COLLECTOR_FORCE_FETCH=1: 레거시 캐시가 있어도 항상 self-fetch(테스트/드릴용).
       #   ALLOW_FETCH=1 일 때만 유효. 평시엔 "0"(레거시 캐시 우선).
       COLLECTOR_FORCE_FETCH: "0"
@@ -143,7 +148,10 @@ services:
       - "/mnt/s/GE/Wonjae/02_운용펀드_글로벌/(Wrap) 한국투자 미국 AI코어테크랩/4_수익률:/srv/legacy/wrap_source:ro"
       # holidays: 공유 휴장일 캘린더(_공유모듈) — holiday_calendar 싱글턴이 컨테이너 경로로 재배선됨.
       - "/mnt/s/GE/raw/data/_공유모듈/Holidays:/srv/legacy/holidays:ro"
-    restart: "no"
+    # 24시간 상시가동: 재부팅·크래시 후 자동 복구 (2026-07-21).
+    # 단 profiles:["collector"] 게이트라 최초 1회는 --profile collector 로 띄워야 하며,
+    # 그 뒤부터 Docker 재시작 시 자동 기동된다.
+    restart: unless-stopped
 
 volumes:
   postgres_data:

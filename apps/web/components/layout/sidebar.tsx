@@ -64,7 +64,8 @@ const navItems: NavItem[] = [
     icon: LayoutGrid,
     children: [
       { label: "AI token usage", href: "/ai-token-usage" },
-      { label: "LAN dashboard" },
+      { label: "LAN dashboard", href: "/lan-dashboard" },
+      { label: "종토방", href: "/stock-discussion" },
     ],
   },
   {

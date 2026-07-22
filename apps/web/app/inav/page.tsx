@@ -2,14 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  ChevronDown,
-  Flame,
-  LayoutGrid,
-  Table2,
-  X,
-} from "lucide-react";
+import { AlertTriangle, ChevronDown, LayoutGrid, Table2, X } from "lucide-react";
 import {
   ApiError,
   getInavComponents,
@@ -23,6 +16,13 @@ import {
   type InavSums,
 } from "@/lib/api";
 import { formatKrw, formatRate, formatRelativeTime } from "@/lib/format";
+import {
+  DEPTH_QTY_MIN,
+  DEV_ABS_ALERT_PCT,
+  PROXIMITY_TICKS,
+  hogaMetrics,
+  toNum,
+} from "@/lib/hoga";
 import { RollingText } from "@/components/rolling-text";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
@@ -47,9 +47,6 @@ const COMPUTE_WARN_S = 10;
 
 // KRW 기준(=1.0)은 제외하고 표시할 통화 순서.
 const FX_ORDER = ["USD", "CNY", "HKD", "JPY", "EUR", "CAD", "TWD"];
-
-// 무버 전광판: 구성종목 전일比 등락 절대값 기준(%).
-const MOVERS_THRESHOLD_PCT = 5;
 
 // iNAV 총액 → 좌당 환산 제수 (구 대시보드와 동일).
 const INAV_DIVISOR = 50000;
@@ -93,6 +90,9 @@ const CARD_TICKER_ORDER = [
   "0118Z0", // ACE 미국AI테크핵심산업액티브
   "0199C0", // ACE 고배당주Plus커버드콜액티브
 ];
+
+// 호가·괴리 알림 대상 = ACE 8종 (위 우선순서 집합과 동일).
+const ACE_TICKERS = new Set(CARD_TICKER_ORDER);
 
 type ViewMode = "cards" | "table";
 
@@ -192,8 +192,6 @@ export default function InavPage() {
     query.error instanceof ApiError &&
     query.error.status === 503;
 
-  const movers = useMemo(() => buildMovers(componentsData), [componentsData]);
-
   // 카드 뷰: ACE 지정 8종 우선, 나머지는 스냅샷 순서 유지 (stable sort).
   const orderedEtfs = useMemo(() => {
     const etfs = query.data?.etfs ?? [];
@@ -217,6 +215,28 @@ export default function InavPage() {
     ((hoga.hoga_last_received_age_s ?? Infinity) > HOGA_STALE_S ||
       (hoga.hoga_source_age_s ?? Infinity) > HOGA_STALE_S);
 
+  // 장 개시 전(06:00~08:50)이면 호가/괴리차이 알림을 억제한다. 3초 폴링마다
+  // 재렌더되므로 08:50 경계는 폴링 주기 안에서 갱신된다.
+  const quietWindow = isPreOpenQuietWindow();
+  // ACE 8종 호가·괴리 알림 (고정 목록으로 표시).
+  const aceAlerts = useMemo(
+    () => buildAceAlerts(query.data?.etfs ?? [], hogaByCode, quietWindow),
+    [query.data, hogaByCode, quietWindow],
+  );
+  // 알림 0건을 "이상 없음"이라 말할 수 있는 상태인가. 피드가 죽었거나 지연이면
+  // 판정 자체가 불가능하므로 거짓 안심을 주지 않는다.
+  const alertsReady = !collectorDown && !hogaStale && hogaByCode.size > 0;
+  // 카드 테두리는 알림 바와 1:1 연동 — 바에 뜬 종목이 곧 빨간 카드.
+  const alertsByCode = useMemo(() => {
+    const map = new Map<string, AceAlert[]>();
+    for (const a of aceAlerts) {
+      const list = map.get(a.code);
+      if (list) list.push(a);
+      else map.set(a.code, [a]);
+    }
+    return map;
+  }, [aceAlerts]);
+
   return (
     <>
       <Topbar
@@ -239,8 +259,10 @@ export default function InavPage() {
         }
       />
 
-      {/* 급등락 전광판 — Topbar(h-16) 바로 아래, 우→좌 무한 마퀴 */}
-      {movers.length > 0 && <MoversTicker items={movers} />}
+      {/* Topbar(h-16) 바로 아래 스티키 띠 — 띠 자체는 상시, 알림 칩만 생겼다 사라진다. */}
+      <div className="sticky top-16 z-10">
+        <AlertBar items={aceAlerts} ready={alertsReady} quiet={quietWindow} />
+      </div>
 
       <PageContainer wide>
         {/* API 자체가 죽은 경우(네트워크 오류)만 상단 에러 배너. collector 미기동은 아래 전용 배너로. */}
@@ -277,6 +299,7 @@ export default function InavPage() {
                 onOpen={setModalTicker}
                 hogaByCode={hogaByCode}
                 hogaStale={hogaStale}
+                alertsByCode={alertsByCode}
               />
             ) : (
               <EtfTable etfs={data.etfs} onOpen={setModalTicker} />
@@ -517,91 +540,165 @@ function MetricSelect({
   );
 }
 
-/* ── 급등락 전광판 (우→좌 마퀴) ──────────────────────────────────────── */
+// 장 개시 전 정적 구간 (KST 06:00~08:50) — LP 호가가 아직 신뢰할 수 없어
+// 호가 없음·물량 부족 알림을 띄우지 않는다. 괴리율 큼(절대 프리미엄)은 이
+// 구간에도 유효하므로 유지 (2026-07-22 사용자 요청).
+const QUIET_START_MIN = 6 * 60; // 06:00
+const QUIET_END_MIN = 8 * 60 + 50; // 08:50
 
-interface MoverItem {
-  key: string;
-  name: string;
-  pct: number;
-  etfs: string[];
+// 현재 한국시각(KST)의 자정 기준 분. 뷰어/컨테이너 TZ와 무관하게 Asia/Seoul 기준.
+function kstMinutesNow(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return (h % 24) * 60 + m;
 }
 
-function buildMovers(payload: InavComponentsPayload | null): MoverItem[] {
-  if (!payload?.byEtf) return [];
-  const grouped = new Map<string, MoverItem>();
-  for (const [etfCode, entry] of Object.entries(payload.byEtf)) {
-    for (const c of entry.components ?? []) {
-      if (c.isCash || c.livePrice == null || c.basePrice == null) continue;
-      if (c.livePrice <= 0 || c.basePrice <= 0) continue;
-      const pct = (c.livePrice / c.basePrice - 1) * 100;
-      if (Math.abs(pct) < MOVERS_THRESHOLD_PCT) continue;
-      const key = (c.isin || c.name || "").toUpperCase();
-      if (!key) continue;
-      const item = grouped.get(key) ?? {
-        key,
-        name: c.name || c.isin || "?",
-        pct,
-        etfs: [],
-      };
-      item.pct = pct;
-      if (!item.etfs.includes(etfCode)) item.etfs.push(etfCode);
-      grouped.set(key, item);
+function isPreOpenQuietWindow(): boolean {
+  const t = kstMinutesNow();
+  return t >= QUIET_START_MIN && t < QUIET_END_MIN;
+}
+
+/* ── ACE 호가·괴리 알림 전광판 (고정 목록) ─────────────────────────────
+   대상: ACE 8종. 종류 — (2026-07-21 사용자 확정 기준)
+   · 호가 없음: 최우선 매수·매도가 "둘 다" 시장가(현재가)에서 PROXIMITY_TICKS 틱 이상
+     벌어짐. 물량은 있는데 사다리가 통째로 멀어진 상태.
+   · 물량 부족: 한쪽이라도 PROXIMITY_TICKS 틱 안에 있지만, 5틱(DEPTH_TICKS) 합산 잔량이
+     매수·매도 중 하나라도 obThreshold(피드값, 현재 10,000) 미만.
+   위 둘은 상호배타 — 호가 없음이면 물량은 보지 않는다.
+   · 괴리율 큼: |실제괴리| ≥ DEV_ABS_ALERT_PCT (2026-07-21 추가, 카드 빨강 테두리 연동)
+   quiet=true(장 개시 전 06:00~08:50)면 괴리율 큼만 남기고 호가 2종은 건너뛴다. */
+
+interface AceAlert {
+  key: string;
+  code: string;
+  status: string;
+  severity: "hoga" | "dev";
+}
+
+function buildAceAlerts(
+  etfs: InavEtf[],
+  hogaByCode: Map<string, HogaEtf>,
+  quiet: boolean,
+): AceAlert[] {
+  const out: AceAlert[] = [];
+  for (const etf of etfs) {
+    if (!ACE_TICKERS.has(etf.ticker)) continue;
+    const code = etf.ticker;
+
+    const hoga = hogaByCode.get(code);
+    if (!quiet && hoga) {
+      const m = hogaMetrics(hoga);
+      const threshold = hoga.obThreshold ?? DEPTH_QTY_MIN;
+      const price = toNum(hoga.price);
+
+      // 시장가에서 최우선호가까지 떨어진 틱 수. 시장가보다 유리한 쪽에 걸린 호가(음수)는
+      // 멀어진 게 아니므로 그대로 두면 된다 (음수는 PROXIMITY_TICKS 비교에서 자연히 탈락).
+      const ticksAway = (best: number | null): number | null =>
+        price != null && best != null && m.tick > 0
+          ? (best - price) / m.tick
+          : null;
+      const askTicks = ticksAway(m.bestAsk); // 매도1은 시장가 위 → 양수
+      const bidTicks = ticksAway(m.bestBid); // 매수1은 시장가 아래 → 부호 뒤집어 비교
+
+      const askFar = askTicks != null && askTicks >= PROXIMITY_TICKS;
+      const bidFar = bidTicks != null && -bidTicks >= PROXIMITY_TICKS;
+
+      if (askFar && bidFar) {
+        // [호가 없음] — 매수·매도가 둘 다 4틱 이상 벌어짐. 물량은 보지 않는다.
+        out.push({
+          key: `${code}:nohoga`,
+          code,
+          status: "호가 없음",
+          severity: "hoga",
+        });
+      } else if (
+        threshold > 0 &&
+        (m.askDepth < threshold || m.bidDepth < threshold)
+      ) {
+        // [물량 부족] — 한쪽이라도 4틱 안인데 5틱 합산 잔량이 한쪽이라도 기준 미달.
+        out.push({
+          key: `${code}:qty`,
+          code,
+          status: "물량 부족",
+          severity: "hoga",
+        });
+      }
+    }
+
+    // 절대 괴리율 과대 — |실제괴리| ≥ 기준이면 [괴리율 큼] (카드도 빨강 테두리 연동).
+    const actual = etf.deviation_pct;
+    if (actual != null && Math.abs(actual) >= DEV_ABS_ALERT_PCT) {
+      out.push({
+        key: `${code}:devabs`,
+        code,
+        status: "괴리율 큼",
+        severity: "dev",
+      });
     }
   }
-  return [...grouped.values()].sort(
-    (a, b) => Math.abs(b.pct) - Math.abs(a.pct),
-  );
+  return out;
 }
 
-function MoversTicker({ items }: { items: MoverItem[] }) {
-  // 아이템 수에 비례해 속도 유지 (한 바퀴 시간).
-  const duration = Math.max(24, items.length * 6);
+// 흰 띠는 항상 떠 있고 알림 칩만 생멸한다. 흐르는 마퀴 없이 한 번만 렌더하고,
+// 많아지면 줄바꿈으로 쌓인다. min-h 는 빈 상태에서도 높이가 흔들리지 않게 하는 값.
+function AlertBar({
+  items,
+  ready,
+  quiet,
+}: {
+  items: AceAlert[];
+  ready: boolean;
+  quiet: boolean;
+}) {
+  const empty = items.length === 0;
   return (
-    <div className="sticky top-16 z-10 h-10 overflow-hidden border-b border-hairline bg-white">
-      <div
-        className="inav-ticker-track flex h-10 items-center"
-        style={{ animationDuration: `${duration}s` }}
-      >
-        <TickerRun items={items} />
-        <TickerRun items={items} />
+    <div className="border-b border-hairline bg-white px-6 py-2">
+      <div className="flex min-h-[24px] flex-wrap items-center gap-x-7 gap-y-1.5">
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wider",
+            empty ? "text-ink-faint" : "text-status-failed",
+          )}
+        >
+          <AlertTriangle className="h-3.5 w-3.5" strokeWidth={2.2} />
+          ACE 호가·괴리 알림
+        </span>
+        {empty ? (
+          <span className="text-[12px] text-ink-muted">
+            {quiet
+              ? "장 개시 전 · 호가/괴리 점검 대기"
+              : ready
+                ? "이상 없음"
+                : "호가 대기 중"}
+          </span>
+        ) : (
+          items.map((it) => <AlertChip key={it.key} item={it} />)
+        )}
       </div>
     </div>
   );
 }
 
-function TickerRun({ items }: { items: MoverItem[] }) {
+function AlertChip({ item }: { item: AceAlert }) {
   return (
-    <div className="flex h-10 min-w-[100vw] shrink-0 items-center gap-7 px-6">
-      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-ink-muted">
-        <Flame className="h-3.5 w-3.5 text-status-failed" strokeWidth={2.2} />
-        급등락 ±{MOVERS_THRESHOLD_PCT}%
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      <span className="text-[12.5px] font-bold tabular-nums text-ge-navy">
+        [{item.code}]
       </span>
-      {items.map((it) => (
-        <TickerChip key={it.key} item={it} />
-      ))}
-    </div>
-  );
-}
-
-function TickerChip({ item }: { item: MoverItem }) {
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1.5"
-      title={`편입 ETF: ${item.etfs.join(", ")}`}
-    >
-      <span className="text-[12.5px] font-bold text-ge-navy">{item.name}</span>
+      <span className="text-ink-faint">:</span>
       <span
         className={cn(
-          "px-0.5 text-[12.5px] font-extrabold tabular-nums",
-          item.pct >= 0 ? "text-status-failed" : "text-status-running",
+          "text-[12.5px] font-extrabold",
+          item.severity === "dev" ? "text-status-failed" : "text-amber-600",
         )}
       >
-        <RollingText text={signedPct(item.pct)} />
-      </span>
-      <span className="text-[10px] text-ink-faint">
-        {item.etfs.length > 1
-          ? `${item.etfs[0]} 외 ${item.etfs.length - 1}`
-          : item.etfs[0]}
+        {item.status}
       </span>
     </span>
   );
@@ -678,12 +775,14 @@ function EtfCardGrid({
   onOpen,
   hogaByCode,
   hogaStale,
+  alertsByCode,
 }: {
   etfs: InavEtf[];
   visibleMetrics: MetricKey[];
   onOpen: (ticker: string) => void;
   hogaByCode: Map<string, HogaEtf>;
   hogaStale: boolean;
+  alertsByCode: Map<string, AceAlert[]>;
 }) {
   if (!etfs.length) {
     return <p className="text-sm text-ink-muted">표시할 ETF가 없습니다.</p>;
@@ -696,6 +795,7 @@ function EtfCardGrid({
             etf={etf}
             visibleMetrics={visibleMetrics}
             onOpen={() => onOpen(etf.ticker)}
+            alerts={alertsByCode.get(etf.ticker)}
           />
           <OrderbookCard
             hoga={hogaByCode.get(etf.ticker) ?? null}
@@ -711,28 +811,31 @@ function EtfCard({
   etf,
   visibleMetrics,
   onOpen,
+  alerts,
 }: {
   etf: InavEtf;
   visibleMetrics: MetricKey[];
   onOpen: () => void;
+  alerts?: AceAlert[];
 }) {
-  const dev = etf.deviation_pct;
-  const devAbs = dev == null ? null : Math.abs(dev);
-  const danger = devAbs != null && devAbs >= 2;
-  const warn = devAbs != null && devAbs >= 1 && devAbs < 2;
+  // 경고 표시는 알림 바 단일 기준 — 바에 뜬 종목만 굵은 빨강 테두리.
+  const alerted = (alerts?.length ?? 0) > 0;
+  const alertText = (alerts ?? []).map((a) => a.status).join(" · ");
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      title="클릭하면 구성종목 상세를 엽니다"
+      title={
+        alerted
+          ? `${alertText} — 클릭하면 구성종목 상세를 엽니다`
+          : "클릭하면 구성종목 상세를 엽니다"
+      }
       className={cn(
-        "flex flex-col gap-2.5 rounded-2xl border-2 bg-canvas p-3.5 text-left shadow-card transition hover:-translate-y-px hover:shadow-panel",
-        danger
-          ? "border-status-failed/50"
-          : warn
-            ? "border-amber-400/60"
-            : "border-hairline",
+        "flex flex-col gap-2.5 rounded-2xl bg-canvas p-3.5 text-left shadow-card transition hover:-translate-y-px hover:shadow-panel",
+        alerted
+          ? "border-[3px] border-status-failed"
+          : "border-2 border-hairline",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -744,15 +847,10 @@ function EtfCard({
             {etf.ticker}
           </div>
         </div>
-        {(danger || warn) && (
+        {alerted && (
           <span
-            title={`실제괴리 ${dev == null ? "—" : signedPct(dev)}`}
-            className={cn(
-              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
-              danger
-                ? "bg-status-failed/[0.10] text-status-failed"
-                : "bg-amber-400/[0.15] text-amber-600",
-            )}
+            title={alertText}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-status-failed/[0.10] text-status-failed"
           >
             <AlertTriangle className="h-3.5 w-3.5" strokeWidth={2.2} />
           </span>
@@ -863,15 +961,20 @@ function OrderbookCard({
         </div>
       )}
       <div className="flex flex-col gap-[3px]">
-        {ASK_LABELS.map((label, j) => (
-          <OrderbookRow
-            key={label}
-            side="ask"
-            label={label}
-            qty={asks[j]}
-            maxQty={maxQty}
-          />
-        ))}
+        {ASK_LABELS.map((label, j) => {
+          // 표시는 매도5→매도1 순인데 askPrices 는 매도1→매도5 라 인덱스를 뒤집는다.
+          const price = toNum(hoga.askPrices?.[ASK_LABELS.length - 1 - j]);
+          return (
+            <OrderbookRow
+              key={label}
+              side="ask"
+              label={price != null ? price.toLocaleString("ko-KR") : label}
+              isBest={j === ASK_LABELS.length - 1}
+              qty={asks[j]}
+              maxQty={maxQty}
+            />
+          );
+        })}
         {/* 물량부족 하이라이트는 랜딩 모니터링 A 알림으로 이관 (2026-07-20) */}
         <div className="my-0.5 flex items-center justify-center gap-2 border-y border-hairline py-1 text-[10.5px] font-bold tabular-nums">
           <span className="text-ask">
@@ -882,15 +985,20 @@ function OrderbookCard({
             총매수 <RollingText text={totalBid.toLocaleString("ko-KR")} />
           </span>
         </div>
-        {BID_LABELS.map((label, j) => (
-          <OrderbookRow
-            key={label}
-            side="bid"
-            label={label}
-            qty={bids[j]}
-            maxQty={maxQty}
-          />
-        ))}
+        {BID_LABELS.map((label, j) => {
+          // 표시 순서와 bidPrices 인덱스가 모두 매수1→매수5 로 같다.
+          const price = toNum(hoga.bidPrices?.[j]);
+          return (
+            <OrderbookRow
+              key={label}
+              side="bid"
+              label={price != null ? price.toLocaleString("ko-KR") : label}
+              isBest={j === 0}
+              qty={bids[j]}
+              maxQty={maxQty}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -901,17 +1009,27 @@ function OrderbookRow({
   label,
   qty,
   maxQty,
+  isBest = false,
 }: {
   side: "ask" | "bid";
   label: string;
   qty: number;
   maxQty: number;
+  isBest?: boolean;
 }) {
   const pct = maxQty > 0 ? (qty / maxQty) * 100 : 0;
   return (
     <div className="flex items-center gap-1.5">
-      <span className="w-8 shrink-0 text-[10px] font-semibold text-ink-muted">
-        {label}
+      {/* 라벨 자리에 틱별 호가를 싣기 때문에 폭이 넓다 — 바(flex-1)가 그만큼 줄어든다. */}
+      <span
+        className={cn(
+          "w-[52px] shrink-0 text-[11px] tabular-nums",
+          isBest
+            ? cn("font-extrabold", side === "ask" ? "text-ask" : "text-bid")
+            : "font-semibold text-ink-muted",
+        )}
+      >
+        <RollingText text={label} />
       </span>
       <div
         className={cn(

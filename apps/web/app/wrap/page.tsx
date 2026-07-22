@@ -36,6 +36,12 @@ function signedPct(pct: number | null | undefined, digits = 2): string {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(digits)}%`;
 }
 
+// 부호 있는 숫자 — % 없이 (기여 컬럼용).
+function signedNum(v: number | null | undefined, digits = 2): string {
+  if (v == null || !Number.isFinite(v)) return EMDASH;
+  return `${v > 0 ? "+" : ""}${v.toFixed(digits)}`;
+}
+
 function signTextClass(v: number | null | undefined): string {
   if (v == null) return "text-ink-secondary";
   return v > 0
@@ -62,6 +68,7 @@ export default function WrapPage() {
   });
 
   const [selKey, setSelKey] = useState<string | null>(null);
+  const [krw, setKrw] = useState(false); // 원화 환산 토글 (off=USD, on=환율 포함)
 
   const data = query.data;
   const collectorDown =
@@ -121,16 +128,22 @@ export default function WrapPage() {
           </div>
         ) : data && selected ? (
           <div className="space-y-4">
-            {/* ① 포트폴리오 실시간 수익률 카드 */}
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">
-              {portfolios.map((p) => (
-                <PortfolioCard
-                  key={p.key}
-                  p={p}
-                  selected={p.key === selected.key}
-                  onSelect={() => setSelKey(p.key)}
-                />
-              ))}
+            {/* ① 포트폴리오 수익률 카드 (① 전일확정 · ② 실시간) */}
+            <div>
+              <div className="mb-2 flex items-center justify-end">
+                <FxToggle krw={krw} onChange={setKrw} />
+              </div>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">
+                {portfolios.map((p) => (
+                  <PortfolioCard
+                    key={p.key}
+                    p={p}
+                    selected={p.key === selected.key}
+                    krw={krw}
+                    onSelect={() => setSelKey(p.key)}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* ② 분류별 비중·기여도 트리 */}
@@ -146,16 +159,14 @@ export default function WrapPage() {
 
             {/* ③ 구성종목 기여도 테이블 */}
             <section className="overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
-              <div className="flex items-baseline justify-between gap-3 border-b border-hairline px-5 py-3">
+              <div className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-3">
                 <div className="flex items-center gap-2">
                   <span className="h-4 w-1.5 rounded-full bg-ge-point" />
                   <span className="text-[13px] font-extrabold text-ge-navy">
                     구성종목 — {selected.name}
                   </span>
                 </div>
-                <span className="text-[11px] tabular-nums text-ink-faint">
-                  갱신 {data.generatedAt}
-                </span>
+                <StatusLight ok={!stale} />
               </div>
               <HoldingsTable p={selected} />
             </section>
@@ -174,15 +185,64 @@ export default function WrapPage() {
 
 /* ── ① 포트폴리오 수익률 카드 ────────────────────────────────────────── */
 
+// "YYYYMMDD" → "M/D" (기준 종가일 라벨).
+function fmtBasis(d: string | null | undefined): string {
+  if (!d || d.length !== 8) return "";
+  return `${Number(d.slice(4, 6))}/${Number(d.slice(6, 8))}`;
+}
+
+// 원화 환산 토글 — off=USD 가격수익률, on=환율 포함 원화수익률. ①②에 동시 적용.
+function FxToggle({
+  krw,
+  onChange,
+}: {
+  krw: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={krw}
+      onClick={() => onChange(!krw)}
+      title="수익률을 원화(환율 포함)로 환산"
+      className="inline-flex items-center gap-2 text-[11px] font-semibold"
+    >
+      <span className={krw ? "text-ge-point" : "text-ink-muted"}>원화 환산</span>
+      <span
+        className={cn(
+          "relative h-4 w-7 rounded-full transition-colors",
+          krw ? "bg-ge-point" : "bg-slate-300",
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all",
+            krw ? "left-3.5" : "left-0.5",
+          )}
+        />
+      </span>
+    </button>
+  );
+}
+
 function PortfolioCard({
   p,
   selected,
+  krw,
   onSelect,
 }: {
   p: WrapPortfolio;
   selected: boolean;
+  krw: boolean;
   onSelect: () => void;
 }) {
+  // ② 전일종가→최근체결가, ① 전전일→전일 종가수익률 — 토글에 따라 USD/원화.
+  const ret2 = krw ? p.return2_krw ?? null : p.return2_usd ?? p.return_pct;
+  const ret1 = krw ? p.return1_krw ?? null : p.return1_usd ?? null;
+  const basis = fmtBasis(p.return1_basis_date);
+  const stale1 = p.return1_is_current === false;
+
   return (
     <button
       type="button"
@@ -205,25 +265,52 @@ function PortfolioCard({
           </span>
         )}
       </div>
-      <div
-        className={cn(
-          "text-[28px] font-extrabold leading-none tabular-nums",
-          signTextClass(p.return_pct),
-        )}
-      >
-        <RollingText text={signedPct(p.return_pct)} />
+
+      {/* ① 전일확정 (전전일→전일 종가) */}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold text-ink-muted">
+          ① 전일확정
+        </span>
+        <span
+          className={cn(
+            "text-[17px] font-extrabold tabular-nums",
+            signTextClass(ret1),
+          )}
+        >
+          {signedPct(ret1)}
+        </span>
       </div>
+      <div className="flex items-center gap-1.5 text-[10px] text-ink-faint">
+        <span>{basis ? `${basis} 종가기준` : "기준일 대기"}</span>
+        {stale1 && (
+          <span className="rounded-full border border-amber-400/40 bg-amber-400/[0.12] px-1.5 py-0.5 font-semibold text-amber-700">
+            미갱신
+          </span>
+        )}
+      </div>
+
+      {/* ② 실시간 (전일종가→최근체결가) */}
+      <div className="mt-0.5 flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold text-ink-muted">
+          ② 실시간
+        </span>
+        <span
+          className={cn(
+            "text-[26px] font-extrabold leading-none tabular-nums",
+            signTextClass(ret2),
+          )}
+        >
+          <RollingText text={signedPct(ret2)} />
+        </span>
+      </div>
+
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-ink-muted">
-        <span>전일종가 대비</span>
         <span className="tabular-nums">
           종목 {p.n_matched}/{p.n_total}
         </span>
         <span className="tabular-nums">
           반영 {p.matched_weight_pct.toFixed(1)}%
         </span>
-        {p.basis_date && (
-          <span className="tabular-nums">기준 {p.basis_date}</span>
-        )}
       </div>
     </button>
   );
@@ -500,19 +587,42 @@ function TreeNode({
 /* ── ③ 구성종목 기여도 테이블 ────────────────────────────────────────── */
 
 const WRAP_COLS = [
-  { key: "ticker", label: "종목", num: false },
+  { key: "ticker", label: "TICKER", num: false },
+  { key: "name", label: "이름", num: false },
   { key: "cat1", label: "대분류", num: false },
   { key: "cat2", label: "중분류", num: false },
   { key: "cat3", label: "소분류", num: false },
-  { key: "exchange", label: "거래소", num: false },
-  { key: "weight_pct", label: "비중%", num: true },
+  { key: "currency", label: "기준통화", num: false },
   { key: "prev_close", label: "전일종가", num: true },
   { key: "livePrice", label: "현재가", num: true },
-  { key: "return_pct", label: "수익률%", num: true },
-  { key: "contribution_pct", label: "수익률×비중%", num: true },
-  { key: "tradeTime", label: "갱신", num: false },
+  { key: "return_pct", label: "수익률", num: true },
+  { key: "fx_return_pct", label: "환 수익률", num: true },
+  { key: "weight_pct", label: "비중", num: true },
+  { key: "contribution_pct", label: "기여(수익률×비중)", num: true },
 ] as const;
 type WrapSortKey = (typeof WRAP_COLS)[number]["key"];
+
+// 데이터 상태등 — 최신(정상)이면 초록불, 60초 이상 지연이면 회색.
+function StatusLight({ ok }: { ok: boolean }) {
+  return (
+    <span
+      className="flex items-center gap-1.5 text-[11px] font-semibold"
+      title={ok ? "데이터 정상" : "데이터 지연 — 60초 이상 미갱신"}
+    >
+      <span
+        className={cn(
+          "inline-block h-2.5 w-2.5 rounded-full",
+          ok
+            ? "bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.18)]"
+            : "bg-slate-300",
+        )}
+      />
+      <span className={ok ? "text-emerald-600" : "text-ink-faint"}>
+        {ok ? "정상" : "지연"}
+      </span>
+    </span>
+  );
+}
 
 function HoldingsTable({ p }: { p: WrapPortfolio }) {
   const [sortKey, setSortKey] = useState<WrapSortKey>("weight_pct");
@@ -523,12 +633,12 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
     const isNum = col?.num ?? false;
     const dir = sortDir === "asc" ? 1 : -1;
     const arr = [...(p.holdings ?? [])];
-    // 현금·빈값은 방향과 무관하게 항상 아래 (구 뷰어 wrapSortedHoldings 와 동일).
+    // 원화현금은 정렬 상태와 무관하게 항상 최상단 고정 (구 뷰어는 하단이었음 — 요구 변경).
     arr.sort((a, b) => {
       const ca = isCashHolding(a);
       const cb = isCashHolding(b);
-      if (ca && !cb) return 1;
-      if (!ca && cb) return -1;
+      if (ca && !cb) return -1;
+      if (!ca && cb) return 1;
       if (ca && cb) return 0;
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -561,7 +671,7 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-[12.5px]">
+      <table className="border-collapse text-[12.5px]">
         <thead className="bg-ge-th">
           <tr>
             {WRAP_COLS.map((c) => (
@@ -570,7 +680,7 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
                 onClick={() => toggleSort(c.key)}
                 title="클릭하여 정렬"
                 className={cn(
-                  "cursor-pointer select-none whitespace-nowrap px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-ink-secondary",
+                  "cursor-pointer select-none whitespace-nowrap px-2 py-2 text-[11px] font-bold uppercase tracking-wide text-ink-secondary",
                   c.num ? "text-right" : "text-left",
                   sortKey === c.key && "text-ge-point",
                 )}
@@ -593,6 +703,16 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
   );
 }
 
+// 기준통화 pill — 통화별 옅은 색 구분 (KRW 는 무채색).
+const CURRENCY_TEXT: Record<string, string> = {
+  KRW: "text-ink-faint",
+  USD: "text-ge-point",
+  JPY: "text-amber-600",
+  TWD: "text-emerald-600",
+  HKD: "text-rose-500",
+  CNY: "text-rose-500",
+};
+
 function HoldingRow({ h }: { h: WrapHolding }) {
   return (
     <tr
@@ -602,37 +722,48 @@ function HoldingRow({ h }: { h: WrapHolding }) {
       )}
     >
       <td
-        className="whitespace-nowrap px-3 py-1.5 font-bold tabular-nums text-ge-navy"
+        className="whitespace-nowrap px-2 py-1.5 font-bold tabular-nums text-ge-navy"
         title={h.name || ""}
       >
         {h.ticker || EMDASH}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-ink-secondary">
+      <td className="px-2 py-1.5 text-ink-secondary" title={h.name || ""}>
+        <span className="block max-w-[160px] truncate">{h.name || ""}</span>
+      </td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-ink-secondary">
         {h.cat1 || ""}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-ink-secondary">
+      <td className="whitespace-nowrap px-2 py-1.5 text-ink-secondary">
         {h.cat2 || ""}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-ink-secondary">
+      <td className="whitespace-nowrap px-2 py-1.5 text-ink-secondary">
         {h.cat3 || ""}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-ink-muted">
-        {h.exchange || ""}
+      <td className="whitespace-nowrap px-2 py-1.5">
+        {h.currency ? (
+          <span
+            className={cn(
+              "rounded bg-canvas-soft px-1.5 py-0.5 text-[10.5px] font-bold",
+              CURRENCY_TEXT[h.currency] ?? "text-ink-secondary",
+            )}
+          >
+            {h.currency}
+          </span>
+        ) : (
+          EMDASH
+        )}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums">
-        {fmtNum(h.weight_pct, 2, 2)}
-      </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums">
+      <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
         {h.prev_close == null ? EMDASH : fmtNum(h.prev_close, 2, 2)}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums">
+      <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
         <RollingText
           text={h.livePrice == null ? EMDASH : fmtNum(h.livePrice, 2, 2)}
         />
       </td>
       <td
         className={cn(
-          "whitespace-nowrap px-3 py-1.5 text-right font-semibold tabular-nums",
+          "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
           signTextClass(h.return_pct),
         )}
       >
@@ -646,14 +777,23 @@ function HoldingRow({ h }: { h: WrapHolding }) {
       </td>
       <td
         className={cn(
-          "whitespace-nowrap px-3 py-1.5 text-right font-semibold tabular-nums",
+          "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
+          h.fx_return_pct == null ? "text-ink-faint" : signTextClass(h.fx_return_pct),
+        )}
+        title="해당 통화의 원화 환율 전일 대비 등락률 (KRW 종목은 해당 없음)"
+      >
+        {h.fx_return_pct == null ? EMDASH : signedPct(h.fx_return_pct)}
+      </td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
+        {fmtNum(h.weight_pct, 2, 2)}
+      </td>
+      <td
+        className={cn(
+          "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
           signTextClass(h.contribution_pct),
         )}
       >
-        {signedPct(h.contribution_pct)}
-      </td>
-      <td className="whitespace-nowrap px-3 py-1.5 tabular-nums text-ink-muted">
-        {h.tradeTime || ""}
+        {signedNum(h.contribution_pct)}
       </td>
     </tr>
   );

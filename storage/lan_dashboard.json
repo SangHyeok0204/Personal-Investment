@@ -1,0 +1,108 @@
+{
+  "checkIntervalMs": 30000,
+  "servers": [
+    {
+      "id": "taco",
+      "name": "TACO",
+      "host": "192.168.194.121",
+      "port": 8501,
+      "protocol": "http",
+      "description": "TACO",
+      "group": "Server-P"
+    },
+    {
+      "id": "192_168_199_120-4000-1776907079564",
+      "name": "LAN Server Monitor",
+      "host": "192.168.199.120",
+      "port": 4000,
+      "protocol": "http",
+      "description": "",
+      "group": "Developer_PT1"
+    },
+    {
+      "id": "192_168_199_120-8765-1776907420711",
+      "name": "종토방 모니터",
+      "host": "192.168.199.120",
+      "port": 8765,
+      "protocol": "http",
+      "description": "",
+      "group": "Developer_PT1"
+    },
+    {
+      "id": "192_168_199_120-8002-1776907498233",
+      "name": "AI Model 사용량 모니터",
+      "host": "192.168.199.120",
+      "port": 8002,
+      "protocol": "http",
+      "description": "",
+      "group": "Developer_PT1"
+    },
+    {
+      "id": "192_168_199_120-8770-1783646167949",
+      "name": "내부자 거래 추적",
+      "host": "192.168.199.120",
+      "port": 8770,
+      "protocol": "tcp",
+      "description": "",
+      "group": "Developer_PT1"
+    },
+    {
+      "id": "192_168_199_63-3000-1784180450682",
+      "name": "통합 대시보드",
+      "host": "192.168.199.63",
+      "port": 3000,
+      "protocol": "tcp",
+      "description": "GE_ DASHBOARD",
+      "group": ""
+    },
+    {
+      "id": "192_168_194_121-0-1784610550109",
+      "name": "매크로모니터",
+      "host": "192.168.194.121",
+      "port": 0,
+      "protocol": "heartbeat",
+      "description": "watch.py (포트 없음, 하트비트 감시)",
+      "group": "Server-P",
+      "key": "macro",
+      "maxAgeSec": 150
+    },
+    {
+      "id": "192_168_194_121-8001-1784610710043",
+      "name": "펀드공시 모니터",
+      "host": "192.168.194.121",
+      "port": 8001,
+      "protocol": "http",
+      "description": "RUN_DASHBOARD.bat",
+      "group": "Server-P",
+      "key": "",
+      "maxAgeSec": null
+    },
+    {
+      "id": "192_168_194_121-0-1784612866946",
+      "name": "텔레그램 봇",
+      "host": "192.168.194.121",
+      "port": 0,
+      "protocol": "heartbeat",
+      "description": "run_collect.bat --watch (포트 없음, 하트비트)",
+      "group": "Developer_PT1",
+      "key": "telegram",
+      "maxAgeSec": 300
+    },
+    {
+      "id": "192_168_199_120-59322-1784617788517",
+      "name": "주간가격모니터",
+      "host": "192.168.199.120",
+      "port": 59322,
+      "protocol": "tcp",
+      "description": "",
+      "group": "Developer_PT1",
+      "key": "",
+      "maxAgeSec": null
+    }
+  ],
+  "groups": [
+    "Developer_PT1",
+    "Server-P",
+    "Developer_PT2"
+  ]
+}

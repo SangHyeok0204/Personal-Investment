@@ -104,3 +104,62 @@ class AiUsageOut(BaseModel):
     fetched_at: str
     claude: list[AiUsageAccountOut] = []
     codex: list[AiUsageAccountOut] = []
+
+
+# ── LAN 대시보드 (lan-dashboard 이식) ────────────────────────────────────
+# 필드명은 원본 프런트 계약(camelCase)을 그대로 유지한다.
+
+
+class LanStatusOut(BaseModel):
+    status: str  # online | offline | error | unknown
+    responseTime: int | None = None
+    error: str | None = None
+    httpStatus: int | None = None
+    lastChecked: str | None = None
+
+
+class LanServerOut(BaseModel):
+    id: str
+    name: str
+    host: str
+    port: int
+    protocol: str  # tcp | http | https | heartbeat
+    description: str = ""
+    group: str = ""
+    key: str = ""  # heartbeat: 프로세스가 POST 하는 키
+    maxAgeSec: int | None = None  # heartbeat: 이 초 넘게 수신 없으면 offline
+    status: LanStatusOut
+
+
+class LanServerIn(BaseModel):
+    # host/port 는 heartbeat 타입엔 불필요해 기본값 허용 — 타입별 필수검증은 라우터가.
+    name: str = Field(min_length=1)
+    host: str = ""
+    port: int = 0
+    protocol: str = "tcp"
+    description: str = ""
+    group: str = ""
+    key: str = ""
+    maxAgeSec: int | None = None
+
+
+class LanServerUpdate(BaseModel):
+    name: str | None = None
+    host: str | None = None
+    port: int | None = None
+    protocol: str | None = None
+    description: str | None = None
+    group: str | None = None
+    key: str | None = None
+    maxAgeSec: int | None = None
+
+
+class LanGroupIn(BaseModel):
+    name: str
+
+
+class LanSummaryOut(BaseModel):
+    total: int
+    online: int
+    offline: int
+    unknown: int

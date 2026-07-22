@@ -220,6 +220,9 @@ class Collector:
         self.wrap: WrapCollector | None = None
         self.run_date = legacy_inputs.kst_today()
         self._token_valid = False
+        # 마지막 성공 FX 테이블(naver_fx.fetch_fx_table 전체 — detail 의
+        # fluctuations_pct 를 WRAP 환 수익률 컬럼이 사용). last-good 유지.
+        self._fx_table: dict | None = None
 
         self.store: KisStore | None = None
         self.master: KisMaster | None = None
@@ -426,6 +429,8 @@ class Collector:
         _log(f"instruments resolved={len(instruments)} unresolved={len(unresolved)}")
 
         fx_table = await loop.run_in_executor(None, self._fetch_fx)
+        if fx_table.get("rates") and len(fx_table["rates"]) > 1:
+            self._fx_table = fx_table
 
         engine = InavEngine(prepared_pdf, etf_list_df, market_df, instruments=instruments)
         engine.set_fx_rates(fx_table)
@@ -698,8 +703,10 @@ class Collector:
                 return
             try:
                 fx_table = await loop.run_in_executor(None, self._fetch_fx)
-                if fx_table.get("rates") and len(fx_table["rates"]) > 1 and self.engine is not None:
-                    self.engine.set_fx_rates(fx_table)
+                if fx_table.get("rates") and len(fx_table["rates"]) > 1:
+                    self._fx_table = fx_table
+                    if self.engine is not None:
+                        self.engine.set_fx_rates(fx_table)
                     self.state.mark_fx()
             except Exception as exc:  # noqa: BLE001
                 _log(f"fx loop cycle failed: {exc!r}")
@@ -756,7 +763,7 @@ class Collector:
     def _build_wrap_payload(self) -> dict | None:
         if self.wrap is None or not self._ensure_token():
             return None
-        return self.wrap.build_payload()
+        return self.wrap.build_payload(fx_table=self._fx_table)
 
     async def _wrap_loop(self) -> None:
         loop = asyncio.get_running_loop()

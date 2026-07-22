@@ -1,10 +1,30 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ai_usage, imports, inav, internal, jobs, system
+from app.api import ai_usage, imports, inav, internal, jobs, lan, stock_discussion, system
 from app.core.errors import register_exception_handlers
 
-app = FastAPI(title="Personal Investment Platform API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # LAN 대시보드: 30초 주기로 서버 상태를 폴링하는 백그라운드 체커.
+    checker = asyncio.create_task(lan.background_checker_loop())
+    try:
+        yield
+    finally:
+        checker.cancel()
+        try:
+            await checker
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(
+    title="Personal Investment Platform API", version="0.1.0", lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,3 +45,5 @@ app.include_router(imports.router)
 app.include_router(internal.router)
 app.include_router(ai_usage.router)
 app.include_router(inav.router)
+app.include_router(lan.router)
+app.include_router(stock_discussion.router)

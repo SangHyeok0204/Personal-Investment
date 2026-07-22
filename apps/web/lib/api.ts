@@ -158,6 +158,8 @@ export interface WrapHolding {
   ticker: string;
   name: string | null;
   exchange: string | null;
+  currency?: string | null;
+  fx_return_pct?: number | null;
   weight_pct: number;
   prev_close: number | null;
   livePrice: number | null;
@@ -181,6 +183,15 @@ export interface WrapPortfolio {
   holdings: WrapHolding[];
   holdings_source: "SOURCE" | "PDF_FALLBACK" | null;
   basis_date: string | null;
+  // ② 전일종가→최근체결가 (USD / 원화)
+  return2_usd?: number | null;
+  return2_krw?: number | null;
+  // ① 전전일→전일 종가수익률 (USD / 원화) + 기준일·신선도
+  return1_usd?: number | null;
+  return1_krw?: number | null;
+  return1_basis_date?: string | null; // "YYYYMMDD"
+  return1_prev_date?: string | null; // "YYYYMMDD"
+  return1_is_current?: boolean;
 }
 
 export interface WrapPayload {
@@ -211,9 +222,22 @@ export interface HogaEtf {
   name: string;
   asks: number[];
   bids: number[];
+  nav: number | null;
+  price: number | null;
   obThreshold: number | null;
   premiumIntra: number | null;
   premiumActual: number | null;
+  // 최우선 호가 — 2026-07-20 CHECK 에이전트 필드 추가 (이전 피드에는 없어 optional).
+  bestAsk?: number | null;
+  bestAskQty?: number | null;
+  bestBid?: number | null;
+  bestBidQty?: number | null;
+  // 5단 호가 가격/잔량 — asks/bids 와 달리 둘 다 최우선(1호가)이 인덱스 0.
+  // askPrices 오름차순(매도1→매도5), bidPrices 내림차순(매수1→매수5).
+  askPrices?: number[] | null;
+  askQtys?: number[] | null;
+  bidPrices?: number[] | null;
+  bidQtys?: number[] | null;
 }
 
 export interface InavHoga {
@@ -341,4 +365,90 @@ export function getWrapSnapshot(): Promise<WrapPayload> {
 
 export function getInavHoga(): Promise<InavHoga> {
   return request<InavHoga>("/api/v1/inav/hoga");
+}
+
+// ── LAN 대시보드 (lan-dashboard 이식) — 필드는 원본 camelCase 계약 유지 ──
+export interface LanStatus {
+  status: string; // online | offline | error | unknown
+  responseTime: number | null;
+  error?: string | null;
+  httpStatus?: number | null;
+  lastChecked: string | null;
+}
+
+export interface LanServer {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  protocol: string; // tcp | http | https | heartbeat
+  description: string;
+  group: string;
+  key: string; // heartbeat 키
+  maxAgeSec: number | null; // heartbeat 임계(초)
+  status: LanStatus;
+}
+
+export interface LanServerInput {
+  name: string;
+  host: string;
+  port: number;
+  protocol: string;
+  description: string;
+  group: string;
+  key: string;
+  maxAgeSec: number | null;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+export function getLanServers(): Promise<LanServer[]> {
+  return request<LanServer[]>("/api/v1/lan/servers");
+}
+
+export function addLanServer(body: LanServerInput): Promise<LanServer> {
+  return request<LanServer>("/api/v1/lan/servers", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateLanServer(
+  id: string,
+  body: Partial<LanServerInput>,
+): Promise<LanServer> {
+  return request<LanServer>(`/api/v1/lan/servers/${id}`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteLanServer(id: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/v1/lan/servers/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function checkAllLan(): Promise<{ ok: boolean; checkedAt: string }> {
+  return request<{ ok: boolean; checkedAt: string }>("/api/v1/lan/check", {
+    method: "POST",
+  });
+}
+
+export function checkLanServer(id: string): Promise<LanStatus> {
+  return request<LanStatus>(`/api/v1/lan/check/${id}`, { method: "POST" });
+}
+
+export function getLanGroups(): Promise<string[]> {
+  return request<string[]>("/api/v1/lan/groups");
+}
+
+export function addLanGroup(name: string): Promise<{ name: string }> {
+  return request<{ name: string }>("/api/v1/lan/groups", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ name }),
+  });
 }
