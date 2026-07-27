@@ -106,6 +106,8 @@ services:
     profiles: ["collector"]
     environment:
       TZ: Asia/Seoul
+      # LP 평가 일별 산출물 출력 폴더(컨테이너 경로). 아래 :rw 마운트 대상.
+      COLLECTOR_LP_EVAL_DIR: /srv/lp_eval
       # ── 자립(self-sufficiency) 플래그 ──
       # 구시스템(streaming.py)이 종료돼 이 collector 가 KIS 앱키를 단독 사용한다.
       # 아래 두 플래그를 0/0 으로 되돌리면 구시스템 병행운영 안전모드(piggyback-only,
@@ -148,6 +150,14 @@ services:
       - "/mnt/s/GE/Wonjae/02_운용펀드_글로벌/(Wrap) 한국투자 미국 AI코어테크랩/4_수익률:/srv/legacy/wrap_source:ro"
       # holidays: 공유 휴장일 캘린더(_공유모듈) — holiday_calendar 싱글턴이 컨테이너 경로로 재배선됨.
       - "/mnt/s/GE/raw/data/_공유모듈/Holidays:/srv/legacy/holidays:ro"
+      # GURU[13F]: 13F 거장 공시 DB(filings.db, WAL). 컨테이너는 sidecar-게이트로 /app/.cache 로 복사해 읽음.
+      - "/mnt/s/GE/raw/data/13F기관내부자/db:/srv/legacy/guru13f_db:ro"
+      # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
+      - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
+      # LP 평가 일별 산출물 — S: 로의 유일한 쓰기(:rw). collector 가 09:05~15:20 매
+      # 표본마다 그날치 JSON(lp_eval_{date}.json) + 전기간 마스터 CSV(lp_eval_history.csv)
+      # 를 덮어쓴다. etf_data(:ro)의 하위 폴더지만 별개 마운트라 쓰기 가능.
+      - "/mnt/s/GE/raw/data/ETF_iNAV모니터/lp_eval:/srv/lp_eval:rw"
     # 24시간 상시가동: 재부팅·크래시 후 자동 복구 (2026-07-21).
     # 단 profiles:["collector"] 게이트라 최초 1회는 --profile collector 로 띄워야 하며,
     # 그 뒤부터 Docker 재시작 시 자동 기동된다.

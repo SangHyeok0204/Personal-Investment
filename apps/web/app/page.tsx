@@ -54,6 +54,15 @@ export default function HomePage() {
         <div className="flex-1" />
         <button
           type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("ge:index-alert-test"))
+          }
+          className="rounded-lg border border-hairline bg-white px-3 py-1.5 text-xs font-bold text-ink-secondary transition-colors hover:bg-canvas-soft"
+        >
+          테스트
+        </button>
+        <button
+          type="button"
           className="rounded-lg border border-[#e8735c] bg-white px-3 py-1.5 text-xs font-bold text-[#e8735c] transition-colors hover:bg-[#e8735c]/[0.06]"
         >
           로그아웃

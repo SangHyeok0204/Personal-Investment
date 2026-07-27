@@ -8,16 +8,13 @@ import {
   useSpies,
   useStats,
   type RecentFilters,
-  type SdSentiment,
   type SdSource,
 } from "@/lib/stock-discussion";
 import { Topbar } from "@/components/layout/topbar";
 import { PageContainer } from "@/components/layout/page-header";
 import { ApiErrorBanner } from "@/components/states";
-import { HealthPanel } from "@/components/stock-discussion/health-panel";
-import { FilterRail, type FilterState } from "@/components/stock-discussion/filter-rail";
+import { ControlBar, type FilterState } from "@/components/stock-discussion/control-bar";
 import { SpyPanel } from "@/components/stock-discussion/spy-panel";
-import { FeedHeader } from "@/components/stock-discussion/feed-header";
 import { PostFeed } from "@/components/stock-discussion/post-feed";
 import { buildSpyIndex } from "@/components/stock-discussion/brand";
 
@@ -29,7 +26,6 @@ const EMPTY_FILTER: FilterState = {
   category: null,
   etfCode: null,
   source: null,
-  sentiment: null,
 };
 
 export default function StockDiscussionPage() {
@@ -85,17 +81,11 @@ export default function StockDiscussionPage() {
     }
   }, [recent.data]);
 
-  // 감성 칩 = 로드된 윈도우 클라 필터(서버 감성 파라미터 없음).
-  const posts = useMemo(() => {
-    const items = recent.data?.items ?? [];
-    if (!filter.sentiment) return items;
-    return items.filter((p) => p.sentiment === filter.sentiment);
-  }, [recent.data, filter.sentiment]);
+  const posts = recent.data?.items ?? [];
 
   const newCount = useMemo(
-    () =>
-      (recent.data?.items ?? []).filter((p) => p.src_id > seenBaseline).length,
-    [recent.data, seenBaseline],
+    () => posts.filter((p) => p.src_id > seenBaseline).length,
+    [posts, seenBaseline],
   );
 
   const spyIndex = useMemo(() => buildSpyIndex(spies.data), [spies.data]);
@@ -104,7 +94,7 @@ export default function StockDiscussionPage() {
     [etfs.data],
   );
 
-  const loadedCount = recent.data?.items.length ?? 0;
+  const loadedCount = posts.length;
   const total = recent.data?.total ?? 0;
   const hasMore = limit < RENDER_MAX && loadedCount >= limit && total > loadedCount;
 
@@ -126,14 +116,9 @@ export default function StockDiscussionPage() {
     setFilter((f) => ({ ...f, source: v }));
     resetLimit();
   };
-  const setSentiment = (v: SdSentiment | null) =>
-    setFilter((f) => ({ ...f, sentiment: v }));
 
   const resetNew = () => {
-    const max = (recent.data?.items ?? []).reduce(
-      (m, p) => Math.max(m, p.src_id),
-      seenBaseline,
-    );
+    const max = posts.reduce((m, p) => Math.max(m, p.src_id), seenBaseline);
     setSeenBaseline(max);
   };
 
@@ -167,32 +152,26 @@ export default function StockDiscussionPage() {
           </div>
         )}
 
-        <div className="flex flex-col gap-5 lg:flex-row">
-          <aside className="flex w-full shrink-0 flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-[300px] lg:self-start lg:overflow-y-auto lg:pr-1">
-            <HealthPanel stats={stats.data} />
-            <FilterRail
-              etfs={etfs.data ?? []}
-              stats={stats.data}
-              filter={filter}
-              onIssuer={setIssuer}
-              onCategory={setCategory}
-              onEtf={setEtf}
-              onSource={setSource}
-              onSentiment={setSentiment}
-            />
-            <SpyPanel spies={spies.data} onSpyClick={onSpyClick} />
-          </aside>
+        {/* 통합 컨트롤 바 — 수집상태·발행사/분류/ETF·소스·검색을 한 박스로(풀 폭) */}
+        <ControlBar
+          stats={stats.data}
+          etfs={etfs.data ?? []}
+          filter={filter}
+          onIssuer={setIssuer}
+          onCategory={setCategory}
+          onEtf={setEtf}
+          onSource={setSource}
+          newCount={newCount}
+          onResetNew={resetNew}
+          onRefresh={onRefresh}
+          isFetching={recent.isFetching || stats.isFetching}
+          searchInput={searchInput}
+          onSearchInput={setSearchInput}
+        />
 
+        <div className="flex flex-col gap-5 lg:flex-row">
+          {/* 피드 — 메인(넓게) */}
           <div className="min-w-0 flex-1">
-            <FeedHeader
-              stats={stats.data}
-              newCount={newCount}
-              onResetNew={resetNew}
-              onRefresh={onRefresh}
-              isFetching={recent.isFetching || stats.isFetching}
-              searchInput={searchInput}
-              onSearchInput={setSearchInput}
-            />
             <PostFeed
               posts={posts}
               total={total}
@@ -205,6 +184,11 @@ export default function StockDiscussionPage() {
               onLoadMore={() => setLimit((l) => Math.min(RENDER_MAX, l + PAGE_SIZE))}
             />
           </div>
+
+          {/* 스파이 작성자 — 우측 슬림 사이드바 */}
+          <aside className="w-full shrink-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-[280px] lg:self-start lg:overflow-y-auto lg:pr-1">
+            <SpyPanel spies={spies.data} onSpyClick={onSpyClick} />
+          </aside>
         </div>
       </PageContainer>
     </>

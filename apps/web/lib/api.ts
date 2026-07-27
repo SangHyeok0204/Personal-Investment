@@ -200,6 +200,266 @@ export interface WrapPayload {
   timestamp: number;
   priceGeneratedAt: string;
   portfolios: WrapPortfolio[];
+  fx?: {
+    rates?: Record<string, number> | null;
+    fetched_at?: string | null;
+  } | null;
+}
+
+// 성과 비교(track record): 자사(AI코어테크랩) vs TORUS(BM) 누적수익률% 시계열.
+// points = [날짜 "YYYY-MM-DD", 누적수익률%(각 시트 인셉션 기준)] 배열.
+export interface WrapPerfSeries {
+  label: string;
+  base_date: string;
+  last_date: string;
+  points: [string, number][];
+}
+
+export interface WrapPerformance {
+  generatedAt: string;
+  series: Record<string, WrapPerfSeries>; // "aicoretech" | "torus"
+}
+
+export function getInavWrapPerformance(): Promise<WrapPerformance> {
+  return request<WrapPerformance>("/api/v1/inav/wrap-performance");
+}
+
+// 리밸런싱 이력(track record): 자사·TORUS 시점별 편입 구성.
+export interface RebalHolding {
+  name: string;
+  cat1: string;
+  cat2: string;
+  cat3: string;
+  weight_pct: number;
+}
+export interface RebalCat {
+  name: string; // 대분류
+  weight_pct: number;
+}
+// 리밸 전/후 1주 기여도 (Price 시계열 × 리밸 시점 비중, 대분류 집계).
+export interface RebalContribStock {
+  name: string;
+  cat1: string;
+  weight_pct: number;
+  ret_pct: number;
+  contrib_pct: number;
+}
+export interface RebalWindowPerf {
+  start: string; // "YYYY-MM-DD"
+  end: string;
+  ret_total: number; // 가격보유 종목 기여 합(구간 수익률 근사)
+  priced_n: number;
+  total_n: number;
+  top: RebalContribStock[]; // 기여 상위 5
+  cats: { cat1: string; contrib_pct: number }[]; // 대분류별 기여
+}
+export interface RebalPerf {
+  before: RebalWindowPerf | null; // 직전 구성 기준 리밸 전 1주
+  after: RebalWindowPerf | null; // 신규 구성 기준 리밸 후 1주
+}
+export interface RebalEvent {
+  date: string; // "YYYY-MM-DD"
+  holdings: RebalHolding[];
+  n_holdings: number;
+  cash_pct: number;
+  etc_pct: number;
+  unclassified_pct: number;
+  cats: RebalCat[]; // 대분류 소계(분류별 비중 섹션)
+  perf?: RebalPerf | null; // 리밸 전/후 1주 기여도 (Price 있을 때만)
+}
+export interface RebalSeries {
+  label: string;
+  events: RebalEvent[];
+}
+export interface WrapRebalancing {
+  generatedAt: string;
+  portfolios: Record<string, RebalSeries>; // "aicoretech" | "torus"
+}
+
+export function getInavWrapRebalancing(): Promise<WrapRebalancing> {
+  return request<WrapRebalancing>("/api/v1/inav/wrap-rebalancing");
+}
+
+// ── GURU[13F] track record — 13F 기관/거장 포트폴리오 (collector + api proxy) ──
+// 백엔드가 최신 스냅샷 리프레시 완료 전까지 503 을 던진다 → 페이지는 degraded 처리.
+export interface Guru13fRosterEntry {
+  cik: string;
+  guru: string;
+  firm: string;
+  latest: string; // 해당 거장의 최신 분기
+  quarters: string[];
+  aum_usd: number;
+}
+export interface Guru13fRoster {
+  generatedAt: string;
+  dbVersion: string;
+  latest_period: string;
+  gurus: Guru13fRosterEntry[]; // aum_usd 내림차순 정렬
+}
+
+export interface Guru13fHolding {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  weight_pct: number;
+  value_usd: number;
+  shares: number;
+}
+export interface Guru13fPortfolio {
+  generatedAt: string;
+  dbVersion: string;
+  cik: string;
+  guru: string;
+  firm: string;
+  period: string;
+  filingDate: string | null;
+  aum_usd: number;
+  n_holdings: number;
+  priced_n: number;
+  total_n: number;
+  top5_pct: number;
+  top10_pct: number;
+  holdings: Guru13fHolding[]; // 비중 내림차순 top-15
+}
+
+export interface Guru13fChangeItem {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  weight_pct: number;
+  delta_ppt: number;
+}
+export interface Guru13fExitItem {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  prev_weight_pct: number;
+  delta_ppt: number;
+}
+export interface Guru13fChanges {
+  generatedAt: string;
+  dbVersion: string;
+  cik: string;
+  period: string;
+  prevPeriod: string | null;
+  isFirst: boolean;
+  amended: boolean; // 정정본(13F-HR/A)
+  new: Guru13fChangeItem[];
+  increased: Guru13fChangeItem[];
+  decreased: Guru13fChangeItem[];
+  exited: Guru13fExitItem[];
+}
+
+export interface Guru13fTimelineSeries {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  weights: number[]; // periods 정렬, PERCENT
+}
+export interface Guru13fTimeline {
+  generatedAt: string;
+  dbVersion: string;
+  cik: string;
+  periods: string[];
+  series: Guru13fTimelineSeries[]; // top-8 holdings
+}
+
+export interface Guru13fConsensusHolding {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  holders_n: number;
+  conviction_pct: number;
+}
+export interface Guru13fConsensusFlow {
+  cusip: string;
+  name: string;
+  ticker: string | null;
+  buyers: number;
+  sellers: number;
+  net: number;
+}
+export interface Guru13fConsensus {
+  generatedAt: string;
+  dbVersion: string;
+  period: string;
+  prev_period: string | null;
+  gurus_n: number;
+  holdings: Guru13fConsensusHolding[];
+  buys: Guru13fConsensusFlow[];
+  sells: Guru13fConsensusFlow[];
+}
+
+export interface Guru13fTurnoverRow {
+  cik: string;
+  guru: string;
+  firm: string;
+  turnover_pct: number;
+  new_n: number;
+  exited_n: number;
+  partial: boolean;
+  aum_usd: number;
+}
+export interface Guru13fTurnover {
+  generatedAt: string;
+  dbVersion: string;
+  period: string;
+  rows: Guru13fTurnoverRow[];
+}
+
+export function getGuru13fRoster(): Promise<Guru13fRoster> {
+  return request<Guru13fRoster>("/api/v1/inav/guru-13f/roster");
+}
+export function getGuru13fPortfolio(
+  cik: string,
+  period: string,
+): Promise<Guru13fPortfolio> {
+  const q = new URLSearchParams({ cik, period });
+  return request<Guru13fPortfolio>(`/api/v1/inav/guru-13f/portfolio?${q.toString()}`);
+}
+export function getGuru13fChanges(
+  cik: string,
+  period: string,
+): Promise<Guru13fChanges> {
+  const q = new URLSearchParams({ cik, period });
+  return request<Guru13fChanges>(`/api/v1/inav/guru-13f/changes?${q.toString()}`);
+}
+export function getGuru13fTimeline(cik: string): Promise<Guru13fTimeline> {
+  const q = new URLSearchParams({ cik });
+  return request<Guru13fTimeline>(`/api/v1/inav/guru-13f/timeline?${q.toString()}`);
+}
+export function getGuru13fConsensus(): Promise<Guru13fConsensus> {
+  return request<Guru13fConsensus>("/api/v1/inav/guru-13f/consensus");
+}
+export function getGuru13fTurnover(): Promise<Guru13fTurnover> {
+  return request<Guru13fTurnover>("/api/v1/inav/guru-13f/turnover");
+}
+
+// ── [회의] 회의자료 파일 탐색기 (PoC) ────────────────────────────────
+export interface MeetingEntry {
+  name: string;
+  type: "dir" | "html";
+  rel: string; // 루트 기준 상대경로
+  size?: number;
+}
+export interface MeetingListing {
+  path: string; // 현재 폴더 (루트는 "")
+  parent: string; // 상위 폴더 rel
+  entries: MeetingEntry[];
+}
+export interface MeetingFile {
+  path: string;
+  html: string; // 자체완결 HTML 원문 (iframe srcDoc 용)
+}
+export function getMeetingList(path = ""): Promise<MeetingListing> {
+  return request<MeetingListing>(
+    `/api/v1/inav/meeting/list?path=${encodeURIComponent(path)}`,
+  );
+}
+export function getMeetingFile(path: string): Promise<MeetingFile> {
+  return request<MeetingFile>(
+    `/api/v1/inav/meeting/file?path=${encodeURIComponent(path)}`,
+  );
 }
 
 export interface InavSnapshot {
@@ -238,10 +498,28 @@ export interface HogaEtf {
   askQtys?: number[] | null;
   bidPrices?: number[] | null;
   bidQtys?: number[] | null;
+  // LP 전용 잔량 — CHECK 가 10틱 싣지만 가격 사다리(askPrices/bidPrices)는 5단이라
+  // 앞 5틱만 그 가격에 매칭된다. index 0 = 최우선, 총호가(askQtys)와 같은 격자·정렬
+  // (실측상 LP ≤ 총호가). 호가카드는 이 LP 잔량을 5단으로 표시한다 (2026-07-24).
+  lpAskQtys?: number[] | null;
+  lpBidQtys?: number[] | null;
+}
+
+// CHECK 에이전트가 hoga 페이로드에 함께 싣는 지수 시세 (payload.indices[]).
+// NQ_FUT(나스닥 선물)·KOSPI·KOSPI200·KOSDAQ·KOSDAQ150·KRX300·SPX 등.
+export interface IndexQuote {
+  code: string;
+  name: string;
+  price: number | null;
+  change: number | null;
+  changePct?: number | null;
+  tradeDate?: string | null;
 }
 
 export interface InavHoga {
-  payload: { etfs: HogaEtf[] } | null;
+  payload:
+    | { etfs: HogaEtf[]; index?: IndexQuote | null; indices?: IndexQuote[] | null }
+    | null;
   source_timestamp: string | null;
   sent_at: string | null;
   seq: number | null;
@@ -365,6 +643,91 @@ export function getWrapSnapshot(): Promise<WrapPayload> {
 
 export function getInavHoga(): Promise<InavHoga> {
   return request<InavHoga>("/api/v1/inav/hoga");
+}
+
+// 지수 롤링 윈도우 통계 — collector가 INDEX_MONITOR.db(CHECK 분단위 적재)에서
+// 지수별 '최근 60분 change_pct 변동폭(max−min)'을 계산해 준다 (알림 팝업 트리거②용).
+export interface IndexWindowEntry {
+  code: string;
+  name: string;
+  latest_at: string | null;
+  latest_age_s: number | null;
+  latest_pct: number | null; // 전일 종가 대비 등락률(%)
+  latest_price: number | null;
+  max_pct: number | null;
+  min_pct: number | null;
+  max_at: string | null; // 60분 창 내 고점 시각 (KST 'YYYY-MM-DD HH:MM:SS')
+  min_at: string | null; // 60분 창 내 저점 시각
+  spread_pct: number | null; // 60분 max−min (%p)
+  rose: boolean | null; // 저점이 고점보다 먼저 = 최근 1시간 순상승
+  n: number;
+}
+
+export interface IndexWindow {
+  generated_at: string;
+  window_min: number;
+  indices: IndexWindowEntry[];
+}
+
+export function getIndexWindow(): Promise<IndexWindow> {
+  return request<IndexWindow>("/api/v1/inav/index-window");
+}
+
+// 지수 급등락 하루 알림 로그 — collector가 INDEX_MONITOR 전일 이력을 스캔해 서버측에서
+// 계산·보관한다(08:55~16:00). 모든 브라우저가 동일 목록을 받는다(늦게 켜도 소급 표시).
+export interface IndexAlertItem {
+  id: string;
+  code: string;
+  label: string;
+  kind: "open5" | "roll1h";
+  changePct: number;
+  spreadPct: number | null; // roll1h: 60분 변동폭(%p)
+  rose: boolean | null;
+  maxAt: string | null; // "YYYY-MM-DD HH:MM:SS" (KST)
+  minAt: string | null;
+  price: number | null;
+  at: number; // epoch ms
+}
+export interface IndexAlertsResponse {
+  generatedAt: string;
+  alerts: IndexAlertItem[]; // 최신 우선
+}
+export function getIndexAlerts(): Promise<IndexAlertsResponse> {
+  return request<IndexAlertsResponse>("/api/v1/inav/index-alerts");
+}
+
+// LP 평가 — collector가 CHECK 호가에서 ACE 8종의 '인정 스프레드 틱'을 1분마다
+// 표본해(정규장 09:00~15:30) trade_date·기준(basis)·틱별 체류시간(분)을 누적한다.
+// hist 키: 'none'(5틱내 1,000주↑ 호가 부재) · 'ok'(<3틱) · '3','4',…(알림틱).
+// 통계(평균·최빈·중앙값)는 알림틱(≥3) 대상.
+export interface LpEvalBasisStat {
+  hist: Record<string, number>;
+  none_min: number;
+  ok_min: number;
+  alert_min: number;
+  total_min: number;
+  mean_tick: number | null;
+  mode_tick: number | null;
+  median_tick: number | null;
+}
+export interface LpEvalEtf {
+  code: string;
+  name: string;
+  basis: { lp?: LpEvalBasisStat; total?: LpEvalBasisStat };
+}
+export interface LpEval {
+  trade_date: string;
+  generated_at: string;
+  session: { start: string; end: string };
+  recognized_qty_min: number;
+  alert_min_ticks: number;
+  available_dates: string[];
+  etfs: LpEvalEtf[];
+}
+
+export function getLpEval(date?: string): Promise<LpEval> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : "";
+  return request<LpEval>(`/api/v1/inav/lp-eval${qs}`);
 }
 
 // ── LAN 대시보드 (lan-dashboard 이식) — 필드는 원본 camelCase 계약 유지 ──

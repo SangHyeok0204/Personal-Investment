@@ -1,0 +1,354 @@
+"""LP 평가 — 인정 스프레드 틱 체류시간(분) 누적 (2026-07-27).
+
+목적: LP 들이 각 ETF 마다 호가/물량을 잘 깔고 있는가? CHECK 호가에서 ACE 8종의
+'인정 스프레드'(매도·매수 각각 최우선호가부터 처음 1,000주 이상 실린 틱까지의
+가격차를 틱으로 환산 — 프론트 화면 알림과 동일 정의)를 60초마다 표본해, 각 틱값
+에서 보낸 시간(분)을 trade_date·기준(basis)·틱별로 SQLite 에 누적한다. 하루 장이
+돌면 ETF 별 스프레드-틱 분포가 쌓이고, /lp-eval 이 히스토그램+평균·최빈·중앙값을 준다.
+
+기준(basis) 2종을 함께 쌓는다 (나중에 어느 쪽이 'LP 평가'에 맞는지 고를 수 있게):
+  · 'lp'    : LP 물량(lpAskQtys/lpBidQtys) 기준 — 리테일이 안 섞여 LP 성실도에 맞음.
+  · 'total' : 총호가(askQtys/bidQtys) 기준 — 화면 알림 전광판과 동일(리테일 포함).
+
+버킷(tick):
+  · -1 = '없음'(none) : 5틱 안에 한쪽이라도 1,000주↑ 인정호가 부재 = 최악.
+  ·  0 = '정상'(ok)   : 인정 스프레드 < 3틱(알림 미발화 구간, 분모용 컨텍스트).
+  · ≥3 = 알림틱       : 인정 스프레드가 그 틱(3,4,5,…). 화면 알림이 뜨는 값.
+
+프론트 lib/hoga.ts 의 recognizedSpreadTicks/recognizedQuotePrice/tickSize 를 그대로
+이식한다(값 일치 보장). 순수 판독·누적 — 예외는 삼키고 그 표본만 건너뛴다.
+"""
+from __future__ import annotations
+
+import csv
+import json
+import math
+import os
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from collector.legacy_inputs import CACHE_DIR, ensure_dirs
+
+_KST = timezone(timedelta(hours=9))
+DB_PATH = CACHE_DIR / "lp_eval.db"
+
+# 일별 LP 평가 산출물 출력 폴더 — collector 가 S: RW 마운트(/srv/lp_eval)로 받는다
+# (호스트 S:\GE\raw\data\ETF_iNAV모니터\lp_eval). 폴더가 없으면(로컬 개발·마운트
+# 부재) 저장을 조용히 건너뛴다. (2026-07-27 사용자 요청: 일별 통계를 S: 에 보관)
+LP_EVAL_OUT_DIR = Path(os.environ.get("COLLECTOR_LP_EVAL_DIR", "/srv/lp_eval"))
+
+# 프론트 lib/hoga.ts 상수와 일치.
+RECOGNIZED_QTY_MIN = 1_000
+SPREAD_ALERT_MIN_TICKS = 3
+
+# ACE 모니터링 대상(현재 9종, 프론트 CARD_TICKER_ORDER 와 동일 집합·순서).
+ACE_TICKERS = (
+    "414270", "457480", "483320", "483330",
+    "483340", "0079X0", "0118Z0", "0180V0", "0199C0",
+)
+
+# LP 평가 표본 구간 — KRX LP 호가 의무 시간대(09:05~15:20 KST). 개장 직후 5분
+# (09:00~09:05)과 종가 단일가 구간(15:20~15:30)은 LP 의무가 면제·종료되므로 표본
+# 하지 않는다 (2026-07-27 사용자 확정). CHECK 수신 지연이 크면(끊김) 그 분은 제외.
+SESSION_START_MIN = 9 * 60 + 5      # 09:05
+SESSION_END_MIN = 15 * 60 + 20      # 15:20
+HOGA_FRESH_MAX_S = 15.0
+
+_NONE_TICK = -1  # '없음' 센티넬
+_OK_TICK = 0     # '정상'(<3틱) 센티넬
+
+
+def _log(msg: str) -> None:
+    print(f"[lp-eval] {msg}", file=sys.stderr, flush=True)
+
+
+def _hhmm(minute_of_day: int) -> str:
+    return f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
+
+
+def _tick_size(price: float) -> int:
+    # KRX 국내 ETF 호가단위 — 2,000원 미만 1원, 이상 5원 (lib/hoga.ts tickSize).
+    return 1 if price < 2000 else 5
+
+
+def _to_num(v):
+    return v if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+
+def _recognized_quote_price(prices, qtys):
+    """최우선호가부터 바깥으로 훑어 처음 잔량 ≥ RECOGNIZED_QTY_MIN 인 호가의 가격.
+    (lib/hoga.ts recognizedQuotePrice 이식.) 없으면 None."""
+    if not prices or not qtys:
+        return None
+    for i in range(len(prices)):
+        p = _to_num(prices[i])
+        q = _to_num(qtys[i]) if i < len(qtys) else None
+        if p is not None and p > 0 and q is not None and q >= RECOGNIZED_QTY_MIN:
+            return p
+    return None
+
+
+def _recognized_spread_ticks(ask_prices, ask_qtys, bid_prices, bid_qtys):
+    """(인정매도호가 − 인정매수호가) 를 틱으로 환산. 한쪽이라도 인정호가가 없으면
+    None (= '없음'). lib/hoga.ts recognizedSpreadTicks 이식."""
+    rec_ask = _recognized_quote_price(ask_prices, ask_qtys)
+    rec_bid = _recognized_quote_price(bid_prices, bid_qtys)
+    if rec_ask is None or rec_bid is None:
+        return None
+    tick = _tick_size(rec_ask)
+    if tick <= 0:
+        return None
+    return round((rec_ask - rec_bid) / tick)
+
+
+def _bucket(spread_ticks) -> int:
+    if spread_ticks is None:
+        return _NONE_TICK
+    if spread_ticks < SPREAD_ALERT_MIN_TICKS:
+        return _OK_TICK
+    return int(spread_ticks)
+
+
+def _connect():
+    ensure_dirs()
+    con = sqlite3.connect(DB_PATH, timeout=5.0)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS lp_spread_min ("
+        " trade_date TEXT NOT NULL, code TEXT NOT NULL, basis TEXT NOT NULL,"
+        " tick INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 0,"
+        " PRIMARY KEY (trade_date, code, basis, tick))"
+    )
+    return con
+
+
+def sample_once(hoga: dict | None, now: datetime | None = None) -> int:
+    """현재 호가 스냅샷에서 ACE 8종의 인정 스프레드 틱을 basis 2종으로 표본해 1분
+    (=1표본)씩 누적한다. 누적한 (code×basis) 행 수를 반환(0=구간밖/스킵)."""
+    now = now or datetime.now(_KST)
+    minute = now.hour * 60 + now.minute
+    if not (SESSION_START_MIN <= minute < SESSION_END_MIN):
+        return 0
+    if not hoga:
+        return 0
+    age = hoga.get("hoga_last_received_age_s")
+    if age is None or age > HOGA_FRESH_MAX_S:
+        return 0  # CHECK 끊김/지연 — 표본하지 않음
+    payload = hoga.get("payload") or {}
+    etfs = payload.get("etfs") or []
+    by_code = {str(e.get("code")): e for e in etfs}
+    trade_date = now.strftime("%Y-%m-%d")
+    rows = []
+    for code in ACE_TICKERS:
+        e = by_code.get(code)
+        if not e:
+            continue
+        ap, bp = e.get("askPrices"), e.get("bidPrices")
+        for basis, aq, bq in (
+            ("lp", e.get("lpAskQtys"), e.get("lpBidQtys")),
+            ("total", e.get("askQtys"), e.get("bidQtys")),
+        ):
+            st = _recognized_spread_ticks(ap, aq, bp, bq)
+            rows.append((trade_date, code, basis, _bucket(st)))
+    if not rows:
+        return 0
+    con = _connect()
+    try:
+        con.executemany(
+            "INSERT INTO lp_spread_min (trade_date, code, basis, tick, count) "
+            "VALUES (?,?,?,?,1) "
+            "ON CONFLICT(trade_date, code, basis, tick) DO UPDATE SET count=count+1",
+            rows,
+        )
+        con.commit()
+    finally:
+        con.close()
+    return len(rows)
+
+
+def _stats(bucket_counts: dict) -> dict:
+    """알림틱(≥3) 버킷에 대한 평균·최빈·중앙값(분 가중). '없음'/'정상'은 제외 —
+    숫자 틱이 아니므로 분포 통계 밖에서 별도 카운트로 본다."""
+    alert = {t: c for t, c in bucket_counts.items()
+             if t >= SPREAD_ALERT_MIN_TICKS and c > 0}
+    total = sum(alert.values())
+    if total == 0:
+        return {"mean": None, "mode": None, "median": None, "alert_min": 0}
+    mean = sum(t * c for t, c in alert.items()) / total
+    mode = max(alert.items(), key=lambda kv: (kv[1], -kv[0]))[0]  # 최빈, 동률=작은 틱
+    half = total / 2
+    cum = 0
+    median = None
+    for t, c in sorted(alert.items()):
+        cum += c
+        if cum >= half:
+            median = t
+            break
+    return {"mean": round(mean, 2), "mode": mode, "median": median, "alert_min": total}
+
+
+def _hist(bucket_counts: dict) -> dict:
+    out = {}
+    for tick, c in sorted(bucket_counts.items()):
+        key = "none" if tick == _NONE_TICK else "ok" if tick == _OK_TICK else str(tick)
+        out[key] = c
+    return out
+
+
+def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
+                  basis: str | None = None) -> dict:
+    """일별 LP 평가 — ACE 8종 × basis(lp/total) 히스토그램 + 통계.
+
+    basis 인자가 'lp'/'total' 이면 그 기준만, 아니면 둘 다 반환.
+    """
+    names = names or {}
+    now = datetime.now(_KST)
+    trade_date = trade_date or now.strftime("%Y-%m-%d")
+    out = {
+        "trade_date": trade_date,
+        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "session": {"start": _hhmm(SESSION_START_MIN), "end": _hhmm(SESSION_END_MIN)},
+        "recognized_qty_min": RECOGNIZED_QTY_MIN,
+        "alert_min_ticks": SPREAD_ALERT_MIN_TICKS,
+        "available_dates": [],
+        "etfs": [],
+    }
+    if not DB_PATH.exists():
+        return out
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"open failed: {exc!r}")
+        return out
+    try:
+        cur = con.cursor()
+        out["available_dates"] = [
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT trade_date FROM lp_spread_min ORDER BY trade_date DESC"
+            )
+        ]
+        data: dict = {}
+        for code, b, tick, count in cur.execute(
+            "SELECT code, basis, tick, count FROM lp_spread_min WHERE trade_date=?",
+            (trade_date,),
+        ):
+            data.setdefault((code, b), {})[tick] = count
+    except sqlite3.Error as exc:
+        _log(f"query failed: {exc!r}")
+        con.close()
+        return out
+    con.close()
+
+    bases = (basis,) if basis in ("lp", "total") else ("lp", "total")
+    for code in ACE_TICKERS:
+        entry = {"code": code, "name": names.get(code, "") or names.get(code.upper(), ""),
+                 "basis": {}}
+        for b in bases:
+            bc = data.get((code, b), {})
+            st = _stats(bc)
+            entry["basis"][b] = {
+                "hist": _hist(bc),
+                "none_min": bc.get(_NONE_TICK, 0),
+                "ok_min": bc.get(_OK_TICK, 0),
+                "alert_min": st["alert_min"],
+                "total_min": sum(bc.values()),
+                "mean_tick": st["mean"],
+                "mode_tick": st["mode"],
+                "median_tick": st["median"],
+            }
+        out["etfs"].append(entry)
+    return out
+
+
+# ── 일별 산출물 저장 (S: 아카이브) ─────────────────────────────────────────
+# DB 는 재빌드에 살아남는 named 볼륨이지만 컨테이너 안이다. 사용자 요청으로 하루치
+# 통계를 S: 폴더에 별도 보관한다 (2026-07-27):
+#   · lp_eval_{date}.json   — 그날 완전본(build_lp_eval, 히스토그램·통계, 두 basis)
+#   · lp_eval_history.csv    — 전 거래일 요약 마스터(일자×ETF×basis 한 행, 추세분석용)
+# 매 표본(60초)마다 덮어쓴다 → 15:20(의무 종료)에 자연히 그날 최종본이 된다.
+
+# 마스터 CSV 컬럼 — 일자 추세용 요약(틱별 히스토그램 전체는 일별 JSON 에 있다).
+_CSV_HEADER = [
+    "trade_date", "code", "name", "basis",
+    "total_min", "none_min", "ok_min", "alert_min",
+    "mean_tick", "mode_tick", "median_tick",
+]
+
+
+def _all_buckets_by_key() -> dict:
+    """DB 전체를 (trade_date, code, basis) -> {tick: count} 로 모은다(read-only)."""
+    data: dict = {}
+    if not DB_PATH.exists():
+        return data
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"master open failed: {exc!r}")
+        return data
+    try:
+        for td, code, b, tick, count in con.execute(
+            "SELECT trade_date, code, basis, tick, count FROM lp_spread_min"
+        ):
+            data.setdefault((td, code, b), {})[tick] = count
+    except sqlite3.Error as exc:
+        _log(f"master query failed: {exc!r}")
+    finally:
+        con.close()
+    return data
+
+
+def _write_master_csv(out_dir: Path, names: dict) -> None:
+    """전 거래일 요약을 마스터 CSV 로 원자적 교체 저장. 정렬=일자↑·ACE순·lp먼저.
+    Excel 한글 대응 UTF-8 BOM. 부분쓰기 노출 방지로 .tmp → replace."""
+    data = _all_buckets_by_key()
+    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
+    basis_rank = {"lp": 0, "total": 1}
+    keys = sorted(
+        data.keys(),
+        key=lambda k: (k[0], ace_rank.get(k[1], 99), basis_rank.get(k[2], 9)),
+    )
+    tmp = out_dir / "lp_eval_history.csv.tmp"
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(_CSV_HEADER)
+        for (td, code, b) in keys:
+            bc = data[(td, code, b)]
+            st = _stats(bc)
+            w.writerow([
+                td, code,
+                names.get(code, "") or names.get(code.upper(), ""), b,
+                sum(bc.values()), bc.get(_NONE_TICK, 0), bc.get(_OK_TICK, 0),
+                st["alert_min"],
+                "" if st["mean"] is None else st["mean"],
+                "" if st["mode"] is None else st["mode"],
+                "" if st["median"] is None else st["median"],
+            ])
+    tmp.replace(out_dir / "lp_eval_history.csv")
+
+
+def write_daily_snapshot(names: dict | None = None) -> bool:
+    """오늘치 JSON + 전기간 마스터 CSV 를 S: 출력폴더에 덮어쓴다. 폴더가 없으면
+    조용히 skip(로컬·마운트 부재). 파일별로 예외를 삼켜 한쪽이 잠겨도(예: Excel
+    로 CSV 오픈 중) 다른 쪽 저장은 진행한다."""
+    out_dir = LP_EVAL_OUT_DIR
+    if not out_dir.is_dir():
+        return False
+    names = names or {}
+    today = datetime.now(_KST).strftime("%Y-%m-%d")
+    ok = True
+    try:
+        snap = build_lp_eval(today, names)
+        tmp = out_dir / f"lp_eval_{today}.json.tmp"
+        tmp.write_text(json.dumps(snap, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(out_dir / f"lp_eval_{today}.json")
+    except OSError as exc:
+        _log(f"daily json write failed: {exc!r}")
+        ok = False
+    try:
+        _write_master_csv(out_dir, names)
+    except OSError as exc:
+        _log(f"master csv write failed: {exc!r}")
+        ok = False
+    return ok

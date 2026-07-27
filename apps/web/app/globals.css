@@ -55,3 +55,36 @@
     transform: translateX(-50%);
   }
 }
+
+/* ── iNAV 알림 띠: 새 알림이 뜬 줄만 옅은 빨강(bid-soft)으로 깜빡인다.
+   빈도·횟수는 우측 상단 지수 급등락 팝업(.ge-alert-blink)과 동일하게 맞춘다 —
+   1초 주기 · steps(1,end) 하드 토글 · 팝업의 ALERT_TTL_MS(12초)에 해당하는 12회.
+   유한 반복이라 끝나면 저절로 멈춘다 — 해제 타이머가 필요 없다. ── */
+.inav-alert-flash {
+  animation: inav-alert-flash 1s steps(1, end) 12;
+}
+@keyframes inav-alert-flash {
+  0%,
+  49.9% {
+    background-color: #fdefec;
+  }
+  50%,
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* ── 지수 알림 팝업: 0.5초 주기 경고 깜빡임 (CSS 컴포지터만 — JS/리렌더 없음) ── */
+.ge-alert-blink {
+  animation: ge-alert-blink 1s steps(1, end) infinite;
+}
+@keyframes ge-alert-blink {
+  0%,
+  49.9% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.5;
+  }
+}

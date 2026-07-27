@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, time as dtime
@@ -71,6 +72,140 @@ _WIN_PREFIX_MAP: list[tuple[str, Path]] = [
 
 def _log(msg: str) -> None:
     print(f"[wrap] {msg}", file=sys.stderr, flush=True)
+
+
+def _parse_rebal_date(v) -> str | None:
+    """``"2026.03.10 기준"`` 또는 datetime → ``"YYYY-MM-DD"`` (파싱 불가 시 None)."""
+    if v is None:
+        return None
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d")
+    m = re.match(r"\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})", str(v))
+    if not m:
+        return None
+    y, mo, d = (int(x) for x in m.groups())
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+# ── 리밸 전후 기여도 계산 (Price 시계열 + 종목명→티커) ──────────────────
+# Price 시트 구조는 wrap_returns 와 동일: D=날짜, 2행 E~=티커, 3행~=일별 종가.
+_PRICE_DATE_COL = 4          # D (1-indexed)
+_PRICE_FIRST_TICKER_COL = 5  # E
+_PRICE_TICKER_ROW = 2
+_PRICE_MAX_COL = 74          # BV
+_PRICE_MAX_ROW = 400
+_REBAL_WINDOW_TD = 5         # 리밸 전/후 '1주' = 5 거래일
+
+
+def _read_price_series(wb) -> tuple[list, dict] | None:
+    """Price 시트 → (dates[date 오름차순], {TICKER: [close|None, dates 정렬]})."""
+    if "Price" not in wb.sheetnames:
+        return None
+    ws = wb["Price"]
+    rows = list(
+        ws.iter_rows(min_row=1, max_row=_PRICE_MAX_ROW, max_col=_PRICE_MAX_COL,
+                     values_only=True)
+    )
+    if len(rows) < 3:
+        return None
+    header = rows[_PRICE_TICKER_ROW - 1]
+    tick_cols: dict[int, str] = {}
+    for ci in range(_PRICE_FIRST_TICKER_COL - 1, len(header)):
+        t = header[ci]
+        if isinstance(t, str) and t.strip():
+            tick_cols[ci] = t.strip().upper()
+    if not tick_cols:
+        return None
+    di = _PRICE_DATE_COL - 1
+    dates: list = []
+    series: dict[str, list] = {tk: [] for tk in tick_cols.values()}
+    for rv in rows[2:]:
+        if len(rv) <= di or rv[di] is None:
+            continue
+        d = rv[di]
+        d = d.date() if hasattr(d, "date") else None
+        if d is None:
+            continue
+        dates.append(d)
+        for ci, tk in tick_cols.items():
+            v = rv[ci] if ci < len(rv) else None
+            series[tk].append(float(v) if isinstance(v, (int, float)) and v > 0 else None)
+    return (dates, series) if dates else None
+
+
+def _read_name_ticker(wb) -> dict[str, str]:
+    """종목_분류 시트 → {종목명: 티커} (리밸 시트 종목명 → Price 티커 브리지)."""
+    if "종목_분류" not in wb.sheetnames:
+        return {}
+    ws = wb["종목_분류"]
+    out: dict[str, str] = {}
+    for r in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+        nm = r[0] if len(r) > 0 else None
+        tk = r[1] if len(r) > 1 else None
+        if nm and tk:
+            out[str(nm).strip()] = str(tk).strip().upper()
+    return out
+
+
+def _asof_idx(dates: list, d) -> int:
+    """dates(오름차순)에서 d 이하인 마지막 인덱스(94개라 선형)."""
+    idx = -1
+    for i, dd in enumerate(dates):
+        if dd <= d:
+            idx = i
+        else:
+            break
+    return idx
+
+
+def _window_contrib(dates, series, name2ticker, holdings, i0, i1) -> dict:
+    """holdings(리밸 시점 목표비중) 기준 [i0,i1] 구간 종목별 기여도.
+
+    ret = close[i1]/close[i0]-1, contrib = 비중 × ret. 가격 없는 종목은 제외
+    (priced_n/total_n 로 커버리지 노출). top(기여 상위 종목)·cats(대분류 집계) 반환.
+    """
+    stocks: list[dict] = []
+    cat_map: dict[str, float] = {}
+    ret_total = 0.0
+    priced_n = 0
+    for h in holdings:
+        tk = name2ticker.get(h["name"])
+        s = series.get(tk) if tk else None
+        if not s:
+            continue
+        c0 = s[i0] if 0 <= i0 < len(s) else None
+        c1 = s[i1] if 0 <= i1 < len(s) else None
+        if not (c0 and c1):
+            continue
+        ret = (c1 / c0 - 1.0) * 100.0
+        w = (h["weight_pct"] or 0.0) / 100.0
+        contrib = w * ret
+        ret_total += contrib
+        priced_n += 1
+        cat = h["cat1"] or "기타"
+        cat_map[cat] = cat_map.get(cat, 0.0) + contrib
+        stocks.append(
+            {
+                "name": h["name"],
+                "cat1": h["cat1"],
+                "weight_pct": h["weight_pct"],
+                "ret_pct": round(ret, 4),
+                "contrib_pct": round(contrib, 4),
+            }
+        )
+    stocks.sort(key=lambda x: x["contrib_pct"], reverse=True)
+    cats = sorted(
+        [{"cat1": k, "contrib_pct": round(v, 4)} for k, v in cat_map.items()],
+        key=lambda x: x["contrib_pct"],
+        reverse=True,
+    )
+    return {
+        "ret_total": round(ret_total, 4),
+        "priced_n": priced_n,
+        "total_n": len(holdings),
+        "top": stocks[:5],
+        "cats": cats,
+    }
 
 
 def map_windows_path(win_path: str) -> Path | None:
@@ -164,6 +299,262 @@ class WrapCollector:
         self._ret1_tries = 0
         self._ret1_tries_date: date | None = None
         self._ret1_last_try = 0.0
+        # ── 성과 비교(track record): Port_Bloommberg/Port_TORUS 누적수익률% 시계열 ──
+        self._perf_cache: dict | None = None
+        self._perf_mtime: float | None = None
+        # ── 리밸런싱 이력(track record): 리밸런싱_히스토리 시점별 편입 구성 ──
+        self._rebal_cache: dict | None = None
+        self._rebal_mtime: float | None = None
+
+    # ── 성과 비교 시계열 (track record: 자사 vs TORUS 누적수익률%) ──────
+    def build_performance(self) -> dict | None:
+        """Port_Bloommberg(자사 AI코어테크랩)·Port_TORUS(BM) 시트의 A=날짜·B=누적수익률%
+        시계열을 읽어 반환. mtime 캐시. 컨테이너는 이 xlsx 를 평문(PK)으로 읽는다
+        (로컬 Windows 의 DOCUMENT SAFER 표시와 무관)."""
+        import openpyxl
+
+        cfg = self._load_config()
+        if not cfg:
+            return None
+        # 소스 xlsx 위치 = wrap_sources 중 아무 경로나 (동일 '이상 …' 파일).
+        src_path = None
+        for s in (cfg.get("wrap_sources") or {}).values():
+            p = map_windows_path((s or {}).get("path", ""))
+            if p is not None and p.exists():
+                src_path = p
+                break
+        if src_path is None:
+            return self._perf_cache
+        try:
+            mtime = src_path.stat().st_mtime
+        except OSError:
+            mtime = None
+        if self._perf_cache is not None and self._perf_mtime == mtime:
+            return self._perf_cache
+
+        sheets = {
+            "aicoretech": ("Port_Bloommberg", "AI코어테크랩"),
+            "torus": ("Port_TORUS", "TORUS"),
+        }
+        series: dict[str, dict] = {}
+        try:
+            wb = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
+            try:
+                for key, (sheet, label) in sheets.items():
+                    if sheet not in wb.sheetnames:
+                        continue
+                    ws = wb[sheet]
+                    pts: list[list] = []
+                    for row in ws.iter_rows(min_row=2, min_col=1, max_col=2,
+                                            values_only=True):
+                        d, ret = row[0], row[1]
+                        if d is None:
+                            break
+                        ds = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+                        if not isinstance(ret, (int, float)):
+                            continue
+                        pts.append([ds, round(float(ret), 6)])
+                    if pts:
+                        series[key] = {
+                            "label": label,
+                            "base_date": pts[0][0],
+                            "last_date": pts[-1][0],
+                            "points": pts,
+                        }
+            finally:
+                wb.close()
+        except Exception as exc:  # noqa: BLE001 - last-good 유지
+            _log(f"performance 읽기 실패: {exc!r}")
+            return self._perf_cache
+
+        payload = {
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "series": series,
+        }
+        self._perf_cache = payload
+        self._perf_mtime = mtime
+        return payload
+
+    # ── 리밸런싱 이력 (track record: 자사·TORUS 시점별 편입 구성) ────────
+    def build_rebalancing(self) -> dict | None:
+        """``리밸런싱_히스토리`` 시트 → 포트폴리오별 리밸 시점 편입 구성 이력.
+
+        와이드 포맷: ``항목`` 헤더행마다 한 포트폴리오 블록(등장순 = AI코어테크랩,
+        TORUS). 각 리밸 시점은 5열 ``[종목·대분류·중분류·소분류·비중]`` 블록으로
+        열방향 나열되고, 헤더행 각 블록 첫 열에 ``"YYYY.MM.DD 기준"`` 날짜가 있다.
+        종목행은 비중 내림차순(블록마다 개수 상이 → 하단은 공백)이며 ``기타/(미분류)/
+        (현금)`` 은 블록 하단 고정행. 비중은 분수(0.1) → % 로 변환. build_performance
+        와 동일한 mtime 캐시·평문(PK) 판독(로컬 DOCUMENT SAFER 표시와 무관)."""
+        import openpyxl
+
+        cfg = self._load_config()
+        if not cfg:
+            return None
+        src_path = None
+        for s in (cfg.get("wrap_sources") or {}).values():
+            p = map_windows_path((s or {}).get("path", ""))
+            if p is not None and p.exists():
+                src_path = p
+                break
+        if src_path is None:
+            return self._rebal_cache
+        try:
+            mtime = src_path.stat().st_mtime
+        except OSError:
+            mtime = None
+        if self._rebal_cache is not None and self._rebal_mtime == mtime:
+            return self._rebal_cache
+
+        sheet_name = "리밸런싱_히스토리"
+        try:
+            wb = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
+        except Exception as exc:  # noqa: BLE001 - last-good 유지
+            _log(f"rebalancing 로드 실패: {exc!r}")
+            return self._rebal_cache
+        try:
+            if sheet_name not in wb.sheetnames:
+                return self._rebal_cache
+            ws = wb[sheet_name]
+            grid = [
+                list(r)
+                for r in ws.iter_rows(
+                    min_row=1, max_row=ws.max_row,
+                    min_col=1, max_col=ws.max_column, values_only=True,
+                )
+            ]
+            # 리밸 전/후 기여도 계산용 (같은 워크북에서 함께 판독).
+            price = _read_price_series(wb)
+            name2ticker = _read_name_ticker(wb)
+        finally:
+            wb.close()
+
+        def cell(r: int, c: int):  # 1-indexed, 범위 밖 None
+            if 1 <= r <= len(grid) and 1 <= c <= len(grid[r - 1]):
+                return grid[r - 1][c - 1]
+            return None
+
+        # 포트폴리오 블록 경계 = col A 가 ``항목`` 인 헤더행. 등장순으로 매핑.
+        header_rows = [
+            r for r in range(1, len(grid) + 1)
+            if str(cell(r, 1) or "").strip() == "항목"
+        ]
+        order = [("aicoretech", "AI코어테크랩"), ("torus", "TORUS")]
+        portfolios: dict[str, dict] = {}
+        for idx, hr in enumerate(header_rows):
+            if idx >= len(order):
+                break
+            key, label = order[idx]
+            data_start = hr + 2  # 헤더행 + 서브헤더행 다음
+            data_end = (
+                header_rows[idx + 1] - 1 if idx + 1 < len(header_rows) else len(grid)
+            )
+            # 블록은 세로로 두 섹션: ①"편입 종목 및 비중"(개별 종목+현금),
+            # ②"분류별 비중"(대분류 소계). col A 의 "분류별" 라벨이 ② 시작 경계.
+            sec2_hr = None
+            for r in range(hr + 1, data_end + 1):
+                if "분류별" in str(cell(r, 1) or ""):
+                    sec2_hr = r
+                    break
+            sec1_end = (sec2_hr - 1) if sec2_hr else data_end
+
+            def _wp(r: int, c: int) -> float:
+                w = cell(r, c + 4)
+                return round(float(w) * 100.0, 4) if isinstance(w, (int, float)) else 0.0
+
+            events: list[dict] = []
+            c = 2  # 첫 블록 시작 열 (stride 5)
+            while True:
+                ds = _parse_rebal_date(cell(hr, c))
+                if ds is None:
+                    break
+                # ① 개별 종목 + 현금 (종목수는 시점마다 달라 하단 공백 → skip)
+                holdings: list[dict] = []
+                cash = 0.0
+                for r in range(data_start, sec1_end + 1):
+                    nm = cell(r, c)
+                    if nm is None or str(nm).strip() == "":
+                        continue
+                    name = str(nm).strip()
+                    if name == "(현금)":
+                        cash = _wp(r, c)
+                        continue
+                    holdings.append(
+                        {
+                            "name": name,
+                            "cat1": str(cell(r, c + 1) or "").strip(),
+                            "cat2": str(cell(r, c + 2) or "").strip(),
+                            "cat3": str(cell(r, c + 3) or "").strip(),
+                            "weight_pct": _wp(r, c),
+                        }
+                    )
+                # ② 대분류 소계 + 기타/미분류
+                cats: list[dict] = []
+                etc = unc = 0.0
+                if sec2_hr is not None:
+                    for r in range(sec2_hr + 1, data_end + 1):
+                        nm = cell(r, c)
+                        if nm is None or str(nm).strip() == "":
+                            continue
+                        name = str(nm).strip()
+                        if name == "(현금)":
+                            continue
+                        if name == "기타":
+                            etc = _wp(r, c)
+                            continue
+                        if name == "(미분류)":
+                            unc = _wp(r, c)
+                            continue
+                        cats.append({"name": name, "weight_pct": _wp(r, c)})
+                events.append(
+                    {
+                        "date": ds,
+                        "holdings": holdings,
+                        "n_holdings": len(holdings),
+                        "cash_pct": cash,
+                        "etc_pct": etc,
+                        "unclassified_pct": unc,
+                        "cats": cats,
+                    }
+                )
+                c += 5
+            events.sort(key=lambda e: e["date"])
+            # 리밸 전/후 1주 기여도 enrich (Price 시계열 있을 때만).
+            if price is not None:
+                dates, series = price
+                for i, ev in enumerate(events):
+                    try:
+                        d = datetime.strptime(ev["date"], "%Y-%m-%d").date()
+                    except ValueError:
+                        ev["perf"] = {"before": None, "after": None}
+                        continue
+                    idx = _asof_idx(dates, d)
+                    after = before = None
+                    if idx >= 0:
+                        i1 = min(idx + _REBAL_WINDOW_TD, len(dates) - 1)
+                        if i1 > idx:  # 리밸 후 1주: 신규 구성 비중
+                            after = _window_contrib(
+                                dates, series, name2ticker, ev["holdings"], idx, i1
+                            )
+                            after["start"] = dates[idx].strftime("%Y-%m-%d")
+                            after["end"] = dates[i1].strftime("%Y-%m-%d")
+                        i0 = max(idx - _REBAL_WINDOW_TD, 0)
+                        if i > 0 and i0 < idx:  # 리밸 전 1주: 직전 구성 비중
+                            before = _window_contrib(
+                                dates, series, name2ticker,
+                                events[i - 1]["holdings"], i0, idx,
+                            )
+                            before["start"] = dates[i0].strftime("%Y-%m-%d")
+                            before["end"] = dates[idx].strftime("%Y-%m-%d")
+                    ev["perf"] = {"before": before, "after": after}
+            portfolios[key] = {"label": label, "events": events}
+
+        payload = {
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "portfolios": portfolios,
+        }
+        self._rebal_cache = payload
+        self._rebal_mtime = mtime
+        return payload
 
     # ── config / 보유목록 / 분류 ───────────────────────────────────────
     def _load_config(self) -> dict:

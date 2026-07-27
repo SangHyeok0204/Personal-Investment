@@ -68,7 +68,7 @@ export default function WrapPage() {
   });
 
   const [selKey, setSelKey] = useState<string | null>(null);
-  const [krw, setKrw] = useState(false); // 원화 환산 토글 (off=USD, on=환율 포함)
+  const [krw, setKrw] = useState(true); // 원화 환산 토글 (off=USD, on=환율 포함). 기본=원화 환산.
 
   const data = query.data;
   const collectorDown =
@@ -81,6 +81,7 @@ export default function WrapPage() {
     portfolios.find((p) => p.key === selKey) ?? portfolios[0] ?? null;
 
   const stale = data != null && Date.now() - data.timestamp > 60_000;
+  const fxUsd = data?.fx?.rates?.USD ?? null; // 실시간 원/달러 환율
 
   return (
     <>
@@ -166,7 +167,25 @@ export default function WrapPage() {
                     구성종목 — {selected.name}
                   </span>
                 </div>
-                <StatusLight ok={!stale} />
+                <div className="flex items-center gap-3">
+                  {fxUsd != null && (
+                    <span
+                      className="flex items-center gap-1 text-[11px] tabular-nums"
+                      title={`실시간 원/달러 환율${
+                        data.fx?.fetched_at ? ` · ${data.fx.fetched_at}` : ""
+                      }`}
+                    >
+                      <span className="text-ink-faint">USD/KRW</span>
+                      <span className="font-semibold text-ge-navy">
+                        {fxUsd.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </span>
+                  )}
+                  <StatusLight ok={!stale} />
+                </div>
               </div>
               <HoldingsTable p={selected} />
             </section>

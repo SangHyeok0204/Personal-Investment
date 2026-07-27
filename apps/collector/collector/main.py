@@ -44,6 +44,7 @@ from etf_inav.data_sources.twse_prices import (
     is_twse_post_close_window,
     is_twse_trading_hours,
 )
+from etf_inav.data_sources.us_daytime import US_DAYTIME_EXCHANGE_MAP, us_daytime_window
 from kis_api.auth import KisAuth, KisCredentials
 from kis_api.futureoption_master import DomesticFutureOptionMaster
 from kis_api.master import KisMaster
@@ -69,6 +70,7 @@ from collector.krx_prep import (
 from collector.legacy_inputs import CACHE_DIR, DB_DEST, MASTER_CACHE_DIR
 from collector.state import SnapshotState, json_safe, now_kst_string
 from collector.wrap import WrapCollector
+from collector.guru13f import Guru13F
 
 FX_SYMBOLS = ("USD", "CNY", "HKD", "JPY", "EUR", "CAD", "TWD")
 
@@ -85,6 +87,7 @@ WRAP_REFRESH_S = 15.0         # WRAP 포트폴리오 실시간 수익률 (legacy
 TWSE_REFRESH_S = 300.0
 COMPUTE_INTERVAL_S = 1.0
 ROLLOVER_CHECK_S = 60.0
+LP_EVAL_SAMPLE_S = 60.0        # LP 평가 — 인정 스프레드 틱 체류시간 표본 주기(1분)
 
 # KIS realtime WebSocket lane.
 WS_ROTATION_S = 30.0          # legacy --rotation-seconds default (when >40 targets)
@@ -211,6 +214,8 @@ class Collector:
 
         self.state = SnapshotState()
         self.stop_event = asyncio.Event()
+        # GURU[13F] 서비스 (KIS 비의존, 독립 refresh 루프 + 로컬 .cache 스냅샷).
+        self.guru13f = Guru13F()
 
         self.engine: InavEngine | None = None
         self.instruments: list[dict] = []
@@ -223,6 +228,12 @@ class Collector:
         # 마지막 성공 FX 테이블(naver_fx.fetch_fx_table 전체 — detail 의
         # fluctuations_pct 를 WRAP 환 수익률 컬럼이 사용). last-good 유지.
         self._fx_table: dict | None = None
+        # 미국 주간거래(데이장) 전일종가 핀 — {(정규거래소, 심볼): 최신 완결 세션
+        # 공식 종가}. 데이장/스냅샷 TR 의 base 는 하루 낡거나 애프터마켓으로
+        # 표류하므로 일봉(HHDFS76240000) 종가로 대체한다. KST 일자당 1회 수집.
+        self._us_prev_close: dict[tuple[str, str], float] = {}
+        self._us_prev_close_date: str | None = None
+        self._us_daytime_active: bool | None = None
 
         self.store: KisStore | None = None
         self.master: KisMaster | None = None
@@ -292,6 +303,41 @@ class Collector:
         return valid
 
     # ── data fetchers (run in executor) ────────────────────────────────
+    def _refresh_us_prev_closes(self, us_pairs: list[tuple[str, str]]) -> None:
+        """미국 종목의 '전일종가'를 일봉 공식 종가로 핀 (KST 일자당 1회, 결측만 재시도).
+
+        스냅샷 TR 의 base 는 데이장 코드에서 하루 낡은 값이 오고, 정규장 코드의
+        last 는 애프터마켓 체결로 표류할 수 있어(rest_client 일봉 docstring 참조)
+        HHDFS76240000 일봉의 최신 완결 세션 종가를 정본으로 쓴다.
+        """
+        if self.rest is None:
+            return
+        today = legacy_inputs.kst_today()
+        if self._us_prev_close_date != today:
+            self._us_prev_close = {}
+            self._us_prev_close_date = today
+        missing = [
+            pair for pair in dict.fromkeys(us_pairs) if pair not in self._us_prev_close
+        ]
+        if not missing:
+            return
+        fetched = 0
+        for exch, sym in missing:
+            try:
+                bars = self.rest.overseas_daily_bars(exch, sym, count=1)
+            except Exception:  # noqa: BLE001 - 결측 심볼은 다음 사이클에 재시도
+                continue
+            close = bars[0].get("close") if bars else None
+            if close is not None and close > 0:
+                self._us_prev_close[(exch, sym)] = float(close)
+                fetched += 1
+            time.sleep(PRICE_DELAY_SECONDS)
+        if fetched:
+            _log(
+                f"US prev-close pinned {fetched}/{len(missing)} "
+                f"(total={len(self._us_prev_close)} date={today})"
+            )
+
     def _fetch_kis_snapshots(self) -> list[dict]:
         if not self._ensure_token() or self.rest is None:
             return []
@@ -306,9 +352,36 @@ class Collector:
         targets = [(exch, sym) for exch, sym in targets if exch and sym]
         if not targets:
             return []
+        # 미국 주간거래(데이장) 윈도우 중엔 NAS/NYS/AMS 를 BAQ/BAY/BAA 로 치환
+        # 요청한다. 정규장 코드는 한국 낮 동안 전일 종가에 동결되어 있기 때문.
+        # 응답은 원래 거래소 키로 되돌려 엔진 (exchange, symbol)→ISIN 매핑을 유지.
+        day_active = False
+        us_pairs = [(exch, sym) for exch, sym in targets if exch in US_DAYTIME_EXCHANGE_MAP]
+        if us_pairs:
+            try:
+                day_active = bool(us_daytime_window()["active"])
+            except Exception as exc:  # noqa: BLE001 - 판정 실패 시 정규장 코드 유지
+                _log(f"US daytime window check failed: {exc!r}")
+        if day_active != self._us_daytime_active:
+            _log(
+                "US daytime quotes "
+                + ("ON (NAS/NYS/AMS→BAQ/BAY/BAA)" if day_active else "OFF (regular codes)")
+            )
+            self._us_daytime_active = day_active
+        origin_by_request: dict[tuple[str, str], str] = {}
+        if day_active:
+            self._refresh_us_prev_closes(us_pairs)
+            request_targets = []
+            for exch, sym in targets:
+                request_exch = US_DAYTIME_EXCHANGE_MAP.get(exch, exch)
+                if request_exch != exch:
+                    origin_by_request[(request_exch, sym)] = exch
+                request_targets.append((request_exch, sym))
+        else:
+            request_targets = targets
         try:
-            return self.rest.snapshots(
-                targets,
+            snaps = self.rest.snapshots(
+                request_targets,
                 batch_delay_seconds=PRICE_DELAY_SECONDS,
                 max_workers=PRICE_WORKERS,
                 overseas_batch_size=OVERSEAS_BATCH_SIZE,
@@ -316,6 +389,26 @@ class Collector:
         except Exception as exc:  # noqa: BLE001 - fail-stale
             _log(f"KIS snapshot fetch failed: {exc!r}")
             return []
+        if not origin_by_request:
+            return snaps
+        out: list[dict] = []
+        for snap in snaps:
+            key = (
+                str(snap.get("exchange") or "").upper(),
+                str(snap.get("symbol") or "").upper(),
+            )
+            origin = origin_by_request.get(key)
+            if origin is not None:
+                snap = dict(snap)
+                snap["exchange"] = origin
+                pinned = self._us_prev_close.get((origin, key[1]))
+                if pinned is not None:
+                    snap["base"] = pinned
+                else:
+                    # 데이장 base(하루 낡음)로 기존 base 를 덮지 않는다.
+                    snap.pop("base", None)
+            out.append(snap)
+        return out
 
     def _fetch_twse_snapshots(self) -> list[dict]:
         taiwan = [
@@ -525,8 +618,18 @@ class Collector:
             quote = etf_quotes.get(ticker.upper()) or {}
             hoga_row = hoga_by_code.get(ticker.upper()) or {}
             inav = json_safe(record.get("inav_per_share"))
-            # 국내가: 실시간 도메스틱 시세 우선, 없으면 KRX 일별 프레임 값.
-            kr_price = json_safe(quote.get("price"))
+            # 국내 시세: CHECK 에이전트 체결가 우선 → KIS REST → KRX 일별 프레임.
+            # CHECK 값은 호가와 같은 envelope 라 알림의 틱 판정 기준가와 일치하고
+            # 1초 주기라 REST(15초)보다 신선하다. CHECK 가 끊기면(15초 초과) 자동으로
+            # REST 로 내려가므로 서버는 계속 동작한다.
+            # ※ CHECK 의 basePrice 는 현재가를 그대로 되돌려주고 있어(2026-07-23 실측,
+            #   14종 전부 price 와 동일) 전일종가로 쓸 수 없다 — prev_close 는 KIS 유지.
+            kr_price = json_safe(hoga_row.get("price"))
+            change_pct = json_safe(hoga_row.get("change"))
+            if kr_price is None:
+                kr_price = json_safe(quote.get("price"))
+            if change_pct is None:
+                change_pct = json_safe(quote.get("change_pct"))
             if kr_price is None:
                 kr_price = json_safe(record.get("kr_etf_price"))
             deviation = None
@@ -562,7 +665,7 @@ class Collector:
                     or self.etf_names.get(ticker.upper(), ""),
                     "inav_per_share": inav,
                     "kr_etf_price": kr_price,
-                    "change_pct": json_safe(quote.get("change_pct")),
+                    "change_pct": change_pct,
                     "prev_close": json_safe(quote.get("prev_close")),
                     "trade_value_krw": json_safe(quote.get("trade_value_krw")),
                     "aum_krw": json_safe(aum_krw),
@@ -926,6 +1029,23 @@ class Collector:
             except Exception as exc:  # noqa: BLE001 - keep last-good engine
                 _log(f"rollover rebuild failed: {exc!r}; keeping previous engine")
 
+    async def _lp_eval_loop(self) -> None:
+        """LP 평가 표본 — 60초마다 현재 호가에서 ACE 8종의 인정 스프레드 틱을
+        basis(lp/total) 2종으로 누적한다. LP 의무시간(09:05~15:20 KST)·CHECK 신선할
+        때만 표본하며, lp_eval.db(.cache) 에 영속(재기동에도 유지). 표본이 실제로
+        누적된 분에는 그날치 통계를 S: 출력폴더에 저장한다(JSON + 마스터 CSV) —
+        15:20 마지막 표본에서 그날 최종본이 된다."""
+        from collector import lp_eval as _lpe
+        while not self.stop_event.is_set():
+            if await self._sleep_or_stop(LP_EVAL_SAMPLE_S):
+                return
+            try:
+                n = _lpe.sample_once(self.state.hoga())
+                if n:
+                    _lpe.write_daily_snapshot(self.etf_names)
+            except Exception as exc:  # noqa: BLE001 - 표본 실패는 그 분만 건너뜀
+                _log(f"lp-eval sample failed: {exc!r}")
+
     # ── FastAPI / uvicorn ──────────────────────────────────────────────
     def _build_app(self) -> FastAPI:
         app = FastAPI(title="ETF iNAV collector", docs_url=None, redoc_url=None)
@@ -969,6 +1089,131 @@ class Collector:
         @app.get("/hoga")
         def hoga():
             return JSONResponse(state.hoga())
+
+        @app.get("/index-window")
+        def index_window():
+            # 지수 롤링 60분 변동폭(max−min) — INDEX_MONITOR.db(:ro) 판독. 별도 state
+            # 없이 요청 시 계산(캐시 복사는 소스 mtime 변화 시에만). 실패해도 500 금지.
+            from collector import index_window as _iw
+
+            try:
+                return JSONResponse(_iw.build_index_window())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"index-window failed: {exc!r}")
+                return JSONResponse({"detail": "index-window error"}, status_code=503)
+
+        @app.get("/index-alerts")
+        def index_alerts():
+            # 지수 급등락 하루 알림 로그(서버측 계산·보관). 모든 클라이언트가 동일 목록.
+            from collector import index_window as _iw
+
+            try:
+                return JSONResponse(_iw.build_index_alerts())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"index-alerts failed: {exc!r}")
+                return JSONResponse({"detail": "index-alerts error"}, status_code=503)
+
+        @app.get("/lp-eval")
+        def lp_eval(date: str | None = None, basis: str | None = None):
+            # LP 평가 — ACE 8종 인정 스프레드 틱 체류시간(분) 분포/통계. lp_eval.db 판독.
+            from collector import lp_eval as _lpe
+
+            try:
+                return JSONResponse(_lpe.build_lp_eval(date, self.etf_names, basis))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"lp-eval failed: {exc!r}")
+                return JSONResponse({"detail": "lp-eval error"}, status_code=503)
+
+        @app.get("/wrap-performance")
+        def wrap_performance():
+            # 성과 비교(track record) 누적수익률 시계열. 소스 xlsx mtime 캐시.
+            if self.wrap is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            payload = self.wrap.build_performance()
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            return JSONResponse(payload)
+
+        @app.get("/wrap-rebalancing")
+        def wrap_rebalancing():
+            # 리밸런싱 이력(track record) 시점별 편입 구성. 소스 xlsx mtime 캐시.
+            if self.wrap is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            payload = self.wrap.build_rebalancing()
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            return JSONResponse(payload)
+
+        # ── GURU[13F] track record ──────────────────────────────────────
+        # 무거운 교차거장 집계(consensus/turnover)는 백그라운드 사전계산분(state)만 서빙,
+        # 단일거장(portfolio/changes/timeline)은 요청 시 로컬 .cache copy 경량 쿼리.
+        # 준비 전(첫 clean 복사 이전)은 503 not-ready. ETag = f(dbVersion, endpoint, params).
+        guru = self.guru13f
+
+        def _guru_serve(request: Request, produce, *etag_parts):
+            # produce() 는 payload 를 만드는 thunk. 요청경로 쿼리 예외도 500 이 아니라
+            # 503(not ready)으로 격하 — collector 는 이 페이지 때문에 절대 500 을 내지 않는다.
+            try:
+                payload = produce()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"guru-13f serve failed: {exc!r}")
+                payload = None
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            etag = guru.etag(*etag_parts)
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers={"ETag": etag})
+            return JSONResponse(payload, headers={"ETag": etag})
+
+        @app.get("/guru-13f/roster")
+        def guru_roster(request: Request):
+            return _guru_serve(request, lambda: guru.roster(), "roster")
+
+        @app.get("/guru-13f/portfolio")
+        def guru_portfolio(request: Request, cik: str, period: str):
+            return _guru_serve(request, lambda: guru.portfolio(cik, period), "portfolio", cik, period)
+
+        @app.get("/guru-13f/changes")
+        def guru_changes(request: Request, cik: str, period: str):
+            return _guru_serve(request, lambda: guru.changes(cik, period), "changes", cik, period)
+
+        @app.get("/guru-13f/timeline")
+        def guru_timeline(request: Request, cik: str):
+            return _guru_serve(request, lambda: guru.timeline(cik), "timeline", cik)
+
+        @app.get("/guru-13f/consensus")
+        def guru_consensus_ep(request: Request, period: str | None = None):
+            return _guru_serve(request, lambda: guru.consensus(period), "consensus", period or "latest")
+
+        @app.get("/guru-13f/turnover")
+        def guru_turnover_ep(request: Request, period: str | None = None):
+            return _guru_serve(request, lambda: guru.turnover(period), "turnover", period or "latest")
+
+        # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────
+        # S:\GE\_Team\07_회의자료 (:ro 마운트) 를 루트로 폴더 탐색 + HTML 원문 반환.
+        @app.get("/meeting/list")
+        def meeting_list(path: str = ""):
+            from collector import meeting as _mt
+            try:
+                data = _mt.list_dir(path)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"meeting/list failed: {exc!r}")
+                return JSONResponse({"detail": "meeting error"}, status_code=503)
+            if data is None:
+                return JSONResponse({"detail": "not found"}, status_code=404)
+            return JSONResponse(data)
+
+        @app.get("/meeting/file")
+        def meeting_file(path: str):
+            from collector import meeting as _mt
+            try:
+                html = _mt.read_file(path)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"meeting/file failed: {exc!r}")
+                return JSONResponse({"detail": "meeting error"}, status_code=503)
+            if html is None:
+                return JSONResponse({"detail": "not found"}, status_code=404)
+            return JSONResponse({"path": path, "html": html})
 
         @app.get("/health")
         def health():
@@ -1018,9 +1263,11 @@ class Collector:
             asyncio.create_task(self._price_loop()),
             asyncio.create_task(self._etf_quote_loop()),
             asyncio.create_task(self._wrap_loop()),
+            asyncio.create_task(self.guru13f.loop(self.stop_event)),
             asyncio.create_task(self._twse_loop()),
             asyncio.create_task(self._ws_loop()),
             asyncio.create_task(self._rollover_loop()),
+            asyncio.create_task(self._lp_eval_loop()),
             asyncio.create_task(self._serve_api()),
         ]
         _log(f"loops started (api on {API_HOST}:{API_PORT})")

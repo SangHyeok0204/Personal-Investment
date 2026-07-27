@@ -57,7 +57,11 @@ const navItems: NavItem[] = [
   {
     label: "track record",
     icon: History,
-    children: [{ label: "FUND1" }, { label: "FUND2" }, { label: "FUND3" }],
+    children: [
+      { label: "TORUS/AI테크", href: "/track-record/torus-aicoretech" },
+      { label: "GURU[13F]", href: "/track-record/guru-13f" },
+      { label: "FUND3" },
+    ],
   },
   {
     label: "기타",
@@ -66,6 +70,7 @@ const navItems: NavItem[] = [
       { label: "AI token usage", href: "/ai-token-usage" },
       { label: "LAN dashboard", href: "/lan-dashboard" },
       { label: "종토방", href: "/stock-discussion" },
+      { label: "회의", href: "/meeting" },
     ],
   },
   {
