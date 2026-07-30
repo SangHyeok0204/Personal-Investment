@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
+import { PerfReportCard } from "@/components/perf-brief/perf-report-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiErrorBanner } from "@/components/states";
 import { cn } from "@/lib/utils";
@@ -454,7 +455,7 @@ export default function TorusAicoretechPage() {
     <>
       <Topbar
         title="TORUS / AI테크"
-        subtitle="track record · 자사(AI코어테크랩) vs 벤치마크(TORUS) 누적수익률 비교"
+        subtitle="성과 분석 · 자사(AI코어테크랩) vs 벤치마크(TORUS) 누적수익률 비교"
         status={
           data ? (
             <span className="truncate text-[11px] text-slate-400">
@@ -529,6 +530,9 @@ export default function TorusAicoretechPage() {
           isLoading={rebalQuery.isLoading}
           isError={rebalQuery.isError}
         />
+
+        {/* 성과보고 (월=위클리 / 화~금=데일리) — S: bat 이 만든 HTML 을 iframe 렌더 */}
+        <PerfReportCard />
       </PageContainer>
     </>
   );

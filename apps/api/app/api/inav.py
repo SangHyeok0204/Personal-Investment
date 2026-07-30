@@ -15,15 +15,21 @@ router = APIRouter(prefix="/api/v1/inav", tags=["inav"])
 # the upstream call is stuck.
 COLLECTOR_TIMEOUT_S = 2.0
 
+# 예외: 사용자가 버튼으로 명시 요청하는 느린 경로(SMB xlsx 파싱)는 2s 예산을 못 지킨다.
+# 폴링이 아니라 1회성 요청이라 api 가 이 시간 묶여도 대시보드 다른 화면에 영향이 없다.
+COLLECTOR_SLOW_TIMEOUT_S = 30.0
 
-async def _proxy_collector(path: str, if_none_match: str | None) -> Response:
+
+async def _proxy_collector(
+    path: str, if_none_match: str | None, timeout_s: float = COLLECTOR_TIMEOUT_S
+) -> Response:
     """Proxy a collector endpoint.
 
     Forwards ETag/If-None-Match so conditional requests short-circuit to 304, and
     degrades to a fast 503 when the collector profile service is stopped or
     unreachable. The api must never hang or crash because the collector is down —
-    the request is capped at a 2s wall-clock budget and any transport error or
-    timeout becomes a 503.
+    the request is capped at a wall-clock budget (2s by default) and any transport
+    error or timeout becomes a 503.
     """
     url = f"{settings.COLLECTOR_URL}{path}"
     request_headers = {}
@@ -31,10 +37,10 @@ async def _proxy_collector(path: str, if_none_match: str | None) -> Response:
         request_headers["If-None-Match"] = if_none_match
 
     try:
-        async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
             upstream = await asyncio.wait_for(
                 client.get(url, headers=request_headers),
-                timeout=COLLECTOR_TIMEOUT_S,
+                timeout=timeout_s,
             )
     except (httpx.HTTPError, asyncio.TimeoutError):
         return JSONResponse(status_code=503, content={"detail": "collector unavailable"})
@@ -52,6 +58,23 @@ async def _proxy_collector(path: str, if_none_match: str | None) -> Response:
         status_code=upstream.status_code,
         media_type=upstream.headers.get("content-type", "application/json"),
         headers=passthrough_headers,
+    )
+
+
+async def _proxy_collector_post(path: str) -> Response:
+    """POST 변형 — 작업 시작처럼 부수효과가 있는 호출용. 본문은 쓰지 않는다."""
+    try:
+        async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT_S) as client:
+            upstream = await asyncio.wait_for(
+                client.post(f"{settings.COLLECTOR_URL}{path}"),
+                timeout=COLLECTOR_TIMEOUT_S,
+            )
+    except (httpx.HTTPError, asyncio.TimeoutError):
+        return JSONResponse(status_code=503, content={"detail": "collector unavailable"})
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type", "application/json"),
     )
 
 
@@ -109,6 +132,22 @@ async def get_inav_lp_eval(
         params.append(f"basis={basis}")
     suffix = f"?{'&'.join(params)}" if params else ""
     return await _proxy_collector(f"/lp-eval{suffix}", if_none_match)
+
+
+@router.get("/lp-eval-ts")
+async def get_inav_lp_eval_ts(
+    date: str | None = None,
+    basis: str | None = None,
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """Proxy the collector's LP 평가 인정 스프레드 틱 시계열(분봉, 차트용)."""
+    params = []
+    if date:
+        params.append(f"date={date}")
+    if basis:
+        params.append(f"basis={basis}")
+    suffix = f"?{'&'.join(params)}" if params else ""
+    return await _proxy_collector(f"/lp-eval-ts{suffix}", if_none_match)
 
 
 @router.get("/wrap-performance")
@@ -180,6 +219,56 @@ async def get_guru13f_turnover(
     return await _proxy_collector(path, if_none_match)
 
 
+# ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────────────
+@router.get("/perf-brief")
+async def get_perf_brief(if_none_match: str | None = Header(default=None)) -> Response:
+    """Proxy the collector's 오늘자 성과보고(월=위클리 / 화~금=데일리) payload."""
+    return await _proxy_collector("/perf-brief", if_none_match)
+
+
+@router.get("/perf-brief/analyze")
+async def get_perf_brief_analyze(
+    mode: str = "daily", if_none_match: str | None = Header(default=None)
+) -> Response:
+    """Proxy the collector's 엑셀 실시간 분석([분석 시작] 버튼). mode=daily|weekly."""
+    return await _proxy_collector(
+        f"/perf-brief/analyze?mode={mode}", if_none_match, COLLECTOR_SLOW_TIMEOUT_S
+    )
+
+
+@router.post("/perf-brief/generate")
+async def post_perf_brief_generate(mode: str = "daily") -> Response:
+    """Kick off 보고서 생성(Windows 러너의 claude 서브프로세스). 즉시 202 로 돌아온다."""
+    return await _proxy_collector_post(f"/perf-brief/generate?mode={mode}")
+
+
+@router.get("/perf-brief/generate/status")
+async def get_perf_brief_generate_status(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """Proxy 보고서 생성 진행상황(러너 작업 상태 + 로그 꼬리)."""
+    return await _proxy_collector("/perf-brief/generate/status", if_none_match)
+
+
+# ── [성과보고 HTML] S: bat 산출물 뷰어 ───────────────────────────────────
+@router.get("/perf-report")
+async def get_perf_report(if_none_match: str | None = Header(default=None)) -> Response:
+    """Proxy 성과보고 HTML 목록 + 오늘치 판정(파일명=기준일 / mtime=작성일)."""
+    return await _proxy_collector("/perf-report", if_none_match)
+
+
+@router.get("/perf-report/file")
+async def get_perf_report_file(
+    path: str = "", if_none_match: str | None = Header(default=None)
+) -> Response:
+    """Proxy 성과보고 HTML 원문. SMB 읽기라 느린 경로 예산을 쓴다."""
+    from urllib.parse import quote
+
+    return await _proxy_collector(
+        f"/perf-report/file?path={quote(path)}", if_none_match, COLLECTOR_SLOW_TIMEOUT_S
+    )
+
+
 # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────────────
 @router.get("/meeting/list")
 async def get_meeting_list(
@@ -195,7 +284,14 @@ async def get_meeting_list(
 async def get_meeting_file(
     path: str, if_none_match: str | None = Header(default=None)
 ) -> Response:
-    """Proxy the collector's 회의자료 HTML 원문(지정 경로)."""
+    """Proxy the collector's 회의자료 HTML 원문(지정 경로).
+
+    사용자가 파일을 고를 때만 도는 1회성 경로라 폴링용 2초 예산을 쓰지 않는다 —
+    회의자료에는 20MB 넘는 통합본이 있고(예: Guru_베팅현황.html), collector→api
+    전송만 2초 근처라 기본 예산에서는 그대로 503 이 났다(2026-07-29 실제 발생).
+    """
     from urllib.parse import quote
 
-    return await _proxy_collector(f"/meeting/file?path={quote(path)}", if_none_match)
+    return await _proxy_collector(
+        f"/meeting/file?path={quote(path)}", if_none_match, COLLECTOR_SLOW_TIMEOUT_S
+    )

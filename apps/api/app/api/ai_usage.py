@@ -45,6 +45,7 @@ def _build_account(raw: dict, *, has_plan: bool) -> AiUsageAccountOut:
         captured_at=raw.get("captured_at"),
         age_seconds=age_seconds,
         stale=stale,
+        extra_usage_enabled=raw.get("extra_usage_enabled"),
         items=items,
     )
 

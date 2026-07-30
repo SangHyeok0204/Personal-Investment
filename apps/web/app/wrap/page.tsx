@@ -68,7 +68,6 @@ export default function WrapPage() {
   });
 
   const [selKey, setSelKey] = useState<string | null>(null);
-  const [krw, setKrw] = useState(true); // 원화 환산 토글 (off=USD, on=환율 포함). 기본=원화 환산.
 
   const data = query.data;
   const collectorDown =
@@ -130,21 +129,15 @@ export default function WrapPage() {
         ) : data && selected ? (
           <div className="space-y-4">
             {/* ① 포트폴리오 수익률 카드 (① 전일확정 · ② 실시간) */}
-            <div>
-              <div className="mb-2 flex items-center justify-end">
-                <FxToggle krw={krw} onChange={setKrw} />
-              </div>
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">
-                {portfolios.map((p) => (
-                  <PortfolioCard
-                    key={p.key}
-                    p={p}
-                    selected={p.key === selected.key}
-                    krw={krw}
-                    onSelect={() => setSelKey(p.key)}
-                  />
-                ))}
-              </div>
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
+              {portfolios.map((p) => (
+                <PortfolioCard
+                  key={p.key}
+                  p={p}
+                  selected={p.key === selected.key}
+                  onSelect={() => setSelKey(p.key)}
+                />
+              ))}
             </div>
 
             {/* ② 분류별 비중·기여도 트리 */}
@@ -210,55 +203,45 @@ function fmtBasis(d: string | null | undefined): string {
   return `${Number(d.slice(4, 6))}/${Number(d.slice(6, 8))}`;
 }
 
-// 원화 환산 토글 — off=USD 가격수익률, on=환율 포함 원화수익률. ①②에 동시 적용.
-function FxToggle({
-  krw,
-  onChange,
+/* 환 반영 수익률의 분해 — "(−5.54% 주식 + −0.70% 환)".
+ * 표시값(total)은 환을 반영한 수익률이고, 주식분은 현지통화 수익률, 환분은 그 차이다.
+ * 곱셈으로 결합되므로(1+주식)(1+환) 두 성분의 산술합은 total 과 미세하게 다를 수 있는데,
+ * 환분을 total−주식으로 잡아 화면에서는 항상 합이 맞게 둔다. */
+function FxBreakdown({
+  total,
+  local,
 }: {
-  krw: boolean;
-  onChange: (v: boolean) => void;
+  total: number | null | undefined;
+  local: number | null | undefined;
 }) {
+  if (total == null || local == null) return null;
+  const fx = total - local;
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={krw}
-      onClick={() => onChange(!krw)}
-      title="수익률을 원화(환율 포함)로 환산"
-      className="inline-flex items-center gap-2 text-[11px] font-semibold"
+    // 서체·색은 위 수익률 숫자와 동일하게(그 숫자의 부호색을 그대로 물려받는다).
+    <span
+      className={cn(
+        "text-[12px] font-extrabold tabular-nums",
+        signTextClass(total),
+      )}
     >
-      <span className={krw ? "text-ge-point" : "text-ink-muted"}>원화 환산</span>
-      <span
-        className={cn(
-          "relative h-4 w-7 rounded-full transition-colors",
-          krw ? "bg-ge-point" : "bg-slate-300",
-        )}
-      >
-        <span
-          className={cn(
-            "absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all",
-            krw ? "left-3.5" : "left-0.5",
-          )}
-        />
-      </span>
-    </button>
+      ({signedPct(local)} 주식 + {signedPct(fx)} 환)
+    </span>
   );
 }
 
 function PortfolioCard({
   p,
   selected,
-  krw,
   onSelect,
 }: {
   p: WrapPortfolio;
   selected: boolean;
-  krw: boolean;
   onSelect: () => void;
 }) {
-  // ② 전일종가→최근체결가, ① 전전일→전일 종가수익률 — 토글에 따라 USD/원화.
-  const ret2 = krw ? p.return2_krw ?? null : p.return2_usd ?? p.return_pct;
-  const ret1 = krw ? p.return1_krw ?? null : p.return1_usd ?? null;
+  // ② 전일종가→최근체결가, ① 전전일→전일 종가수익률 — 둘 다 환 반영값을 대표로 쓰고,
+  // 괄호 안에 주식/환 분해를 붙인다(원화 환산 토글은 제거됨).
+  const ret2 = p.return2_krw ?? p.return2_usd ?? p.return_pct;
+  const ret1 = p.return1_krw ?? p.return1_usd ?? null;
   const basis = fmtBasis(p.return1_basis_date);
   const stale1 = p.return1_is_current === false;
 
@@ -299,6 +282,9 @@ function PortfolioCard({
           {signedPct(ret1)}
         </span>
       </div>
+      <div className="flex justify-end">
+        <FxBreakdown total={ret1} local={p.return1_usd} />
+      </div>
       <div className="flex items-center gap-1.5 text-[10px] text-ink-faint">
         <span>{basis ? `${basis} 종가기준` : "기준일 대기"}</span>
         {stale1 && (
@@ -321,6 +307,9 @@ function PortfolioCard({
         >
           <RollingText text={signedPct(ret2)} />
         </span>
+      </div>
+      <div className="flex justify-end">
+        <FxBreakdown total={ret2} local={p.return2_usd ?? p.return_pct} />
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-ink-muted">
@@ -714,7 +703,7 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
         </thead>
         <tbody>
           {rows.map((h, i) => (
-            <HoldingRow key={`${h.ticker}-${i}`} h={h} />
+            <HoldingRow key={`${h.ticker}-${i}`} h={h} fxPct={p.fx_return_pct} />
           ))}
         </tbody>
       </table>
@@ -732,7 +721,31 @@ const CURRENCY_TEXT: Record<string, string> = {
   CNY: "text-rose-500",
 };
 
-function HoldingRow({ h }: { h: WrapHolding }) {
+/* '환 수익률' 열의 값 — 두 의미를 한 열에 담는다.
+ *   현금 행 : 순수 환 등락률(현금의 수익은 환 변동이 전부라 둘이 같은 값이다)
+ *   종목 행 : 환을 반영했을 때의 종목 수익률 (1+현지수익률)(1+환등락) − 1
+ * 국내물은 환이 상쇄돼 종목 수익률과 같은 값이 나온다. */
+function fxCell(h: WrapHolding, fxPct: number | null | undefined) {
+  if (h.is_cash) {
+    return {
+      value: fxPct ?? null,
+      title: "현금 — 순수 환 등락률 (현금 수익은 환 변동이 전부)",
+    };
+  }
+  return {
+    value: h.return_krw_pct ?? null,
+    title: "환을 반영했을 때의 종목 수익률 = (1+현지수익률)×(1+환등락)−1",
+  };
+}
+
+function HoldingRow({
+  h,
+  fxPct,
+}: {
+  h: WrapHolding;
+  fxPct: number | null | undefined;
+}) {
+  const fx = fxCell(h, fxPct);
   return (
     <tr
       className={cn(
@@ -797,11 +810,11 @@ function HoldingRow({ h }: { h: WrapHolding }) {
       <td
         className={cn(
           "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
-          h.fx_return_pct == null ? "text-ink-faint" : signTextClass(h.fx_return_pct),
+          fx.value == null ? "text-ink-faint" : signTextClass(fx.value),
         )}
-        title="해당 통화의 원화 환율 전일 대비 등락률 (KRW 종목은 해당 없음)"
+        title={fx.title}
       >
-        {h.fx_return_pct == null ? EMDASH : signedPct(h.fx_return_pct)}
+        {fx.value == null ? EMDASH : signedPct(fx.value)}
       </td>
       <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
         {fmtNum(h.weight_pct, 2, 2)}

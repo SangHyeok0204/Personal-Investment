@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CalendarDays, Clock, Menu, Search, User } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CalendarDays, Clock, Menu, RefreshCw, Search, User } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { getMeetingFile } from "@/lib/api";
 import { MoversTicker } from "@/components/movers-ticker";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +15,11 @@ import { cn } from "@/lib/utils";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
+
+// 하단 통합 박스의 원본 — S:\GE\_Team\07_회의자료\글로벌주식운용부 회의 체계.html.
+// 회의 마운트(/srv/legacy/meeting) 루트 바로 아래이므로 rel 은 파일명 그대로다.
+// 부서에서 이 파일을 직접 고치므로 상단 '회의 체계 갱신' 버튼으로 다시 읽어온다.
+const MEETING_DOC = "글로벌주식운용부 회의 체계.html";
 
 function formatDate(d: Date) {
   return {
@@ -46,12 +53,37 @@ export default function HomePage() {
   const date = now ? formatDate(now) : null;
   const clock = now ? formatClock(now) : "—";
 
+  // 하단 통합 박스 — 주간 회의 운영 체계 HTML 을 iframe(srcDoc)으로.
+  // 회의 마운트(/srv/legacy/meeting) 하위 · 자체완결 HTML · 정적이라 재폴링 안 함.
+  // 원본이 바뀌면 상단 '회의 체계 갱신' 버튼(refetch)으로 다시 읽는다.
+  const meetingQuery = useQuery({
+    queryKey: ["landingMeeting", MEETING_DOC],
+    queryFn: () => getMeetingFile(MEETING_DOC),
+    staleTime: 10 * 60_000,
+  });
+
   return (
     <div className="flex min-h-screen flex-col gap-4 p-4 xl:gap-5 xl:p-5">
       {/* 상단 헤더 */}
       <header className="flex h-14 shrink-0 items-center gap-4 rounded-2xl border border-hairline bg-canvas px-5 shadow-card">
         <Menu className="h-5 w-5 text-ink-muted" />
         <div className="flex-1" />
+        {/* 회의 체계 갱신 — S: 원본(글로벌주식운용부 회의 체계.html)을 다시 읽어
+            하단 박스를 최신본으로 교체한다. */}
+        <button
+          type="button"
+          onClick={() => void meetingQuery.refetch()}
+          disabled={meetingQuery.isFetching}
+          className="flex items-center gap-1.5 rounded-lg border border-hairline bg-white px-3 py-1.5 text-xs font-bold text-ink-secondary transition-colors hover:bg-canvas-soft disabled:opacity-60"
+        >
+          <RefreshCw
+            className={cn(
+              "h-3.5 w-3.5",
+              meetingQuery.isFetching && "animate-spin",
+            )}
+          />
+          회의 체계 갱신
+        </button>
         <button
           type="button"
           onClick={() =>
@@ -81,16 +113,27 @@ export default function HomePage() {
 
       {/* 본문: 좌측 박스 영역 + 우측 위젯 레일 */}
       <div className="flex min-h-0 flex-1 gap-4 xl:gap-5">
-        {/* 좌측 — 상단 2박스 + 하단 2박스 (크기 상이) */}
-        <div className="flex min-w-0 flex-1 flex-col gap-4 xl:gap-5">
+        {/* 좌측 — 상단 2박스 + 하단 통합 박스. min-h-0 필수: 없으면 자식(회의 박스)
+            콘텐츠 높이가 컬럼을 밀어 페이지가 y축으로 넘친다(flex 높이 봉쇄). */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 xl:gap-5">
           <div className="grid h-[150px] shrink-0 grid-cols-2 gap-4 xl:gap-5">
             <Box tone="blue" label="시장 요약" />
             <Box tone="plain" label="주요 지표" />
           </div>
-          <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 xl:gap-5">
-            <Box tone="plain" label="모니터링 A" />
-            <Box tone="plain" label="모니터링 B" />
-          </div>
+          {/* 하단 — 모니터링 A/B 통합 박스에 GE 회의 HTML 을 헤더 없이 꽉 채워 렌더.
+              sandbox 에서 allow-scripts 를 빼 문서 내장 편집 스크립트(<script id=edit-js>)를
+              비활성화 → 수정/저장 버튼·서식 툴바 안 뜨고 정적 리포트만 읽기전용으로 표시. */}
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
+            {meetingQuery.data ? (
+              <MeetingEmbed html={prepMeetingHtml(meetingQuery.data.html)} />
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center text-xs font-semibold text-ink-faint">
+                {meetingQuery.isError
+                  ? "회의 자료를 불러오지 못했습니다"
+                  : "회의 자료 불러오는 중…"}
+              </div>
+            )}
+          </section>
         </div>
 
         {/* 우측 — 검색 / 날짜 / 시간 + 세로 박스 */}
@@ -120,6 +163,79 @@ export default function HomePage() {
           <Box tone="blue" label="퀀트 스코어보드" className="min-h-0 flex-1" />
           <Box tone="plain" label="바로가기" className="h-[76px] shrink-0" />
         </aside>
+      </div>
+    </div>
+  );
+}
+
+// A4 가로(297mm) @96dpi 픽셀폭 — GE_회의.html 이 A4 landscape 설계라 이 폭으로 렌더.
+const A4L_W = 1123;
+
+// 대시보드 렌더용 HTML 가공(S: 원본 파일은 불변): 하단 '글로벌주식운용부 · 주간 회의
+// 운영 체계 · 기준일 …' 푸터 div 제거 (2026-07-29 사용자 요청).
+function prepMeetingHtml(html: string): string {
+  return html.replace(/<div[^>]*class="footer"[^>]*>[\s\S]*?<\/div>/i, "");
+}
+
+// 회의 HTML 을 박스 가로폭에 꽉 맞춰(fit-to-width) 좌우 여백 없이 렌더한다. 문서를
+// 고정폭(A4 가로)으로 렌더한 뒤 박스 실폭/A4폭 배율로 transform scale. 세로가 넘치면
+// 박스 안에서만 스크롤(페이지는 좌측 컬럼 min-h-0 봉쇄로 한 화면 유지). 스케일된
+// 래퍼(=시각 크기)로 스크롤 영역을 정확히 잡는다(transform 만으론 안 생김). 실제
+// 콘텐츠 높이는 same-origin contentDocument 로 측정.
+function MeetingEmbed({ html }: { html: string }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [box, setBox] = useState({ w: A4L_W, h: 700 });
+  const [contentH, setContentH] = useState(760);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const upd = () =>
+      setBox({ w: el.clientWidth || A4L_W, h: el.clientHeight || 700 });
+    upd();
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const measure = () => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return;
+    const h = Math.max(
+      doc.documentElement?.scrollHeight ?? 0,
+      doc.body?.scrollHeight ?? 0,
+    );
+    if (h > 0) setContentH(h);
+  };
+  const onLoad = () => {
+    measure();
+    window.setTimeout(measure, 400); // 웹폰트 로드 후 리플로우 재측정
+  };
+  // 가로폭을 꽉 채운다(좌우 여백 제거) — 박스 실폭/A4폭 배율. 세로가 넘치면 박스
+  // 안에서만 스크롤(overflow-y-auto), 짧으면 하단은 문서 배경(흰색). 페이지는 flex
+  // 봉쇄(좌측 컬럼 min-h-0)로 한 화면 유지되고 이 박스만 내부 스크롤한다.
+  const scale = box.w / A4L_W;
+  return (
+    <div
+      ref={boxRef}
+      className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden bg-white"
+    >
+      <div style={{ width: box.w, height: contentH * scale }}>
+        <iframe
+          ref={frameRef}
+          title="GE 회의"
+          srcDoc={html}
+          sandbox="allow-same-origin"
+          scrolling="no"
+          onLoad={onLoad}
+          style={{
+            width: A4L_W,
+            height: contentH,
+            transform: `scale(${scale})`,
+            transformOrigin: "0 0",
+            border: 0,
+            display: "block",
+          }}
+        />
       </div>
     </div>
   );

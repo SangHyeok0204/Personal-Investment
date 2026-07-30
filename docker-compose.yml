@@ -154,6 +154,14 @@ services:
       - "/mnt/s/GE/raw/data/13F기관내부자/db:/srv/legacy/guru13f_db:ro"
       # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
       - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
+      # [성과보고] 정기미팅 폴더 — performance-brief 스킬이 만든 daily_*.json /
+      # weekly_*.json 을 읽어 TORUS/AI테크 페이지에 네이티브 렌더. 소스 xlsx·HTML 도
+      # 같은 폴더에 있지만 collector 는 JSON 만 본다.
+      - "/mnt/s/GE/Wonjae/07_회의자료/정기미팅:/srv/legacy/perf_brief:ro"
+      # [성과보고] 성과 분석 자동화 프로젝트 — S: 의 bat 이 만든 자체완결 HTML 을 읽어
+      # TORUS/AI테크 페이지에 iframe(srcDoc) 렌더. 계산·서사 전부 S: 쪽 소관이라
+      # collector 는 파일명 규약으로 고르고 원문만 넘긴다. 루트와 output/ 만 스캔.
+      - "/mnt/s/GE/raw/오퍼레이션/성과분석/운용 펀드 성과 분석 자동화:/srv/legacy/perf_analysis:ro"
       # LP 평가 일별 산출물 — S: 로의 유일한 쓰기(:rw). collector 가 09:05~15:20 매
       # 표본마다 그날치 JSON(lp_eval_{date}.json) + 전기간 마스터 CSV(lp_eval_history.csv)
       # 를 덮어쓴다. etf_data(:ro)의 하위 폴더지만 별개 마운트라 쓰기 가능.

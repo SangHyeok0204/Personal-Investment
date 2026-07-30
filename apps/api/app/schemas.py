@@ -94,6 +94,9 @@ class AiUsageAccountOut(BaseModel):
     captured_at: str | None = None
     age_seconds: float | None = None
     stale: bool
+    # '사용 크레딧'(초과분 과금) 토글. False 면 플랜 한도에서 그대로 멈춘다.
+    # None = 판정 불가(스크래퍼가 스위치를 못 찾음 / codex 는 이 개념이 없음).
+    extra_usage_enabled: bool | None = None
     items: list[AiUsageMeterOut] = []
 
 

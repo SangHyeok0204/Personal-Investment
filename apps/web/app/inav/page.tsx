@@ -11,8 +11,9 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  BarChart3,
   ChevronDown,
+  Eye,
+  EyeOff,
   LayoutGrid,
   RotateCcw,
   Search,
@@ -25,25 +26,24 @@ import {
   getInavComponents,
   getInavHoga,
   getInavSnapshot,
-  getLpEval,
   type HogaEtf,
   type InavComponentRow,
   type InavComponentsPayload,
   type InavEtf,
   type InavSnapshot,
   type InavSums,
-  type LpEvalBasisStat,
-  type LpEvalEtf,
 } from "@/lib/api";
 import { formatKrw, formatRate, formatRelativeTime } from "@/lib/format";
 import {
-  DEV_ABS_ALERT_PCT,
-  SPREAD_ALERT_MIN_TICKS,
+  devSeverity,
   lpQuoteMissing,
-  recognizedSpreadTicks,
+  recognizedSpread,
+  spreadBp,
+  spreadSeverity,
   tickLadder,
   tickSize,
   toNum,
+  type Severity,
 } from "@/lib/hoga";
 import { RollingText } from "@/components/rolling-text";
 import { PageContainer } from "@/components/layout/page-header";
@@ -166,6 +166,12 @@ function signedPct(pct: number, digits = 2): string {
   return `${pct > 0 ? "+" : ""}${pct.toFixed(digits)}%`;
 }
 
+// 호가 스프레드 bp 표기 — 1틱이 4~5bp라 정수로 끊으면 1틱 차이가 뭉개진다.
+// 발화 구간(3~20틱)이 대략 12~85bp라 소수 1자리면 충분하다 (2026-07-29).
+function formatBp(bp: number): string {
+  return bp.toFixed(1);
+}
+
 /* ── 임시 조치 (2026-07-23) ───────────────────────────────────────────
    ACE고배당주Plus커버드콜액티브(0199C0)는 구성종목이 전부 국내 주식이라
    실제괴리와 장중괴리가 원리상 같아야 한다. 자체 iNAV 쪽이 아직 어긋나 있어
@@ -212,9 +218,11 @@ export default function InavPage() {
   const [view, setView] = useState<ViewMode>("cards");
   const [metrics, setMetrics] = useState<MetricKey[]>(DEFAULT_METRICS);
   const [modalTicker, setModalTicker] = useState<string | null>(null);
-  const [lpEvalOpen, setLpEvalOpen] = useState(false);
   // 카드 뷰에서 사용자가 X로 숨긴 ETF (localStorage 영속). 삭제는 곧 숨김.
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // 지수 급등락 줄 표시 여부 (localStorage 영속). 끄면 그 줄이 차지한 칸을 완전히
+  // 내놓는다 — 숨김 상태에서도 Topbar '지수' 토글로 되살릴 수 있다 (2026-07-30).
+  const [showIndex, setShowIndex] = useState(true);
   // 지수 급등락 하루 알림 (서버측 계산) — AlertBar 3번째 줄에 지수별 최신 1건 표시.
   const { alerts: indexAlerts } = useIndexAlerts();
 
@@ -240,6 +248,16 @@ export default function InavPage() {
         /* 무시 */
       }
     }
+    if (window.localStorage.getItem("inav-show-index-row") === "0")
+      setShowIndex(false);
+  }, []);
+
+  const toggleIndexRow = useCallback(() => {
+    setShowIndex((prev) => {
+      const next = !prev;
+      window.localStorage.setItem("inav-show-index-row", next ? "1" : "0");
+      return next;
+    });
   }, []);
 
   const hideCard = useCallback((ticker: string) => {
@@ -281,7 +299,7 @@ export default function InavPage() {
     query.error instanceof ApiError &&
     query.error.status === 503;
 
-  // 카드 뷰: ACE 지정 8종 우선, 나머지는 스냅샷 순서 유지 (stable sort).
+  // 카드 뷰: ACE 지정 9종 우선, 나머지는 스냅샷 순서 유지 (stable sort).
   const orderedEtfs = useMemo(() => {
     const etfs = data?.etfs ?? [];
     const rank = new Map(CARD_TICKER_ORDER.map((t, i) => [t, i]));
@@ -304,30 +322,44 @@ export default function InavPage() {
     ((hoga.hoga_last_received_age_s ?? Infinity) > HOGA_STALE_S ||
       (hoga.hoga_source_age_s ?? Infinity) > HOGA_STALE_S);
 
-  // 알림 바 시간대 상태(open/preopen/closed) — 09:00~16:00 만 알림 표시, 16:00 이후
-  // '장 마감', 06:00~09:00 '장 개시 대기'. open 이 아니면 호가/괴리 알림을 억제한다
-  // (문구만 다름). 3초 폴링마다 재렌더되므로 경계는 폴링 주기 안에서 갱신된다.
+  // 요약 바 시간대 상태(open/preopen/closed) — LP 호가 의무시간 09:05~15:20 만 값
+  // 표시, 밖에서는 값을 숨기고 문구만 둔다(2026-07-30 확정).
+  // 3초 폴링마다 재렌더되므로 경계는 폴링 주기 안에서 갱신된다.
   const phase = marketPhase();
-  const quietWindow = phase !== "open"; // preopen·closed 모두 알림 억제
-  // 알림 0건을 "이상 없음"이라 말할 수 있는 상태인가. 피드가 죽었거나 지연이면
-  // 판정 자체가 불가능하므로 거짓 안심을 주지 않는다. '물량X' 판정도 이 신선도
-  // 게이트를 쓴다 — 피드가 끊긴 걸 "LP 물량 없음"으로 오인하지 않도록.
-  const alertsReady = !collectorDown && !hogaStale && hogaByCode.size > 0;
-  // ACE 호가·괴리 알림 (고정 목록으로 표시).
-  const aceAlerts = useMemo(
-    () => buildAceAlerts(data?.etfs ?? [], hogaByCode, quietWindow, alertsReady),
-    [data, hogaByCode, quietWindow, alertsReady],
+  const quietWindow = phase !== "open";
+  // 값을 믿을 수 있는 상태인가. 두 줄의 출처가 달라 게이트도 따로 둔다 —
+  // 호가·물량은 CHECK 피드(지연 10s 초과면 낡은 호가), 괴리는 collector 스냅샷.
+  // 예전엔 호가 게이트 하나로 '물량X'만 억제하고 bp 는 낡은 값으로 계속 띄웠다(허점 ⑥).
+  const hogaReady = !quietWindow && !collectorDown && !hogaStale && hogaByCode.size > 0;
+  const devReady = !quietWindow && !collectorDown && (data?.etfs?.length ?? 0) > 0;
+  // ACE 9종 상시 요약 (고정 순서).
+  const aceSummaries = useMemo(
+    () => buildAceSummaries(data?.etfs ?? [], hogaByCode),
+    [data, hogaByCode],
   );
-  // 카드 테두리는 알림 바와 1:1 연동 — 바에 뜬 종목이 곧 빨간 카드.
-  const alertsByCode = useMemo(() => {
-    const map = new Map<string, AceAlert[]>();
-    for (const a of aceAlerts) {
-      const list = map.get(a.code);
-      if (list) list.push(a);
-      else map.set(a.code, [a]);
+  // 카드 테두리는 요약 바와 1:1 연동 — 바에서 빨강인 종목이 곧 빨간 카드.
+  // 상시 표시로 바뀐 뒤로는 '값이 있으면 알림'이 아니라 '빨강 밴드면 알림'이다.
+  const criticalByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!hogaReady && !devReady) return map;
+    for (const s of aceSummaries) {
+      if (!isCritical(s)) continue;
+      const parts: string[] = [];
+      if (hogaReady) {
+        if (s.hoga.kind === "missing") parts.push("물량X");
+        else if (s.hoga.kind === "bp" && spreadSeverity(s.hoga.bp) === "crit")
+          parts.push(`${formatBp(s.hoga.bp)}bp`);
+      }
+      if (devReady) {
+        if (s.actual != null && devSeverity(s.actual) === "crit")
+          parts.push(`실제괴리 ${signedPct(s.actual)}`);
+        if (s.intra != null && devSeverity(s.intra) === "crit")
+          parts.push(`장중괴리 ${signedPct(s.intra)}`);
+      }
+      if (parts.length > 0) map.set(s.code, parts.join(" · "));
     }
     return map;
-  }, [aceAlerts]);
+  }, [aceSummaries, hogaReady, devReady]);
 
   return (
     <>
@@ -355,16 +387,29 @@ export default function InavPage() {
                 숨김 {hidden.size} · 복원
               </button>
             )}
+            <button
+              onClick={toggleIndexRow}
+              title={
+                showIndex
+                  ? "지수 급등락 줄 숨기기 (칸을 내놓습니다)"
+                  : "지수 급등락 줄 표시"
+              }
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-semibold transition-colors",
+                showIndex
+                  ? "border-ge-point bg-ge-point/[0.08] text-ge-point"
+                  : "border-hairline bg-canvas-soft text-ink-muted hover:border-ge-point hover:text-ge-point",
+              )}
+            >
+              {showIndex ? (
+                <Eye className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" />
+              )}
+              지수
+            </button>
             <ViewSwitch view={view} onChange={changeView} />
             <MetricSelect visible={metrics} onToggle={toggleMetric} />
-            <button
-              onClick={() => setLpEvalOpen(true)}
-              title="LP 평가 — 인정 스프레드 틱 분포·통계(일별)"
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-hairline bg-canvas-soft px-2.5 text-[12px] font-semibold text-ink-muted transition-colors hover:border-ge-point hover:text-ge-point"
-            >
-              <BarChart3 className="h-3.5 w-3.5" />
-              LP평가
-            </button>
           </>
         }
       />
@@ -372,10 +417,12 @@ export default function InavPage() {
       {/* Topbar(h-16) 바로 아래 스티키 띠 — 띠 자체는 상시, 알림 칩만 생겼다 사라진다. */}
       <div className="sticky top-16 z-10">
         <AlertBar
-          items={aceAlerts}
+          summaries={aceSummaries}
           indexAlerts={indexAlerts}
-          ready={alertsReady}
+          hogaReady={hogaReady}
+          devReady={devReady}
           phase={phase}
+          showIndex={showIndex}
         />
       </div>
 
@@ -415,7 +462,7 @@ export default function InavPage() {
                 onHide={hideCard}
                 hogaByCode={hogaByCode}
                 hogaStale={hogaStale}
-                alertsByCode={alertsByCode}
+                criticalByCode={criticalByCode}
               />
             ) : (
               <EtfTable
@@ -443,8 +490,6 @@ export default function InavPage() {
             onClose={() => setModalTicker(null)}
           />
         )}
-
-        {lpEvalOpen && <LpEvalModal onClose={() => setLpEvalOpen(false)} />}
       </PageContainer>
     </>
   );
@@ -662,15 +707,22 @@ function MetricSelect({
   );
 }
 
-// 알림 바 시간대 상태 — 하루 3구간(KST, 2026-07-27 사용자 요청):
-//   · open    09:00~16:00        : 호가·물량/괴리 알림 표시(정상).
-//   · closed  16:00~익일 06:00   : '장 마감' — 알림 억제, 상태 문구만.
-//   · preopen 06:00~09:00        : '장 개시 전 · 점검 대기' — LP 호가가 아직
-//     신뢰할 수 없어 알림 억제(2026-07-22). 장전 동시호가 포함, 09:00 개장에 open.
-// preopen·closed 모두 알림은 억제하고 상태 문구만 다르다.
-const MARKET_OPEN_MIN = 9 * 60; // 09:00 개장 → 알림 시작
-const ALERT_END_MIN = 16 * 60; // 16:00 → 알림 종료, 장 마감 표시 시작
-const PREOPEN_START_MIN = 6 * 60; // 06:00 → 장 마감 종료, 장 개시 대기 시작
+/* 요약 바 시간대 상태 — 창의 기준은 '장 시간'이 아니라 **KRX LP 호가 제출 의무
+   시간(09:05~15:20 KST)** 이다. 그 밖에서 호가가 얇은 건 LP 태만이 아니라 규정상
+   면제이므로, 값을 띄우면 곧바로 오독이 된다.
+     · open    09:05~15:20      : 값 표시(정상 감시 구간).
+     · closed  15:20~익일 06:00 : 의무 종료 — 값 숨기고 문구만.
+     · preopen 06:00~09:05      : 의무 시작 전 — 값 숨기고 문구만. 장전 동시호가와
+       개장 직후 5분을 모두 포함한다.
+   근거(2026-07-30 확인): 삼성자산운용 Kodex ETF 가이드 "9:00~9:05 : 호가 제출 불필요
+   시간", 단일가매매 접수시간(오전 08:00~09:00 / 오후 15:20~15:30)도 면제.
+   collector lp_eval 의 표본 구간(SESSION_START_MIN/SESSION_END_MIN)과 정확히 같다 —
+   화면과 통계가 다른 창을 쓰면 서로 대조가 안 된다. */
+const MARKET_OPEN_MIN = 9 * 60 + 5; // 09:05 LP 의무 시작 (개장 직후 5분은 면제)
+const ALERT_END_MIN = 15 * 60 + 20; // 15:20 종가 단일가 진입 = 의무 종료
+const PREOPEN_START_MIN = 6 * 60; // 06:00 → '장 마감' 종료, '점검 대기' 시작
+// ※ 연속장은 15:30 까지고 개장은 09:00 이라 문구는 시장 시간과 5~10분 어긋난다.
+//   목적이 'LP 의무 구간 감시'라 문구도 의무 기준으로 적는다(아래 phaseText).
 
 type MarketPhase = "open" | "preopen" | "closed";
 
@@ -687,147 +739,174 @@ function kstMinutesNow(): number {
   return (h % 24) * 60 + m;
 }
 
-// 3초 폴링마다 재렌더되므로 06:00/09:00/16:00 경계는 폴링 주기 안에서 갱신된다.
+// 3초 폴링마다 재렌더되므로 06:00/09:05/15:20 경계는 폴링 주기 안에서 갱신된다.
 function marketPhase(): MarketPhase {
   const t = kstMinutesNow();
-  if (t >= MARKET_OPEN_MIN && t < ALERT_END_MIN) return "open"; // 09:00~16:00
-  if (t >= PREOPEN_START_MIN && t < MARKET_OPEN_MIN) return "preopen"; // 06:00~09:00
-  return "closed"; // 16:00~익일 06:00
+  if (t >= MARKET_OPEN_MIN && t < ALERT_END_MIN) return "open"; // 09:05~15:20
+  if (t >= PREOPEN_START_MIN && t < MARKET_OPEN_MIN) return "preopen"; // 06:00~09:05
+  return "closed"; // 15:20~익일 06:00
 }
 
-/* ── ACE 호가·괴리 알림 전광판 (고정 목록) ─────────────────────────────
-   대상: ACE 8종. 문구는 최대한 함축한다 — 줄 라벨이 이미 성격을 말해주므로 칩에는
-   핵심 수치만 남긴다.
-   · "N틱": 인정 스프레드가 N틱. 매도·매수 각각 최우선호가부터 처음 1,000주 이상
-     실린 틱을 "인정호가"로 잡고, (인정매도호가 − 인정매수호가)를 틱단위로 나눈
-     값이다. 카드 현재가와 무관한 순수 호가 스프레드로, 얇은 호가만 앞에 깔려
-     있으면 인정호가가 뒤로 밀려 스프레드가 벌어진다. 3틱 이상일 때만 알린다 —
-     1~2틱은 정상 스프레드 (2026-07-24 사용자 재정의).
-   · "실제괴리": |실제괴리| ≥ DEV_ABS_ALERT_PCT(1%).
-   · "장중괴리": |장중괴리(거래소 공시)| ≥ DEV_ABS_ALERT_PCT — 실제괴리가 미국
-     데이장 반영으로 공시 iNAV와 갈라질 수 있어 별도 감시.
-   quiet=true(개장 09:00~16:00 밖 — 장 개시 대기/장 마감)면 괴리 2종·호가 판정을
-   모두 건너뛴다. */
+/* ── ACE 호가·괴리 상시 요약 ────────────────────────────────────────────
+   ★2026-07-30 전환: 조건부 알림 → **상시 요약**. 예전엔 임계값을 넘은 종목만 칩으로
+   띄웠는데(호가 15bp↑ / 괴리 1%↑), 이제 ACE 9종 전부의 값을 항상 보여주고 심각성은
+   색으로만 나타낸다(hoga.ts spreadSeverity/devSeverity). 임계값을 넘지 않아도 값이
+   보이므로 "지금 정상인지"와 "얼마나 정상인지"를 함께 읽을 수 있다.
 
-interface AceAlert {
-  key: string;
+   · 호가·물량 = 인정 스프레드 bp. 매도·매수 각각 최우선호가부터 바깥으로 훑어 처음
+     LP 1,000주 이상 실린 호가를 "인정호가"로 잡고, (인정매도호가 − 인정매수호가)를
+     체결가로 나눈 값이다. 카드 현재가와 무관한 순수 호가 스프레드.
+     한쪽이라도 인정호가가 없으면 bp 를 낼 수 없어 '물량X'.
+   · 괴리 = 실제(자체 iNAV 기준)·장중(거래소 공시) 2종. 실제괴리는 미국 데이장을
+     반영해 공시와 갈라질 수 있어 따로 본다 (2026-07-23).
+
+   표시 억제(quiet·피드 끊김)는 렌더 쪽에서 처리한다 — 여기서는 계산만 한다. */
+
+// 호가 셀 상태. na = 판정 불가(피드에 종목 없음 / LP 미탑재 구 피드 / 체결가 없음)로,
+// "LP 가 물량을 안 깔았다"(missing)와 구분한다.
+type HogaCell =
+  | { kind: "bp"; bp: number; ticks: number }
+  | { kind: "missing" }
+  | { kind: "na" };
+
+interface AceSummary {
   code: string;
-  status: string;
-  severity: "hoga" | "dev";
+  name: string; // 툴팁용 정식명 (칩에는 약칭만 쓴다)
+  hoga: HogaCell;
+  actual: number | null; // 실제괴리 %
+  intra: number | null; // 장중괴리 %
 }
 
-function buildAceAlerts(
+function buildAceSummaries(
   etfs: InavEtf[],
   hogaByCode: Map<string, HogaEtf>,
-  quiet: boolean,
-  feedFresh: boolean,
-): AceAlert[] {
-  const out: AceAlert[] = [];
-  for (const etf of etfs) {
-    if (!ACE_TICKERS.has(etf.ticker)) continue;
-    const code = etf.ticker;
-
+): AceSummary[] {
+  const byTicker = new Map(etfs.map((e) => [e.ticker, e]));
+  // 카드·표와 같은 고정 순서로 낸다 — 값이 상시 표시되므로 자리가 흔들리면 못 읽는다.
+  return CARD_TICKER_ORDER.filter((code) => ACE_TICKERS.has(code)).map((code) => {
+    const etf = byTicker.get(code);
     const hoga = hogaByCode.get(code);
-    if (!quiet && hoga) {
-      if (feedFresh && lpQuoteMissing(hoga)) {
-        // LP가 한쪽이라도 물량을 아예 안 깔았음 — 예전엔 인정 스프레드가 null 로
-        // 떨어져 조용히 넘어갔다. '물량X'로 드러낸다 (2026-07-27 사용자 요청).
-        // 스프레드 판정은 건너뛴다 — LP가 비었는데 총호가 스프레드까지 같이
-        // 띄우면 칩이 중복돼 헷갈린다.
-        out.push({
-          key: `${code}:lpmissing`,
-          code,
-          status: "물량X",
-          severity: "hoga",
-        });
+    let cell: HogaCell = { kind: "na" };
+    if (hoga) {
+      if (lpQuoteMissing(hoga)) {
+        cell = { kind: "missing" };
       } else {
-        // 인정 스프레드 — 매도·매수 각각 최우선호가부터 처음 1,000주 이상 실린 틱을
-        // 인정호가로 잡고, 두 인정호가의 가격차를 틱으로 환산한다. 얇은 호가만 앞에
-        // 깔려 있으면 인정호가가 뒤로 밀려 스프레드가 벌어진다. 3틱 이상 벌어졌을
-        // 때만 알린다 — 1~2틱은 정상 스프레드다 (2026-07-24 사용자 재정의).
-        const spreadTicks = recognizedSpreadTicks(hoga);
-        if (spreadTicks != null && spreadTicks >= SPREAD_ALERT_MIN_TICKS) {
-          out.push({
-            key: `${code}:spread`,
-            code,
-            status: `${spreadTicks}틱`,
-            severity: "hoga",
-          });
-        }
+        const spread = recognizedSpread(hoga);
+        const bp = spread != null ? spreadBp(spread.won, hoga.price) : null;
+        // ticks = 스프레드(원) ÷ 호가단위. 대상 ETF는 전부 2,000원 이상이라 5원 단위
+        // 이므로 사용자가 말한 "스프레드를 5로 나눈 값"과 같다 (2026-07-30).
+        if (bp != null && spread != null)
+          cell = { kind: "bp", bp, ticks: spread.ticks };
       }
     }
+    return {
+      code,
+      name: etf?.name || hoga?.name || code,
+      hoga: cell,
+      actual: etf?.deviation_pct ?? null,
+      intra: etf?.intraday_dev_pct ?? null,
+    };
+  });
+}
 
-    // 괴리 알림도 장 개시 전(quiet) 구간엔 억제한다 — 개장 전 iNAV/시세가 아직
-    // 신뢰할 수 없어 호가 판정과 동일하게 '점검 대기'로 남긴다 (2026-07-24 사용자 요청).
-    if (!quiet) {
-      // 절대 괴리율 과대 — 자체 iNAV 기준(카드도 빨강 테두리 연동).
-      const actual = etf.deviation_pct;
-      if (actual != null && Math.abs(actual) >= DEV_ABS_ALERT_PCT) {
-        out.push({
-          key: `${code}:devabs`,
-          code,
-          status: `실제괴리 ${signedPct(actual)}`,
-          severity: "dev",
-        });
-      }
+// 심각도 → 색. ETF 약칭은 색을 바꾸지 않는다(navy 고정) — 값만 물들여야 눈이 값으로
+// 간다 (2026-07-30 사용자 지시: "ETF 명은 색깔 그대로 유지").
+const SEVERITY_TEXT: Record<Severity, string> = {
+  calm: "text-ink-faint",
+  warn: "text-amber-600",
+  crit: "text-status-failed",
+};
 
-      // 장중괴리(거래소 공시 premiumIntra) 과대 — 실제괴리는 미국 데이장을 반영해
-      // 공시 iNAV 기준과 갈라질 수 있으므로 공시 괴리도 따로 감시한다 (2026-07-23).
-      const intra = etf.intraday_dev_pct;
-      if (intra != null && Math.abs(intra) >= DEV_ABS_ALERT_PCT) {
-        out.push({
-          key: `${code}:intradev`,
-          code,
-          status: `장중괴리 ${signedPct(intra)}`,
-          severity: "dev",
-        });
-      }
-    }
-  }
-  return out;
+// 줄별 '빨강' 판정 — 줄 라벨 색과 깜빡임은 그 줄의 값만 봐야 한다(실제괴리 줄이
+// 장중괴리 때문에 빨개지면 어느 줄을 봐야 할지 알 수 없다).
+function isHogaCrit(s: AceSummary): boolean {
+  if (s.hoga.kind === "missing") return true;
+  return s.hoga.kind === "bp" && spreadSeverity(s.hoga.bp) === "crit";
+}
+
+function isDevCrit(pct: number | null): boolean {
+  return pct != null && devSeverity(pct) === "crit";
+}
+
+// 한 종목이 어느 줄에서든 '빨강'인가 — 카드 테두리 연동(합집합)에 쓴다.
+function isCritical(s: AceSummary): boolean {
+  return isHogaCrit(s) || isDevCrit(s.actual) || isDevCrit(s.intra);
 }
 
 // 흰 띠는 항상 떠 있고 알림 칩만 생멸한다. 흐르는 마퀴 없이 한 번만 렌더하고,
 // 많아지면 줄바꿈으로 쌓인다. min-h 는 빈 상태에서도 높이가 흔들리지 않게 하는 값.
 function AlertBar({
-  items,
+  summaries,
   indexAlerts,
-  ready,
+  hogaReady,
+  devReady,
   phase,
+  showIndex,
 }: {
-  items: AceAlert[];
+  summaries: AceSummary[];
   indexAlerts: IndexAlert[];
-  ready: boolean;
+  hogaReady: boolean;
+  devReady: boolean;
   phase: MarketPhase;
+  showIndex: boolean;
 }) {
-  // 세 줄 — 지수 급등락 / 호가·물량 / 괴리. 성격이 다른 알림이 한 줄에
+  // 네 줄 — 지수 급등락 / 호가·물량 / 실제괴리 / 장중괴리. 성격이 다른 값이 한 줄에
   // 섞이면 눈으로 훑을 때 구분이 안 된다 (2026-07-23·07-27 사용자 요청).
-  const hogaItems = items.filter((it) => it.severity === "hoga");
-  const devItems = items.filter((it) => it.severity === "dev");
-  // open 이 아니면 호가·물량/괴리 줄은 알림 없이 상태 문구만 — 16:00~06:00 '장 마감',
-  // 06:00~09:00 '장 개시 전 · 점검 대기' (2026-07-27 사용자 요청).
+  // 괴리는 2026-07-30 사용자 요청으로 실제/장중을 각자 흰 밴드 한 줄씩 차지하게
+  // 분리했다 — 한 줄에 '실 -0.15% 장 +0.16%'로 붙여 두면 두 지표가 눈에서 섞인다.
+  // open(=LP 의무시간 09:05~15:20) 이 아니면 세 줄 모두 값 없이 상태 문구만 둔다
+  // (2026-07-27·07-30 사용자 확정: 상시 요약으로 바꿔도 의무 없는 구간의 숫자는
+  // 오독을 부른다). 문구도 의무 기준 — '장 개시 전'·'장 마감'으로 쓰면 09:00~09:05,
+  // 15:20~15:30 에 사실과 어긋난다.
   const phaseText =
     phase === "closed"
-      ? "장 마감"
+      ? "LP 의무 종료 · 장 마감"
       : phase === "preopen"
-        ? "장 개시 전 · 점검 대기"
+        ? "LP 의무 시작 전 · 점검 대기"
         : null;
   return (
     <div className="border-b border-hairline bg-white px-6 py-0.5">
-      <IndexAlertRow items={indexAlerts} />
-      <div className="border-t border-hairline/70" />
-      <AlertRow
+      {/* 지수 줄은 숨기면 차지한 칸을 완전히 내놓는다 — 구분선까지 함께 빠진다
+          (2026-07-30 사용자 요청). 복원은 Topbar '지수' 토글. */}
+      {showIndex && (
+        <>
+          <IndexAlertRow items={indexAlerts} />
+          <div className="border-t border-hairline/70" />
+        </>
+      )}
+      {/* 열 머리 — 값이 실제로 그려질 때만 띄운다(전부 억제 상태면 이름만 남아 혼란). */}
+      {phaseText == null && (hogaReady || devReady) && (
+        <SummaryHeader summaries={summaries} />
+      )}
+      <SummaryRow
         label="호가·물량"
-        tone="hoga"
-        items={hogaItems}
-        emptyText={phaseText ?? (ready ? "이상 없음" : "호가 대기 중")}
+        summaries={summaries}
+        // 호가는 CHECK 피드 신선도에 달려 있다.
+        blockedText={phaseText ?? (hogaReady ? null : "호가 대기 중")}
+        isCrit={isHogaCrit}
+        render={(s) => ({
+          main: <HogaValue cell={s.hoga} />,
+          suffix:
+            s.hoga.kind === "bp" ? <TickSuffix ticks={s.hoga.ticks} /> : null,
+        })}
       />
       <div className="border-t border-hairline/70" />
-      <AlertRow
-        label="괴리"
-        tone="dev"
-        items={devItems}
-        emptyText={phaseText ?? "이상 없음"}
+      {/* 괴리 2종은 각각 한 줄 — 괴리는 collector 스냅샷 값이라 CHECK 지연과
+          무관하므로 호가와 게이트를 따로 둔다. */}
+      <SummaryRow
+        label="실제괴리"
+        summaries={summaries}
+        blockedText={phaseText ?? (devReady ? null : "스냅샷 대기 중")}
+        isCrit={(s) => isDevCrit(s.actual)}
+        render={(s) => ({ main: <DevValue pct={s.actual} /> })}
+      />
+      <div className="border-t border-hairline/70" />
+      <SummaryRow
+        label="장중괴리"
+        summaries={summaries}
+        blockedText={phaseText ?? (devReady ? null : "스냅샷 대기 중")}
+        isCrit={(s) => isDevCrit(s.intra)}
+        render={(s) => ({ main: <DevValue pct={s.intra} /> })}
       />
     </div>
   );
@@ -926,12 +1005,20 @@ function IndexChip({ a }: { a: IndexAlert }) {
 // 직전에 없던 알림 key 가 하나라도 생기면 카운터를 올린다. 이 값을 줄 엘리먼트의
 // key 로 써서 리마운트시키면 깜빡임 애니메이션이 매번 처음부터 다시 돈다.
 // 첫 렌더(이전 상태 없음)는 깜빡이지 않는다 — 페이지를 열 때마다 번쩍이면 곤란.
-function useNewItemsFlash(keys: string[]): number {
+function useNewItemsFlash(keys: string[], active = true): number {
   const seen = useRef<Set<string> | null>(null);
   const [flash, setFlash] = useState(0);
   // 1초 폴링마다 items 배열 정체성이 바뀌므로 내용(key 목록)으로만 반응한다.
   const signature = keys.join("|");
   useEffect(() => {
+    // 값을 못 그리는 구간(세션 밖·피드 대기)에서는 기준선을 버린다. 데이터가 비동기로
+    // 도착하므로 '첫 렌더는 깜빡이지 않는다'는 아래 가드만으로는 부족했다 — 빈 상태가
+    // 기준선이 되어 데이터 도착을 '새 항목'으로 오인해 페이지를 열 때마다 번쩍였다
+    // (2026-07-30 실측). 다시 활성화된 첫 렌더가 새 기준선이 된다.
+    if (!active) {
+      seen.current = null;
+      return;
+    }
     const current = new Set(signature ? signature.split("|") : []);
     const previous = seen.current;
     seen.current = current;
@@ -946,90 +1033,167 @@ function useNewItemsFlash(keys: string[]): number {
   return flash;
 }
 
-// 가시성 우선 — 여백을 줄이고 글자를 띠 높이에 꽉 차게 키운다.
-function AlertRow({
+// 상시 요약 줄 — ACE 9종을 고정 순서로 전부 그린다. 값이 항상 있으므로 셀 폭을
+// 고정해 줄바꿈이 일어나도 세로로 열이 맞게 한다(눈이 같은 자리를 훑을 수 있게).
+// 줄 라벨은 그 줄에 빨강이 하나라도 있을 때만 빨강 — 없으면 차분한 회색을 유지한다.
+function SummaryRow({
   label,
-  tone,
-  items,
-  emptyText,
+  summaries,
+  blockedText,
+  isCrit,
+  render,
 }: {
   label: string;
-  tone: "hoga" | "dev";
-  items: AceAlert[];
-  emptyText: string;
+  summaries: AceSummary[];
+  // null 이면 값 표시, 문자열이면 값을 숨기고 그 문구만 (세션 밖·피드 대기).
+  blockedText: string | null;
+  // 이 줄 기준의 '빨강' 판정 — 라벨 색·깜빡임에 쓴다.
+  isCrit: (s: AceSummary) => boolean;
+  // main = 정렬 대상 수치(오른쪽 정렬), suffix = 부가 표기(왼쪽 정렬, 예 "(2틱)").
+  render: (s: AceSummary) => { main: ReactNode; suffix?: ReactNode };
 }) {
-  const empty = items.length === 0;
-  const flash = useNewItemsFlash(items.map((it) => it.key));
+  const blocked = blockedText != null;
+  // 상시 표시라 '새 알림'이 없다 — 대신 **빨강으로 새로 진입한 종목**이 생기면
+  // 깜빡인다 (2026-07-30). 회색↔오렌지까지 깜빡이면 상시 번쩍여 쓸모가 없다.
+  const critKeys = blocked
+    ? []
+    : summaries.filter(isCrit).map((s) => `${label}:${s.code}`);
+  const flash = useNewItemsFlash(critKeys, !blocked);
   return (
     <div
       key={flash}
       className={cn(
-        // -mx-6 px-6 = 깜빡임 배경이 띠 좌우 끝까지 차게 한다.
-        "-mx-6 flex min-h-[28px] flex-wrap items-center gap-x-6 gap-y-0 px-6",
+        // -mx-6 px-6 = 깜빡임 배경이 띠 좌우 끝까지 차게 한다. 열 정렬을 위해 셀
+        // 사이 gap 은 두지 않는다(폭이 이미 고정) — 헤더 줄과 같은 격자 상수를 쓴다.
+        "-mx-6 flex flex-nowrap items-stretch overflow-x-auto px-6",
+        GRID_ROW_H,
         flash > 0 && "inav-alert-flash",
       )}
     >
       <span
         className={cn(
-          "inline-flex w-[112px] shrink-0 items-center gap-1 text-[17px] font-extrabold leading-none tracking-tight",
-          empty
-            ? "text-ink-faint"
-            : tone === "dev"
-              ? "text-status-failed"
-              : "text-amber-600",
+          GRID_LABEL,
+          "inline-flex items-center gap-1 text-[17px] font-extrabold leading-none tracking-tight",
+          !blocked && critKeys.length > 0 ? "text-status-failed" : "text-ink-faint",
         )}
       >
         <AlertTriangle className="h-[18px] w-[18px] shrink-0" strokeWidth={2.6} />
         {label}
       </span>
-      {empty ? (
-        <span className="text-[17px] font-semibold leading-none text-ink-muted">
-          {emptyText}
+      {blocked ? (
+        <span className="flex items-center text-[17px] font-semibold leading-none text-ink-muted">
+          {blockedText}
         </span>
       ) : (
-        // 한 종목에 판정이 여러 개 걸려도 칩은 하나로 묶는다 — 코드가 반복되면
-        // 훑기만 어려워지므로 문구만 "·"로 잇는다 (예: [414270] 3틱 · 1~3틱).
-        groupByCode(items).map((g) => (
-          <AlertChip key={g.code} code={g.code} statuses={g.statuses} tone={tone} />
-        ))
+        summaries.map((s) => {
+          const { main, suffix } = render(s);
+          return (
+            // 종목명은 위 헤더 줄이 한 번만 이고, 값 줄은 같은 고정폭 열에 수치만 담는다
+            // — 줄마다 약칭을 반복하면 읽을 만한 글자 크기로 9종이 한 줄에 안 들어간다
+            // (실측: [우주테크]가 이름칸을 넘치고 [고배당]이 다음 줄로 밀렸다).
+            <span
+              key={s.code}
+              className={cn(GRID_CELL, "flex items-center")}
+              title={s.name}
+            >
+              <span className={GRID_MAIN}>{main}</span>
+              <span className={GRID_SUFFIX}>{suffix}</span>
+            </span>
+          );
+        })
       )}
     </div>
   );
 }
 
-// 등장 순서를 유지한 채 종목코드로 묶는다.
-function groupByCode(items: AceAlert[]): { code: string; statuses: string[] }[] {
-  const byCode = new Map<string, string[]>();
-  for (const item of items) {
-    const statuses = byCode.get(item.code);
-    if (statuses) statuses.push(item.status);
-    else byCode.set(item.code, [item.status]);
+// 호가 값 — bp / 물량X / 판정불가. 색은 bp 밴드(20·40)로 고른다. 물량X 는 인정호가가
+// 아예 없다는 뜻이라 최상위 심각도(빨강)로 둔다.
+function HogaValue({ cell }: { cell: HogaCell }) {
+  if (cell.kind === "na") {
+    return (
+      <span className="text-[17px] font-extrabold leading-none text-ink-faint">
+        {EMDASH}
+      </span>
+    );
   }
-  return [...byCode].map(([code, statuses]) => ({ code, statuses }));
+  if (cell.kind === "missing") {
+    return (
+      <span className="text-[17px] font-extrabold leading-none text-status-failed">
+        물량X
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "text-[17px] font-extrabold leading-none tabular-nums",
+        SEVERITY_TEXT[spreadSeverity(cell.bp)],
+      )}
+    >
+      {formatBp(cell.bp)}bp
+    </span>
+  );
 }
 
-function AlertChip({
-  code,
-  statuses,
-  tone,
-}: {
-  code: string;
-  statuses: string[];
-  tone: "hoga" | "dev";
-}) {
+/* ── 요약 격자 (엑셀 셀) ────────────────────────────────────────────────
+   2026-07-30 사용자 요청: 가로·세로를 확실히 고정해 셀처럼 보이게 한다. 글자 길이가
+   달라도 어긋나지 않도록 ①열 폭 ②행 높이 ③세로 구분선을 전부 고정값으로 박고,
+   헤더와 값 줄이 **같은 상수**를 쓰게 해 격자가 갈라질 수 없게 만든다. */
+const GRID_LABEL = "w-[112px] shrink-0"; // 줄 라벨 칸
+const GRID_CELL = "w-[120px] shrink-0 border-l border-hairline/60 px-1"; // 종목 1칸
+const GRID_MAIN = "w-[68px] shrink-0 text-right"; // 정렬 대상 수치
+const GRID_SUFFIX = "w-[44px] shrink-0 pl-1 text-left"; // 부가 표기 "(N틱)"
+const GRID_ROW_H = "h-[30px]"; // 값 줄 높이 (고정)
+
+// 값 줄들이 공유하는 열 머리 — ETF 약칭을 한 번만 쓴다. 수치와 같은 GRID_MAIN 칸에
+// 오른쪽 정렬해 이름과 숫자가 같은 축에 서게 한다.
+function SummaryHeader({ summaries }: { summaries: AceSummary[] }) {
   return (
-    <span className="inline-flex shrink-0 items-baseline gap-1.5">
-      <span className="text-[18px] font-bold leading-none text-ge-navy">
-        [{ACE_SHORT_NAMES[code] ?? code}]
-      </span>
-      <span
-        className={cn(
-          "text-[20px] font-extrabold leading-none",
-          tone === "dev" ? "text-status-failed" : "text-amber-600",
-        )}
-      >
-        {statuses.join(" · ")}
-      </span>
+    <div className="flex h-[22px] flex-nowrap items-center overflow-x-auto">
+      <span className={GRID_LABEL} />
+      {summaries.map((s) => (
+        <span
+          key={s.code}
+          title={s.name}
+          className={cn(GRID_CELL, "flex items-center")}
+        >
+          <span
+            className={cn(
+              GRID_MAIN,
+              "truncate text-[12px] font-bold leading-none text-ge-navy",
+            )}
+          >
+            {ACE_SHORT_NAMES[s.code] ?? s.code}
+          </span>
+          <span className={GRID_SUFFIX} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// 호가 셀의 부가 표기 "(N틱)" — bp 는 종목 가격대를 정규화한 값이라 실제 호가가 몇 틱
+// 벌어졌는지는 따로 봐야 알 수 있다 (2026-07-30 사용자 요청). 색은 입히지 않는다 —
+// 밴드 색은 bp 가 가지고, 틱은 참고 수치다.
+function TickSuffix({ ticks }: { ticks: number }) {
+  return (
+    <span className="text-[13px] font-semibold leading-none tabular-nums text-ink-faint">
+      ({ticks}틱)
+    </span>
+  );
+}
+
+// 괴리 값 — 절댓값 밴드(1%·2%)로 색을 고른다. 실제/장중이 각각 자기 줄을 가지므로
+// (2026-07-30 분리) 어느 지표인지는 줄 라벨이 말해준다 — 셀에는 수치만 남긴다.
+function DevValue({ pct }: { pct: number | null }) {
+  return (
+    <span
+      className={cn(
+        "text-[17px] font-extrabold leading-none tabular-nums",
+        pct == null ? "text-ink-faint" : SEVERITY_TEXT[devSeverity(pct)],
+      )}
+    >
+      {pct == null ? EMDASH : signedPct(pct)}
     </span>
   );
 }
@@ -1106,7 +1270,7 @@ function EtfCardGrid({
   onHide,
   hogaByCode,
   hogaStale,
-  alertsByCode,
+  criticalByCode,
 }: {
   etfs: InavEtf[];
   visibleMetrics: MetricKey[];
@@ -1114,7 +1278,8 @@ function EtfCardGrid({
   onHide?: (ticker: string) => void;
   hogaByCode: Map<string, HogaEtf>;
   hogaStale: boolean;
-  alertsByCode: Map<string, AceAlert[]>;
+  // 요약 바에서 '빨강'인 종목 → 사유 문구. 없는 코드는 정상.
+  criticalByCode: Map<string, string>;
 }) {
   if (!etfs.length) {
     return (
@@ -1144,7 +1309,7 @@ function EtfCardGrid({
             etf={etf}
             visibleMetrics={visibleMetrics}
             onOpen={() => onOpen(etf.ticker)}
-            alerts={alertsByCode.get(etf.ticker)}
+            criticalText={criticalByCode.get(etf.ticker)}
           />
           <OrderbookCard
             hoga={hogaByCode.get(etf.ticker) ?? null}
@@ -1160,16 +1325,17 @@ function EtfCard({
   etf,
   visibleMetrics,
   onOpen,
-  alerts,
+  criticalText,
 }: {
   etf: InavEtf;
   visibleMetrics: MetricKey[];
   onOpen: () => void;
-  alerts?: AceAlert[];
+  criticalText?: string;
 }) {
-  // 경고 표시는 알림 바 단일 기준 — 바에 뜬 종목만 굵은 빨강 테두리.
-  const alerted = (alerts?.length ?? 0) > 0;
-  const alertText = (alerts ?? []).map((a) => a.status).join(" · ");
+  // 경고 표시는 요약 바 단일 기준 — 바에서 빨강(40bp↑·물량X·괴리 2%↑)인 종목만
+  // 굵은 빨강 테두리 (2026-07-30: 상시 표시로 바뀌어 '값 있음'은 기준이 못 된다).
+  const alerted = criticalText != null;
+  const alertText = criticalText ?? "";
 
   return (
     <button
@@ -1831,214 +1997,6 @@ function FxPanel({ fx }: { fx: Record<string, number> }) {
         ))}
       </div>
     </section>
-  );
-}
-
-/* ── LP 평가 모달 — 인정 스프레드 틱 체류시간(분) 분포·통계(일별) ─────────
-   collector /lp-eval 를 열 때만 30초 폴링(장중 실시간 누적 반영). ACE 8종 카드 =
-   틱별 히스토그램 + 평균·최빈·중앙값. 기준 토글 LP(기본, 리테일 제외)/총호가. */
-
-// 스프레드가 넓을수록(=LP 부실) 진하게. 'none'(5틱내 인정호가 없음)이 최악.
-function lpBucketColor(key: string): string {
-  if (key === "none") return "bg-rose-600";
-  const t = Number(key);
-  if (t >= 6) return "bg-rose-500";
-  if (t === 5) return "bg-amber-600";
-  if (t === 4) return "bg-amber-500";
-  return "bg-amber-400"; // 3틱
-}
-
-function LpStat({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
-  return (
-    <div>
-      <div className="text-[10px] font-semibold text-ink-faint">{label}</div>
-      <div className={cn("text-[13px] font-extrabold tabular-nums", danger ? "text-rose-600" : "text-ge-navy")}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function LpEvalCard({ etf, basis }: { etf: LpEvalEtf; basis: "lp" | "total" }) {
-  const stat: LpEvalBasisStat | undefined = etf.basis[basis];
-  // 표시 버킷 = 알림틱(3,4,5,…) 오름차순 + 마지막 '없음'. 'ok'(정상)은 하단 컨텍스트로만.
-  const bars = useMemo(() => {
-    const h = stat?.hist ?? {};
-    const ticks = Object.keys(h)
-      .filter((k) => k !== "none" && k !== "ok")
-      .map(Number)
-      .filter((n) => Number.isFinite(n))
-      .sort((a, b) => a - b)
-      .map(String);
-    if (h.none) ticks.push("none");
-    return ticks.map((k) => ({ key: k, count: h[k] ?? 0 }));
-  }, [stat]);
-  const max = Math.max(1, ...bars.map((b) => b.count));
-  const hasData = (stat?.total_min ?? 0) > 0;
-
-  return (
-    <div className="flex flex-col gap-2 rounded-xl border border-hairline bg-canvas p-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="truncate text-[13px] font-bold text-ge-navy">{etf.name || etf.code}</div>
-        <div className="shrink-0 text-[10px] font-semibold tabular-nums text-ink-faint">{etf.code}</div>
-      </div>
-      {!hasData ? (
-        <div className="py-5 text-center text-[11px] text-ink-faint">데이터 없음 (장중 누적)</div>
-      ) : bars.length === 0 ? (
-        <div className="py-5 text-center text-[11px] font-semibold text-emerald-600">
-          알림 없음 · 스프레드 정상 {stat?.ok_min ?? 0}분
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-col gap-1">
-            {bars.map(({ key, count }) => (
-              <div key={key} className="flex items-center gap-1.5">
-                <span className="w-9 shrink-0 text-right text-[11px] font-semibold tabular-nums text-ink-muted">
-                  {key === "none" ? "없음" : `${key}틱`}
-                </span>
-                <div className="h-3 flex-1 overflow-hidden rounded-[2px] bg-canvas-soft">
-                  <div
-                    className={cn("h-full rounded-[2px]", lpBucketColor(key))}
-                    style={{ width: `${(count / max) * 100}%` }}
-                  />
-                </div>
-                <span className="w-10 shrink-0 text-right text-[11px] font-bold tabular-nums text-ink">
-                  {count}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-3 gap-1 border-t border-hairline pt-2 text-center">
-            <LpStat label="평균" value={stat?.mean_tick != null ? `${fmtNum(stat.mean_tick, 1, 2)}틱` : "—"} />
-            <LpStat label="최빈" value={stat?.mode_tick != null ? `${stat.mode_tick}틱` : "—"} />
-            <LpStat label="중앙" value={stat?.median_tick != null ? `${stat.median_tick}틱` : "—"} />
-          </div>
-          <div className="flex items-center justify-center gap-2 text-[10.5px] tabular-nums text-ink-muted">
-            <span>알림 <b className="text-ink">{stat?.alert_min ?? 0}</b>분</span>
-            <span className="text-ink-faint">·</span>
-            <span>없음 <b className={cn((stat?.none_min ?? 0) > 0 && "text-rose-600")}>{stat?.none_min ?? 0}</b>분</span>
-            <span className="text-ink-faint">·</span>
-            <span>정상 {stat?.ok_min ?? 0}분</span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function LpEvalModal({ onClose }: { onClose: () => void }) {
-  const [date, setDate] = useState<string | null>(null); // null = 오늘(서버 기본)
-  const [basis, setBasis] = useState<"lp" | "total">("lp");
-  const query = useQuery({
-    queryKey: ["lpEval", date],
-    queryFn: () => getLpEval(date ?? undefined),
-    refetchInterval: 30_000,
-  });
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const d = query.data ?? null;
-  const dates = d?.available_dates ?? [];
-  const curDate = date ?? d?.trade_date ?? "";
-  const empty =
-    d != null && d.etfs.every((e) => (e.basis[basis]?.total_min ?? 0) === 0);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ge-navy/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-canvas shadow-panel"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-hairline px-5 py-4">
-          <div className="min-w-0">
-            <h2 className="text-[15px] font-extrabold text-ge-navy">
-              LP 평가 · 인정 스프레드 틱 분포
-            </h2>
-            <div className="mt-0.5 text-[12px] tabular-nums text-ink-muted">
-              {d
-                ? `${curDate} · 정규장 ${d.session.start}~${d.session.end} · 1,000주↑ 인정호가 · ${d.alert_min_ticks}틱↑ 알림`
-                : "불러오는 중…"}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="flex overflow-hidden rounded-lg border border-hairline text-[12px] font-bold">
-              {(["lp", "total"] as const).map((b) => (
-                <button
-                  key={b}
-                  onClick={() => setBasis(b)}
-                  className={cn(
-                    "px-2.5 py-1 transition-colors",
-                    basis === b
-                      ? "bg-ge-navy text-white"
-                      : "bg-canvas text-ink-muted hover:bg-canvas-soft",
-                  )}
-                >
-                  {b === "lp" ? "LP" : "총호가"}
-                </button>
-              ))}
-            </div>
-            {dates.length > 0 && (
-              <select
-                value={curDate}
-                onChange={(e) => setDate(e.target.value)}
-                className="rounded-lg border border-hairline bg-canvas px-2 py-1 text-[12px] font-semibold text-ink-muted"
-              >
-                {dates.map((dt) => (
-                  <option key={dt} value={dt}>
-                    {dt}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              type="button"
-              aria-label="닫기"
-              onClick={onClose}
-              className="rounded-lg p-1.5 text-ink-muted transition hover:bg-canvas-soft hover:text-ink"
-            >
-              <X className="h-4 w-4" strokeWidth={2} />
-            </button>
-          </div>
-        </div>
-
-        <div className="overflow-auto p-4">
-          {query.isError ? (
-            <p className="py-10 text-center text-sm text-ink-muted">불러오지 못했습니다.</p>
-          ) : !d ? (
-            <p className="py-10 text-center text-sm text-ink-muted">불러오는 중…</p>
-          ) : empty ? (
-            <p className="py-10 text-center text-sm text-ink-muted">
-              {curDate} 누적 데이터가 없습니다. 정규장(09:00~15:30) 중 자동으로 쌓입니다.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              {d.etfs.map((etf) => (
-                <LpEvalCard key={etf.code} etf={etf} basis={basis} />
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="border-t border-hairline px-5 py-2 text-[11px] text-ink-faint">
-          기준{" "}
-          {basis === "lp"
-            ? "LP 물량 — 리테일 제외, LP 성실도"
-            : "총호가 — 화면 알림 전광판과 동일"}{" "}
-          · 값 = 체류시간(분) · 통계는 알림틱(≥{d?.alert_min_ticks ?? 3}) 대상, ‘없음’ 제외
-        </div>
-      </div>
-    </div>
   );
 }
 

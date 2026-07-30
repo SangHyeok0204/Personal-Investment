@@ -32,6 +32,7 @@ const navItems: NavItem[] = [
     children: [
       { label: "iNAV 모니터", href: "/inav" },
       { label: "WRAP", href: "/wrap" },
+      { label: "LP 평가", href: "/lp-eval" },
     ],
   },
   {
@@ -55,7 +56,7 @@ const navItems: NavItem[] = [
     ],
   },
   {
-    label: "track record",
+    label: "성과 분석",
     icon: History,
     children: [
       { label: "TORUS/AI테크", href: "/track-record/torus-aicoretech" },

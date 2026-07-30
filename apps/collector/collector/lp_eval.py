@@ -1,6 +1,6 @@
 """LP 평가 — 인정 스프레드 틱 체류시간(분) 누적 (2026-07-27).
 
-목적: LP 들이 각 ETF 마다 호가/물량을 잘 깔고 있는가? CHECK 호가에서 ACE 8종의
+목적: LP 들이 각 ETF 마다 호가/물량을 잘 깔고 있는가? CHECK 호가에서 ACE 9종의
 '인정 스프레드'(매도·매수 각각 최우선호가부터 처음 1,000주 이상 실린 틱까지의
 가격차를 틱으로 환산 — 프론트 화면 알림과 동일 정의)를 60초마다 표본해, 각 틱값
 에서 보낸 시간(분)을 trade_date·기준(basis)·틱별로 SQLite 에 누적한다. 하루 장이
@@ -41,7 +41,12 @@ LP_EVAL_OUT_DIR = Path(os.environ.get("COLLECTOR_LP_EVAL_DIR", "/srv/lp_eval"))
 
 # 프론트 lib/hoga.ts 상수와 일치.
 RECOGNIZED_QTY_MIN = 1_000
-SPREAD_ALERT_MIN_TICKS = 3
+# 심각도 밴드 경계 — 화면이 조건부 알림에서 상시 요약으로 바뀌며(2026-07-30) '발화
+# 하한'이 사라지고 색 밴드만 남았다. 히스토그램의 '정상'은 옅은 회색 밴드(<20bp)에
+# 해당한다. 구 SPREAD_ALERT_MIN_BP(15bp)·SPREAD_MISSING_MAX_TICKS(20틱)는 폐기.
+SPREAD_WARN_BP = 20
+SPREAD_CRIT_BP = 40
+SPREAD_ALERT_MIN_TICKS = 3        # 체결가 없을 때만 쓰는 폴백
 
 # ACE 모니터링 대상(현재 9종, 프론트 CARD_TICKER_ORDER 와 동일 집합·순서).
 ACE_TICKERS = (
@@ -77,6 +82,22 @@ def _to_num(v):
     return v if isinstance(v, (int, float)) and math.isfinite(v) else None
 
 
+def _ladder_prices(wide, narrow, side):
+    """판정에 쓸 가격 사다리 — 10단(askPrices10/bidPrices10)이 오면 그걸, 없으면 5단.
+    단조성이 깨지는 지점에서 자른다. (lib/hoga.ts ladderPrices 이식 — 사유는 그쪽 주석.)
+    """
+    src = wide if wide else (narrow or [])
+    out = []
+    for raw in src:
+        p = _to_num(raw)
+        if p is None or p <= 0:
+            break
+        if out and (p <= out[-1] if side == "ask" else p >= out[-1]):
+            break
+        out.append(p)
+    return out
+
+
 def _recognized_quote_price(prices, qtys):
     """최우선호가부터 바깥으로 훑어 처음 잔량 ≥ RECOGNIZED_QTY_MIN 인 호가의 가격.
     (lib/hoga.ts recognizedQuotePrice 이식.) 없으면 None."""
@@ -103,9 +124,43 @@ def _recognized_spread_ticks(ask_prices, ask_qtys, bid_prices, bid_qtys):
     return round((rec_ask - rec_bid) / tick)
 
 
-def _bucket(spread_ticks) -> int:
+def _spread_bp(spread_ticks, price):
+    """인정 스프레드를 bp 로. 가격이 틱 격자에 있으므로 (틱수 × 호가단위) = 스프레드(원).
+    lib/hoga.ts spreadBp 와 같은 산식. 틱수/체결가가 없으면 None."""
+    if spread_ticks is None:
+        return None
+    p = _to_num(price)
+    if p is None or p <= 0:
+        return None
+    return (spread_ticks * _tick_size(p)) / p * 10_000
+
+
+def _band_of(bp):
+    """bp → 심각도 구간 키. lib/hoga.ts spreadSeverity 와 경계가 같아야 한다."""
+    if bp is None:
+        return None
+    if bp >= SPREAD_CRIT_BP:
+        return "crit"
+    if bp >= SPREAD_WARN_BP:
+        return "warn"
+    return "calm"
+
+
+def _bucket(spread_ticks, price=None) -> int:
+    """틱 값을 히스토그램 버킷으로. 화면 요약과 같은 기준을 쓴다 (2026-07-30 통일).
+
+    · _NONE_TICK('없음') = 인정호가 부재(None) 뿐이다 = 화면의 '물량X'. 구 기준의
+      '20틱 초과'는 빠졌다 — 화면이 아무리 벌어져도 그 bp 를 그대로 보여주므로
+      여기서도 숫자 버킷으로 남긴다(lib/hoga.ts lpQuoteMissing 주석 참고).
+    · _OK_TICK('정상')   = 옅은 회색 밴드(<SPREAD_WARN_BP=20bp). 체결가가 있으면 bp 로
+      비교하고, 없으면 구 틱 기준으로 폴백한다.
+    """
     if spread_ticks is None:
         return _NONE_TICK
+    p = _to_num(price)
+    if p is not None and p > 0:
+        bp = (spread_ticks * _tick_size(p)) / p * 10_000
+        return _OK_TICK if bp < SPREAD_WARN_BP else int(spread_ticks)
     if spread_ticks < SPREAD_ALERT_MIN_TICKS:
         return _OK_TICK
     return int(spread_ticks)
@@ -120,12 +175,40 @@ def _connect():
         " tick INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 0,"
         " PRIMARY KEY (trade_date, code, basis, tick))"
     )
+    # 시계열(분봉용) — 표본 시각(ts=HH:MM:SS KST)별 원본 인정 스프레드 틱을 그대로
+    # 기록한다. 집계(lp_spread_min)와 달리 버킷을 씌우지 않아 1·2틱도 구분되고,
+    # '없음'(인정호가 부재)은 NULL 로 둔다. 나중에 틱 변화 시계열 차트에 쓴다
+    # (2026-07-28 사용자 요청). trade_date+ts 로 절대시각 복원.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS lp_spread_ts ("
+        " trade_date TEXT NOT NULL, ts TEXT NOT NULL, code TEXT NOT NULL,"
+        " basis TEXT NOT NULL, tick INTEGER, bp REAL, price REAL,"
+        " PRIMARY KEY (trade_date, code, basis, ts))"
+    )
+    # bp/price 는 2026-07-30 추가(구간별 통계용) — 기존 DB 에는 열이 없으므로 보강한다.
+    # 틱만으로는 bp 를 되살릴 수 없다(그 시각 체결가가 필요) → 그 전 표본은 구간 분류
+    # 대상에서 빠지고, build_lp_eval 이 unbanded_min 으로 그 분수를 드러낸다.
+    existing = {r[1] for r in con.execute("PRAGMA table_info(lp_spread_ts)")}
+    for col, decl in (("bp", "REAL"), ("price", "REAL")):
+        if col not in existing:
+            con.execute(f"ALTER TABLE lp_spread_ts ADD COLUMN {col} {decl}")
+    # 괴리율 시계열(종목별) — 실제괴리(actual_dev=자체 iNAV 기준 deviation_pct)와
+    # 장중괴리(intraday_dev=거래소 공시 premiumIntra)를 표본 시각별로 기록한다.
+    # basis(LP/총호가)와 무관하므로 종목당 1행 (2026-07-28 사용자 요청). 값 없으면 NULL.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS lp_dev_ts ("
+        " trade_date TEXT NOT NULL, ts TEXT NOT NULL, code TEXT NOT NULL,"
+        " actual_dev REAL, intraday_dev REAL,"
+        " PRIMARY KEY (trade_date, code, ts))"
+    )
     return con
 
 
-def sample_once(hoga: dict | None, now: datetime | None = None) -> int:
-    """현재 호가 스냅샷에서 ACE 8종의 인정 스프레드 틱을 basis 2종으로 표본해 1분
-    (=1표본)씩 누적한다. 누적한 (code×basis) 행 수를 반환(0=구간밖/스킵)."""
+def sample_once(hoga: dict | None, now: datetime | None = None,
+                snapshot: dict | None = None) -> int:
+    """현재 호가 스냅샷에서 ACE 9종의 인정 스프레드 틱을 basis 2종으로 표본해 1분
+    (=1표본)씩 누적한다. snapshot(iNAV 스냅샷)이 주어지면 같은 ts 로 종목별 괴리율
+    (실제/장중)도 함께 기록한다. 누적한 (code×basis) 행 수를 반환(0=구간밖/스킵)."""
     now = now or datetime.now(_KST)
     minute = now.hour * 60 + now.minute
     if not (SESSION_START_MIN <= minute < SESSION_END_MIN):
@@ -139,20 +222,49 @@ def sample_once(hoga: dict | None, now: datetime | None = None) -> int:
     etfs = payload.get("etfs") or []
     by_code = {str(e.get("code")): e for e in etfs}
     trade_date = now.strftime("%Y-%m-%d")
-    rows = []
+    ts = now.strftime("%H:%M:%S")
+    rows = []       # 집계: (trade_date, code, basis, 버킷틱)
+    # 시계열: (trade_date, ts, code, basis, 원본틱, bp, 체결가) — 없음=None→NULL.
+    # bp 를 함께 남기는 이유: 틱만 있으면 그 시각 체결가를 몰라 나중에 bp 를 되살릴 수
+    # 없다(구간별 통계가 bp 기준이라 필수). price 도 같이 남겨 경계값을 바꿔도 재계산
+    # 가능하게 한다 (2026-07-30).
+    ts_rows = []
     for code in ACE_TICKERS:
         e = by_code.get(code)
         if not e:
             continue
-        ap, bp = e.get("askPrices"), e.get("bidPrices")
+        # 'lp' 는 10단 사다리(2026-07-29 CHECK 확장)로 화면 알림과 동일 기준.
+        # 'total' 은 askQtys(5단)를 그대로 쓴다 — askQtys10 이 전 종목 0 으로 오기
+        # 때문(CHECK 미채움). 사다리가 10단이어도 잔량이 5개면 뒤는 자동으로 건너뛴다.
+        ask_ladder = _ladder_prices(e.get("askPrices10"), e.get("askPrices"), "ask")
+        bid_ladder = _ladder_prices(e.get("bidPrices10"), e.get("bidPrices"), "bid")
+        price = _to_num(e.get("price"))
         for basis, aq, bq in (
             ("lp", e.get("lpAskQtys"), e.get("lpBidQtys")),
             ("total", e.get("askQtys"), e.get("bidQtys")),
         ):
-            st = _recognized_spread_ticks(ap, aq, bp, bq)
-            rows.append((trade_date, code, basis, _bucket(st)))
+            st = _recognized_spread_ticks(ask_ladder, aq, bid_ladder, bq)
+            rows.append((trade_date, code, basis, _bucket(st, price)))
+            ts_rows.append(
+                (trade_date, ts, code, basis, st, _spread_bp(st, price), price)
+            )
     if not rows:
         return 0
+    # 괴리율 시계열(종목별, basis 무관) — iNAV 스냅샷에서 실제괴리(deviation_pct)와
+    # 장중괴리(intraday_dev_pct=거래소 공시)를 같은 ts 로 기록. 값 없으면 NULL.
+    dev_rows = []
+    snap_by_code = {
+        str(se.get("ticker")): se for se in ((snapshot or {}).get("etfs") or [])
+    }
+    for code in ACE_TICKERS:
+        se = snap_by_code.get(code)
+        if se is None:
+            continue
+        dev_rows.append((
+            trade_date, ts, code,
+            _to_num(se.get("deviation_pct")),
+            _to_num(se.get("intraday_dev_pct")),
+        ))
     con = _connect()
     try:
         con.executemany(
@@ -161,6 +273,21 @@ def sample_once(hoga: dict | None, now: datetime | None = None) -> int:
             "ON CONFLICT(trade_date, code, basis, tick) DO UPDATE SET count=count+1",
             rows,
         )
+        con.executemany(
+            "INSERT INTO lp_spread_ts (trade_date, ts, code, basis, tick, bp, price) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(trade_date, code, basis, ts) DO UPDATE SET "
+            "tick=excluded.tick, bp=excluded.bp, price=excluded.price",
+            ts_rows,
+        )
+        if dev_rows:
+            con.executemany(
+                "INSERT INTO lp_dev_ts (trade_date, ts, code, actual_dev, intraday_dev) "
+                "VALUES (?,?,?,?,?) "
+                "ON CONFLICT(trade_date, code, ts) DO UPDATE SET "
+                "actual_dev=excluded.actual_dev, intraday_dev=excluded.intraday_dev",
+                dev_rows,
+            )
         con.commit()
     finally:
         con.close()
@@ -168,10 +295,10 @@ def sample_once(hoga: dict | None, now: datetime | None = None) -> int:
 
 
 def _stats(bucket_counts: dict) -> dict:
-    """알림틱(≥3) 버킷에 대한 평균·최빈·중앙값(분 가중). '없음'/'정상'은 제외 —
-    숫자 틱이 아니므로 분포 통계 밖에서 별도 카운트로 본다."""
-    alert = {t: c for t, c in bucket_counts.items()
-             if t >= SPREAD_ALERT_MIN_TICKS and c > 0}
+    """알림 버킷에 대한 평균·최빈·중앙값(분 가중). '없음'/'정상'은 제외 — 숫자 틱이
+    아니므로 분포 통계 밖에서 별도 카운트로 본다. _bucket 이 하한(15bp) 미만을 이미
+    _OK_TICK 으로 접었으므로 여기서는 양수 틱만 걸러면 된다 (2026-07-30)."""
+    alert = {t: c for t, c in bucket_counts.items() if t > _OK_TICK and c > 0}
     total = sum(alert.values())
     if total == 0:
         return {"mean": None, "mode": None, "median": None, "alert_min": 0}
@@ -188,6 +315,42 @@ def _stats(bucket_counts: dict) -> dict:
     return {"mean": round(mean, 2), "mode": mode, "median": median, "alert_min": total}
 
 
+def _band_row(key: str, label: str, values: list) -> dict:
+    """한 구간의 유지 분수 + bp 통계. 표본 1건 = 1분이므로 개수가 곧 유지 분수다.
+    최빈은 bp 가 연속값이라 그대로는 의미가 없어 **1bp 단위로 반올림**해 최다 값을
+    고른다(동률이면 작은 쪽). (2026-07-30 사용자 요청: 구간별 유지분수·평균·최빈)"""
+    n = len(values)
+    if n == 0:
+        return {"key": key, "label": label, "minutes": 0,
+                "mean": None, "mode": None, "median": None}
+    vals = sorted(values)
+    counter: dict[int, int] = {}
+    for v in vals:
+        k = int(round(v))
+        counter[k] = counter.get(k, 0) + 1
+    mode = max(counter.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+    median = (vals[n // 2] if n % 2
+              else (vals[n // 2 - 1] + vals[n // 2]) / 2)
+    return {
+        "key": key, "label": label, "minutes": n,
+        "mean": round(sum(vals) / n, 1),
+        "mode": mode,
+        "median": round(median, 1),
+    }
+
+
+def _bands(acc: dict) -> list:
+    """구간 4종을 화면 순서(좁은 → 넓은 → 없음)로. 경계는 lib/hoga.ts 와 동일."""
+    return [
+        _band_row("calm", f"0~{SPREAD_WARN_BP}bp", acc["calm"]),
+        _band_row("warn", f"{SPREAD_WARN_BP}~{SPREAD_CRIT_BP}bp", acc["warn"]),
+        _band_row("crit", f"{SPREAD_CRIT_BP}bp↑", acc["crit"]),
+        # '없음' = 인정호가 부재(물량X). bp 가 없으므로 유지 분수만.
+        {"key": "none", "label": "없음", "minutes": acc["none"],
+         "mean": None, "mode": None, "median": None},
+    ]
+
+
 def _hist(bucket_counts: dict) -> dict:
     out = {}
     for tick, c in sorted(bucket_counts.items()):
@@ -198,19 +361,23 @@ def _hist(bucket_counts: dict) -> dict:
 
 def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                   basis: str | None = None) -> dict:
-    """일별 LP 평가 — ACE 8종 × basis(lp/total) 히스토그램 + 통계.
+    """일별 LP 평가 — ACE 9종 × basis(lp/total) 히스토그램 + 통계.
 
     basis 인자가 'lp'/'total' 이면 그 기준만, 아니면 둘 다 반환.
     """
     names = names or {}
     now = datetime.now(_KST)
-    trade_date = trade_date or now.strftime("%Y-%m-%d")
+    today = now.strftime("%Y-%m-%d")
     out = {
-        "trade_date": trade_date,
+        "trade_date": trade_date or today,
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "session": {"start": _hhmm(SESSION_START_MIN), "end": _hhmm(SESSION_END_MIN)},
         "recognized_qty_min": RECOGNIZED_QTY_MIN,
-        "alert_min_ticks": SPREAD_ALERT_MIN_TICKS,
+        "warn_bp": SPREAD_WARN_BP,
+        "crit_bp": SPREAD_CRIT_BP,
+        # 표본 구간 전체 분수 — 구간별 유지 분수 합이 이 값에 얼마나 닿는지로 수신
+        # 정상 여부를 읽을 수 있다 (끊김/지연 분은 표본하지 않으므로 모자란다).
+        "session_minutes": SESSION_END_MIN - SESSION_START_MIN,
         "available_dates": [],
         "etfs": [],
     }
@@ -228,12 +395,37 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                 "SELECT DISTINCT trade_date FROM lp_spread_min ORDER BY trade_date DESC"
             )
         ]
+        # 날짜 미지정이면 가장 최근 누적일로 조회한다 — 오늘(장전/휴장)이 아직 비어
+        # 있어 빈 화면이 뜨는 대신 마지막으로 쌓인 날을 보여준다. 오늘 데이터가 있으면
+        # 그 날이 available_dates[0] 이라 그대로 오늘 (2026-07-28 사용자 요청).
+        query_date = trade_date or (
+            out["available_dates"][0] if out["available_dates"] else today
+        )
+        out["trade_date"] = query_date
         data: dict = {}
         for code, b, tick, count in cur.execute(
             "SELECT code, basis, tick, count FROM lp_spread_min WHERE trade_date=?",
-            (trade_date,),
+            (query_date,),
         ):
             data.setdefault((code, b), {})[tick] = count
+        # 구간별 통계는 시계열(표본 1건=1분)에서 직접 낸다 — 집계 테이블은 틱 버킷이라
+        # 20~40 / 40↑ 를 가를 수 없다. bp 기록 전(2026-07-30 이전) 표본은 tick 은 있는데
+        # bp 가 NULL 이므로 unbanded 로 따로 세어 화면이 그 사실을 드러내게 한다.
+        bands: dict = {}
+        for code, b, tick, bp_val in cur.execute(
+            "SELECT code, basis, tick, bp FROM lp_spread_ts WHERE trade_date=?",
+            (query_date,),
+        ):
+            acc = bands.setdefault(
+                (code, b),
+                {"calm": [], "warn": [], "crit": [], "none": 0, "unbanded": 0},
+            )
+            if tick is None:
+                acc["none"] += 1
+            elif bp_val is None:
+                acc["unbanded"] += 1
+            else:
+                acc[_band_of(bp_val)].append(bp_val)
     except sqlite3.Error as exc:
         _log(f"query failed: {exc!r}")
         con.close()
@@ -247,6 +439,10 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
         for b in bases:
             bc = data.get((code, b), {})
             st = _stats(bc)
+            acc = bands.get(
+                (code, b),
+                {"calm": [], "warn": [], "crit": [], "none": 0, "unbanded": 0},
+            )
             entry["basis"][b] = {
                 "hist": _hist(bc),
                 "none_min": bc.get(_NONE_TICK, 0),
@@ -256,8 +452,69 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                 "mean_tick": st["mean"],
                 "mode_tick": st["mode"],
                 "median_tick": st["median"],
+                # 2026-07-30 신설 — 화면 통계표의 정본. bands 의 minutes 합 + unbanded_min
+                # = 그 날 표본 분수(=장중 수신이 정상이었던 분수).
+                "bands": _bands(acc),
+                "unbanded_min": acc["unbanded"],
             }
         out["etfs"].append(entry)
+    return out
+
+
+def build_lp_eval_ts(trade_date: str | None = None, names: dict | None = None,
+                     basis: str | None = None) -> dict:
+    """인정 스프레드 틱 시계열(분봉) — ACE 종목별 (ts, tick) 포인트 배열. 차트용.
+    basis 'lp'/'total'(기본 lp). tick=None 은 '없음'(인정호가 부재)=선 끊김.
+    available_dates 는 시계열이 기록된 날(lp_spread_ts)만 — 시간 미기록 과거일 제외
+    (2026-07-28 사용자 요청: 28일자부터 x=시간·y=틱 추이 차트)."""
+    names = names or {}
+    now = datetime.now(_KST)
+    today = now.strftime("%Y-%m-%d")
+    basis = basis if basis in ("lp", "total") else "lp"
+    out = {
+        "trade_date": trade_date or today,
+        "basis": basis,
+        "session": {"start": _hhmm(SESSION_START_MIN), "end": _hhmm(SESSION_END_MIN)},
+        "available_dates": [],
+        "series": [],
+    }
+    if not DB_PATH.exists():
+        return out
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"ts open failed: {exc!r}")
+        return out
+    by_code: dict = {}
+    try:
+        cur = con.cursor()
+        out["available_dates"] = [
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT trade_date FROM lp_spread_ts ORDER BY trade_date DESC"
+            )
+        ]
+        query_date = trade_date or (
+            out["available_dates"][0] if out["available_dates"] else today
+        )
+        out["trade_date"] = query_date
+        for code, ts, tick in cur.execute(
+            "SELECT code, ts, tick FROM lp_spread_ts "
+            "WHERE trade_date=? AND basis=? ORDER BY code, ts",
+            (query_date, basis),
+        ):
+            by_code.setdefault(code, []).append([ts, tick])
+    except sqlite3.Error as exc:
+        # 테이블 미생성(첫 표본 전) 등 — 빈 시계열로.
+        _log(f"ts query skipped: {exc!r}")
+        con.close()
+        return out
+    con.close()
+    for code in ACE_TICKERS:
+        out["series"].append({
+            "code": code,
+            "name": names.get(code, "") or names.get(code.upper(), ""),
+            "points": by_code.get(code, []),
+        })
     return out
 
 

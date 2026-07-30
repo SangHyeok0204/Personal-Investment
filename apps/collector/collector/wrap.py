@@ -695,9 +695,15 @@ class WrapCollector:
         if first_time or is_new:
             self._ret1 = compute_ret1(rows_by_pf, price, CASH_TICKERS)
             self._ret1_basis = new_basis
-            _log(f"ret1 갱신 basis={new_basis} (신규={is_new})")
-            if in_window and is_new:
+            _log(f"ret1 갱신 basis={new_basis} (신규={is_new}, 최초={first_time})")
+            # 최초 1회(재기동 부트스트랩)는 lock 하지 않는다 — _ret1_basis 가 None 이라
+            # is_new 가 무조건 True 라서, 그날 종가가 아직 안 들어온 소스를 읽어도
+            # '오늘치 확보'로 오인해 그날 재시도를 전부 막아버린다(2026-07-28 실제 발생:
+            # 08:50 재기동이 07-24 를 읽고 잠가, 09:25 에 들어온 07-27 을 놓침).
+            if in_window and is_new and not first_time:
                 self._ret1_locked_date = today
+        elif in_window:
+            _log(f"ret1 대기: 소스 최신 종가일 {new_basis} (보유 {self._ret1_basis}) — 재시도")
 
     # ── 페이로드 (구 wrap_watchlist.run_cycle 의 집계와 동일) ──────────
     def build_payload(self, fx_table: dict | None = None) -> dict | None:
@@ -735,6 +741,9 @@ class WrapCollector:
             holdings: list[dict] = []
             ret_sum = ret_sum_krw = mw = tw = 0.0
             nm = 0
+            # 포트폴리오의 환 노출 통화(비중 최대 외화) — 현금 행에 '순수 환 변동'을
+            # 표시할 때 어느 통화의 등락률을 쓸지 정하는 데 쓴다.
+            fx_weight: dict[str, float] = {}
             for h in rows:
                 is_cash = str(h["ticker"]).upper() in CASH_TICKERS
                 r = self.watchlist._resolved.get(h["ticker"])
@@ -785,6 +794,10 @@ class WrapCollector:
                         else None
                     )
                 tw += h["weight_pct"]
+                if not is_cash and currency != "KRW":
+                    fx_weight[currency] = fx_weight.get(currency, 0.0) + (
+                        h["weight_pct"] or 0.0
+                    )
                 if contrib is not None:
                     ret_sum += contrib
                     mw += h["weight_pct"]
@@ -799,11 +812,17 @@ class WrapCollector:
                         "name": h["name"],
                         "exchange": exchange,
                         "currency": currency,
+                        "is_cash": is_cash,
+                        # 환 자체 등락률(통화 기준). 화면의 '환 수익률' 열은 현금 행에서만
+                        # 이 값을 쓰고, 종목 행은 아래 return_krw_pct(환 반영 수익률)를 쓴다.
                         "fx_return_pct": fx_row.get("fluctuations_pct") if fx_row else None,
                         "weight_pct": h["weight_pct"],
                         "prev_close": prev,
                         "livePrice": live,
                         "return_pct": ret,
+                        # 환을 반영했을 때의 종목 수익률 = (1+현지수익률)(1+환등락) − 1.
+                        # 국내물은 환이 상쇄돼 return_pct 와 같다.
+                        "return_krw_pct": ret_krw,
                         "contribution_pct": contrib,
                         "matched": matched,
                         "tradeTime": info["tradeTime"] if info else None,
@@ -815,6 +834,10 @@ class WrapCollector:
             holdings.sort(key=lambda x: x["weight_pct"] or 0, reverse=True)
             meta = self._holdings_meta.get(key) or {}
             r1 = self._ret1.get(key) or {}
+            fx_cur = max(fx_weight, key=lambda c: fx_weight[c]) if fx_weight else None
+            fx_pct = (
+                (fx_detail.get(fx_cur) or {}).get("fluctuations_pct") if fx_cur else None
+            )
             portfolios.append(
                 {
                     "key": key,
@@ -827,6 +850,9 @@ class WrapCollector:
                     "holdings": holdings,
                     "holdings_source": meta.get("source"),
                     "basis_date": meta.get("basis"),
+                    # 환 노출 통화와 그 순수 등락률 — 현금 행의 '환 수익률'로 표시.
+                    "fx_currency": fx_cur,
+                    "fx_return_pct": fx_pct,
                     # ② 전일종가→최근체결가 (USD / 원화)
                     "return2_usd": ret_sum,
                     "return2_krw": ret_sum_krw,

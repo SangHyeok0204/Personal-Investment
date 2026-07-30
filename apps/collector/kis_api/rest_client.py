@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
 from urllib3.exceptions import InsecureRequestWarning
 
 from kis_api.auth import KisAuth
@@ -84,6 +85,12 @@ class KisRestClient:
         self.suppress_insecure_warning = suppress_insecure_warning
         if not auth.verify_ssl and suppress_insecure_warning:
             urllib3.disable_warnings(InsecureRequestWarning)
+        # 요청마다 새 연결을 열면 TIME_WAIT 소켓이 쌓여 Windows 호스트의 ephemeral
+        # 포트를 고갈시킨다(Input Director 전환 실패의 원인). KIS 는
+        # Connection: Keep-Alive (timeout=5, max=100) 를 주므로 Session 으로
+        # 연결을 재사용한다. pool_maxsize 는 snapshots(max_workers) 최대치 8 + 여유.
+        self._session = requests.Session()
+        self._session.mount("https://", HTTPAdapter(pool_maxsize=16))
 
     def _get(self, path: str, tr_id: str, params: dict) -> dict:
         url = f"{self.auth.credentials.rest_base}{path}"
@@ -91,7 +98,7 @@ class KisRestClient:
         if not self.auth.verify_ssl and self.suppress_insecure_warning:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", InsecureRequestWarning)
-                response = requests.get(
+                response = self._session.get(
                     url,
                     headers=headers,
                     params=params,
@@ -99,7 +106,7 @@ class KisRestClient:
                     verify=False,
                 )
         else:
-            response = requests.get(
+            response = self._session.get(
                 url,
                 headers=headers,
                 params=params,

@@ -161,7 +161,7 @@ export default function Guru13fPage() {
     <>
       <Topbar
         title="GURU [13F]"
-        subtitle="track record · 13F 기관/거장 포트폴리오"
+        subtitle="성과 분석 · 13F 기관/거장 포트폴리오"
         status={
           generatedAt ? (
             <span className="truncate text-[11px] text-slate-400">

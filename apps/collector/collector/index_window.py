@@ -47,6 +47,9 @@ ALERT_FIRE_PCT = 2.0   # 60분 변동폭(max−min) ≥ 2%p 발화
 ALERT_REARM_PCT = 1.5  # <1.5%p 로 줄면 재무장(연속 발화 방지)
 ACC_START_MIN = 8 * 60 + 55  # 08:55 KST 부터 누적
 ACC_END_MIN = 16 * 60        # 16:00 까지
+# 롤1h 60분 창은 장 개시(09:00) 이후 틱만 본다 — 장전 동시호가(08:30~09:00)의 지시가
+# 스윙이 가짜 변동폭을 만들어 스푸리어스 발화하던 문제 차단 (2026-07-29).
+MARKET_OPEN_MIN = 9 * 60      # 09:00
 OPEN_LO_MIN = 9 * 60 + 5     # 09:05~09:08 장초반(전일比) 1회
 OPEN_HI_MIN = 9 * 60 + 8
 _ALERTS_TTL_S = 15.0  # 하루 스캔 재계산 최소 간격(요청마다 재계산 방지)
@@ -152,7 +155,12 @@ def build_index_window(
 
     now = datetime.now(_KST)
     gen = now.strftime("%Y-%m-%d %H:%M:%S")
-    win_from = (now - timedelta(minutes=window_min)).strftime("%Y-%m-%d %H:%M:%S")
+    # 60분 창은 장 개시(09:00) 이후만 — 장전 동시호가 지시가 스윙이 가짜 변동폭을 만드는
+    # 것을 막는다. 문자열 비교=시간순이라 max 로 바닥 클립 (2026-07-29).
+    open_from = now.strftime("%Y-%m-%d") + " 09:00:00"
+    win_from = max(
+        (now - timedelta(minutes=window_min)).strftime("%Y-%m-%d %H:%M:%S"), open_from
+    )
     buf_from = (now - timedelta(minutes=buffer_min)).strftime("%Y-%m-%d %H:%M:%S")
 
     out: dict = {"generated_at": gen, "window_min": window_min, "indices": []}
@@ -286,13 +294,18 @@ def build_index_alerts(codes=DEFAULT_CODES) -> dict:
                     episode = None  # 현재 발화 에피소드(비무장 중) — 피크 갱신 대상
                     lo = 0
                     for idx, (r, dt) in enumerate(zip(rows, dts)):
-                        # 창 [t-60분, t] 유지 (two-pointer)
-                        while lo < idx and (dt - dts[lo]).total_seconds() > WINDOW_MIN * 60:
+                        # 창 [t-60분, t] 유지 + 장전(09:00 이전) 틱 제외 (two-pointer).
+                        # 장전 동시호가 지시가가 가짜 60분 변동폭→스푸리어스 발화를 만들던
+                        # 문제 차단 (2026-07-29: KOSPI 가 08:55 에 가짜 9%p 급등으로 발화).
+                        while lo < idx and (
+                            (dt - dts[lo]).total_seconds() > WINDOW_MIN * 60
+                            or dts[lo].hour * 60 + dts[lo].minute < MARKET_OPEN_MIN
+                        ):
                             lo += 1
                         m = dt.hour * 60 + dt.minute
-                        if not (ACC_START_MIN <= m <= ACC_END_MIN):
+                        if not (MARKET_OPEN_MIN <= m <= ACC_END_MIN):
                             continue
-                        win = _clean_window(rows[lo:idx + 1], "")  # 이미 60분 창 → win_from 무의미
+                        win = _clean_window(rows[lo:idx + 1], "")  # 이미 60분·장중 창
                         ext = _extremes(win)
                         if ext is None:
                             continue

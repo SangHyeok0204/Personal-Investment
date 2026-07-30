@@ -87,6 +87,9 @@ WRAP_REFRESH_S = 15.0         # WRAP 포트폴리오 실시간 수익률 (legacy
 TWSE_REFRESH_S = 300.0
 COMPUTE_INTERVAL_S = 1.0
 ROLLOVER_CHECK_S = 60.0
+# 아침 PDF 재로딩 시각(KST 분). 자정 롤오버는 오늘 KRX PDF(≈08:35 생성) 전이라 전일
+# 바스켓으로 빌드된다 → 08:40 이후 오늘 basket 이 아직이면 재빌드해 오늘 PDF 를 태운다.
+MORNING_RELOAD_MIN = 8 * 60 + 40  # 08:40 KST
 LP_EVAL_SAMPLE_S = 60.0        # LP 평가 — 인정 스프레드 틱 체류시간 표본 주기(1분)
 
 # KIS realtime WebSocket lane.
@@ -124,6 +127,11 @@ def _int_or_none(value):
         return int(safe)
     except (TypeError, ValueError):
         return None
+
+
+def _kst_minutes_now() -> int:
+    """현재 KST 자정 기준 분(0~1439). 컨테이너 TZ 무관(UTC+9 고정 오프셋)."""
+    return int(((time.time() + 9 * 3600) % 86400) // 60)
 
 
 # KIS HDFSCNT0 (해외주식 실시간지연체결가) live frame layout — 26 caret-delimited
@@ -484,6 +492,7 @@ class Collector:
             run_date, self.target_tickers
         )
         self.state.set_basket(basis, source)
+        self._basket_basis = basis  # 아침 재로딩이 "오늘 PDF 로 실렸나" 판단용
 
         pdf_df, etf_list_df, market_df = filter_inputs_by_ticker(
             pdf_df, etf_list_df, market_df, tickers=self.target_tickers, max_etfs=None
@@ -1020,17 +1029,45 @@ class Collector:
             if await self._sleep_or_stop(ROLLOVER_CHECK_S):
                 return
             current = legacy_inputs.kst_today()
-            if current == self.run_date:
+            if current != self.run_date:
+                _log(f"KST date rollover {self.run_date} -> {current}; rebuilding engine")
+                try:
+                    self._init_clients()
+                    await self._build_engine(current)
+                except Exception as exc:  # noqa: BLE001 - keep last-good engine
+                    _log(f"rollover rebuild failed: {exc!r}; keeping previous engine")
                 continue
-            _log(f"KST date rollover {self.run_date} -> {current}; rebuilding engine")
-            try:
-                self._init_clients()
-                await self._build_engine(current)
-            except Exception as exc:  # noqa: BLE001 - keep last-good engine
-                _log(f"rollover rebuild failed: {exc!r}; keeping previous engine")
+            # 아침 PDF 재로딩 — 자정 롤오버는 오늘 PDF(≈08:35 생성) 전이라 전일 바스켓
+            # 으로 빌드된다. 08:40 이후 오늘 basket 이 아직이면 재빌드해 오늘 PDF 를
+            # 태운다. 이미 오늘 걸(재기동 등) 실었으면 재빌드 없이 완료 표시. 성공
+            # (basis==오늘)일 때만 완료로 찍어 → PDF 가 늦으면 다음 분에 재시도한다.
+            if (
+                _kst_minutes_now() >= MORNING_RELOAD_MIN
+                and getattr(self, "_morning_reload_date", "") != current
+            ):
+                if getattr(self, "_basket_basis", "") == current:
+                    self._morning_reload_date = current
+                    continue
+                _log(
+                    f"morning PDF reload {current}: 현재 basis="
+                    f"{getattr(self, '_basket_basis', '?')} → 오늘 PDF 로 재빌드 시도"
+                )
+                try:
+                    self._init_clients()
+                    await self._build_engine(current)
+                    if getattr(self, "_basket_basis", "") == current:
+                        self._morning_reload_date = current
+                        _log(f"morning PDF reload 완료 basis={self._basket_basis}")
+                    else:
+                        _log(
+                            "morning PDF reload: 오늘 PDF 아직 없음"
+                            f"(basis={getattr(self, '_basket_basis', '?')}) — 다음 분 재시도"
+                        )
+                except Exception as exc:  # noqa: BLE001 - keep last-good engine
+                    _log(f"morning PDF reload failed: {exc!r}; keeping previous engine")
 
     async def _lp_eval_loop(self) -> None:
-        """LP 평가 표본 — 60초마다 현재 호가에서 ACE 8종의 인정 스프레드 틱을
+        """LP 평가 표본 — 60초마다 현재 호가에서 ACE 9종의 인정 스프레드 틱을
         basis(lp/total) 2종으로 누적한다. LP 의무시간(09:05~15:20 KST)·CHECK 신선할
         때만 표본하며, lp_eval.db(.cache) 에 영속(재기동에도 유지). 표본이 실제로
         누적된 분에는 그날치 통계를 S: 출력폴더에 저장한다(JSON + 마스터 CSV) —
@@ -1040,7 +1077,7 @@ class Collector:
             if await self._sleep_or_stop(LP_EVAL_SAMPLE_S):
                 return
             try:
-                n = _lpe.sample_once(self.state.hoga())
+                n = _lpe.sample_once(self.state.hoga(), snapshot=self.state.snapshot())
                 if n:
                     _lpe.write_daily_snapshot(self.etf_names)
             except Exception as exc:  # noqa: BLE001 - 표본 실패는 그 분만 건너뜀
@@ -1115,7 +1152,7 @@ class Collector:
 
         @app.get("/lp-eval")
         def lp_eval(date: str | None = None, basis: str | None = None):
-            # LP 평가 — ACE 8종 인정 스프레드 틱 체류시간(분) 분포/통계. lp_eval.db 판독.
+            # LP 평가 — ACE 9종 인정 스프레드 틱 체류시간(분) 분포/통계. lp_eval.db 판독.
             from collector import lp_eval as _lpe
 
             try:
@@ -1123,6 +1160,17 @@ class Collector:
             except Exception as exc:  # noqa: BLE001
                 _log(f"lp-eval failed: {exc!r}")
                 return JSONResponse({"detail": "lp-eval error"}, status_code=503)
+
+        @app.get("/lp-eval-ts")
+        def lp_eval_ts(date: str | None = None, basis: str | None = None):
+            # LP 평가 인정 스프레드 틱 시계열(분봉) — ACE 종목별 (ts, tick). 차트용.
+            from collector import lp_eval as _lpe
+
+            try:
+                return JSONResponse(_lpe.build_lp_eval_ts(date, self.etf_names, basis))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"lp-eval-ts failed: {exc!r}")
+                return JSONResponse({"detail": "lp-eval-ts error"}, status_code=503)
 
         @app.get("/wrap-performance")
         def wrap_performance():
@@ -1211,6 +1259,88 @@ class Collector:
             except Exception as exc:  # noqa: BLE001
                 _log(f"meeting/file failed: {exc!r}")
                 return JSONResponse({"detail": "meeting error"}, status_code=503)
+            if html is None:
+                return JSONResponse({"detail": "not found"}, status_code=404)
+            return JSONResponse({"path": path, "html": html})
+
+        # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────
+        # S:\GE\Wonjae\07_회의자료\정기미팅 (:ro) 의 성과보고 JSON 을 요일 규칙
+        # (월=위클리 / 화~금=데일리)에 맞춰 골라 서빙. 오늘 작성분이 없으면 pending.
+        @app.get("/perf-brief")
+        def perf_brief():
+            from collector import perf_brief as _pb
+            try:
+                return JSONResponse(_pb.build())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"perf-brief failed: {exc!r}")
+                return JSONResponse({"detail": "perf-brief error"}, status_code=503)
+
+        # [분석 시작] — 운용역 소스 엑셀을 그 자리에서 읽어 정량 분석을 만든다.
+        # 느린 경로(SMB xlsx 파싱 수 초)라 폴링이 아니라 버튼 요청에만 돈다.
+        @app.get("/perf-brief/analyze")
+        def perf_brief_analyze(mode: str = "daily"):
+            from collector import perf_analyze as _pa
+            try:
+                return JSONResponse(_pa.analyze(mode))
+            except FileNotFoundError as exc:
+                return JSONResponse({"detail": f"소스 엑셀 없음: {exc}"}, status_code=404)
+            except ValueError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"perf-brief/analyze failed: {exc!r}")
+                return JSONResponse({"detail": "analyze error"}, status_code=503)
+
+        # [보고서 생성] — Windows 러너(claude 서브프로세스) 위임. 컨테이너에는 claude 가
+        # 없고 인증도 구독 OAuth 라 옮길 수 없어, 계산만 여기서 하고 서사는 러너가 만든다.
+        # 러너가 저장한 JSON 은 기존 /perf-brief 배선이 그대로 집어 올린다.
+        def _runner(path: str, method: str = "GET"):
+            import urllib.error
+            import urllib.request
+            base = os.environ.get("PERF_BRIEF_RUNNER_URL", "http://host.docker.internal:8010")
+            token = os.environ.get("PERF_BRIEF_RUNNER_TOKEN", "").strip()
+            req = urllib.request.Request(f"{base}{path}", method=method,
+                                         data=b"" if method == "POST" else None)
+            if token:
+                req.add_header("X-Runner-Token", token)
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return JSONResponse(json.loads(r.read().decode("utf-8")), status_code=r.status)
+            except urllib.error.HTTPError as exc:
+                try:
+                    body = json.loads(exc.read().decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    body = {"detail": f"runner error {exc.code}"}
+                return JSONResponse(body, status_code=exc.code)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"perf-brief runner unreachable: {exc!r}")
+                return JSONResponse(
+                    {"detail": "러너에 연결할 수 없습니다 — 성과보고_러너_시작.bat 이 켜져 있는지 확인해 주세요"},
+                    status_code=503,
+                )
+
+        @app.post("/perf-brief/generate")
+        def perf_brief_generate(mode: str = "daily"):
+            return _runner(f"/generate?mode={mode}", method="POST")
+
+        @app.get("/perf-brief/generate/status")
+        def perf_brief_generate_status():
+            return _runner("/status")
+
+        # [성과보고 HTML] S: 의 bat 산출물. 계산·서사가 전부 S: 로 넘어간 구조라
+        # collector 는 파일명 규약으로 오늘치를 고르고 원문만 넘긴다(회의 탭과 동일).
+        @app.get("/perf-report")
+        def perf_report():
+            from collector import perf_report as _pr
+            try:
+                return JSONResponse(_pr.build())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"perf-report failed: {exc!r}")
+                return JSONResponse({"detail": "perf-report error"}, status_code=503)
+
+        @app.get("/perf-report/file")
+        def perf_report_file(path: str = ""):
+            from collector import perf_report as _pr
+            html = _pr.read_html(path)
             if html is None:
                 return JSONResponse({"detail": "not found"}, status_code=404)
             return JSONResponse({"path": path, "html": html})
