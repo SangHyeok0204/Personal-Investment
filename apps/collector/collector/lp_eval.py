@@ -15,6 +15,10 @@
   ·  0 = '정상'(ok)   : 인정 스프레드 < 3틱(알림 미발화 구간, 분모용 컨텍스트).
   · ≥3 = 알림틱       : 인정 스프레드가 그 틱(3,4,5,…). 화면 알림이 뜨는 값.
 
+같은 표본 시각에 종목별 괴리율(실제괴리 = 자체 iNAV 기준 / 장중괴리 = 거래소 공시)도
+lp_dev_ts 에 함께 기록한다 — 스프레드가 벌어진 순간의 괴리를 나중에 붙여볼 수 있게
+(2026-07-28). S: 아카이브의 lp_eval_ts_{date}.csv 가 둘을 한 행으로 합쳐 내보낸다.
+
 프론트 lib/hoga.ts 의 recognizedSpreadTicks/recognizedQuotePrice/tickSize 를 그대로
 이식한다(값 일치 보장). 순수 판독·누적 — 예외는 삼키고 그 표본만 건너뛴다.
 """
@@ -55,14 +59,54 @@ ACE_TICKERS = (
 )
 
 # LP 평가 표본 구간 — KRX LP 호가 의무 시간대(09:05~15:20 KST). 개장 직후 5분
-# (09:00~09:05)과 종가 단일가 구간(15:20~15:30)은 LP 의무가 면제·종료되므로 표본
-# 하지 않는다 (2026-07-27 사용자 확정). CHECK 수신 지연이 크면(끊김) 그 분은 제외.
+# (09:00~09:05)과 종가 단일가 구간(15:20~15:30)은 LP 의무가 면제·종료되므로 평가에
+# 넣지 않는다 (2026-07-27 사용자 확정). 단 09:00~09:05 는 2026-08-04 부터 별도
+# 테이블(lp_pre_ts)에 보관만 한다 — 아래 PRE_START_MIN 주석 참고.
+# CHECK 수신 지연이 크면(끊김) 그 분은 제외.
 SESSION_START_MIN = 9 * 60 + 5      # 09:05
 SESSION_END_MIN = 15 * 60 + 20      # 15:20
+
+# 개장 직후 5분(09:00~09:05) — LP 호가 의무가 아직 없는 구간이라 평가에서는 계속
+# 뺀다. 다만 "의무가 없을 때 LP 가 어떻게 까는가"는 그 자체로 볼 값어치가 있어서
+# 표본만 따로 쌓아둔다 (2026-08-04 사용자 요청: 화면 표시 목적 아님, 저장만).
+# 격리 방식 = 전용 테이블 lp_pre_ts + 전용 CSV. 집계 쿼리들이 보는 lp_spread_min /
+# lp_spread_ts / lp_dev_ts 에는 한 줄도 안 들어가므로 대시보드 숫자는 그대로다.
+PRE_START_MIN = 9 * 60              # 09:00 개장
+SESSION_MINUTES = SESSION_END_MIN - SESSION_START_MIN   # 375 = '총 장 기간'(표본 만수)
 HOGA_FRESH_MAX_S = 15.0
+
+# 시간대별 평균 — 전 종목에 낸다 (2026-08-04). 처음엔 중국 편입 3종만 봤는데(중국 장
+# 개시 전후로 LP 태도가 갈린다), 원자산 개장·환율·점심 등으로 시간대가 갈리는 건
+# 어느 ETF나 마찬가지라 전 종목으로 넓혔다. 화면은 Topbar '구간분석' 토글로 켠다.
+
+# 실제괴리 표시용 임시 미러 — 웹 inav/page.tsx 의 DEV_MIRROR_TICKERS 와 같은 집합을
+# 유지해야 두 화면이 같은 '실제괴리'를 말한다. 0199C0 은 구성종목이 전부 국내라
+# 실제괴리와 장중괴리가 원리상 같아야 하는데 자체 iNAV 가 어긋나 있어(8/4 실측
+# 0.542% vs 0.163%) 거래소 공시값으로 덮어 쓴다. DB 원본(lp_dev_ts)과 CSV 는 손대지
+# 않고 집계 단계에서만 바꾼다. ※ 원인 규명 후 웹 쪽 블록과 함께 통째로 제거할 것.
+DEV_MIRROR_TICKERS = frozenset({"0199C0"})
+
+# (키, 라벨, 짧은라벨, 시작분, 종료분) — 종료는 배타(start <= m < end), 세션 판정과
+# 같은 규칙. w1~w4 는 빈틈없이 이어져 있어 짧은라벨(시작시각)만으로 구간이 특정된다
+# — 카드에 5칸을 나란히 놓으면 '09:05~10:30' 전체를 적을 폭이 안 나온다.
+# w5 는 장 전체라 mean_bp(대표값)와 같은 값이 나온다 — 비교 기준선으로 같이 세운다.
+# ⚠️ w4 의 종료 15:30 은 사용자 지정 라벨이고, 실제 표본은 LP 의무가 끝나는 15:20
+#    까지만 있다(SESSION_END_MIN). 즉 w4 는 90분이 아니라 최대 80분이 분모다.
+SPREAD_WINDOWS = (
+    ("w1", "09:05~10:30", "09:05", 9 * 60 + 5, 10 * 60 + 30),
+    ("w2", "10:30~13:00", "10:30", 10 * 60 + 30, 13 * 60),
+    ("w3", "13:00~14:00", "13:00", 13 * 60, 14 * 60),
+    ("w4", "14:00~15:30", "14:00", 14 * 60, 15 * 60 + 30),
+    ("w5", "09:05~15:20", "전체", SESSION_START_MIN, SESSION_END_MIN),
+)
 
 _NONE_TICK = -1  # '없음' 센티넬
 _OK_TICK = 0     # '정상'(<3틱) 센티넬
+
+# 히스토그램 첫 막대 — 0~2틱(음수=교차호가 포함)을 한 칸으로 묶는다. 1틱과 2틱을
+# 갈라 봐야 LP 평가에 쓸 게 없고, 셋을 합쳐야 '얼마나 촘촘했나'가 한눈에 들어온다.
+_LOW_TICK_KEY = "0-2"
+_LOW_TICK_MAX = 2
 
 
 def _log(msg: str) -> None:
@@ -201,6 +245,16 @@ def _connect():
         " actual_dev REAL, intraday_dev REAL,"
         " PRIMARY KEY (trade_date, code, ts))"
     )
+    # 개장 직후(09:00~09:05) 전용 — LP 의무 면제 구간이라 위 3개 테이블과 완전히
+    # 분리한다. 집계 쿼리가 이 테이블을 절대 읽지 않는 게 격리의 전부다.
+    # 괴리는 basis 무관이지만 행이 하루 90개뿐(9종×2기준×5분)이라 열로 붙여 둔다.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS lp_pre_ts ("
+        " trade_date TEXT NOT NULL, ts TEXT NOT NULL, code TEXT NOT NULL,"
+        " basis TEXT NOT NULL, tick INTEGER, bp REAL, price REAL,"
+        " actual_dev REAL, intraday_dev REAL,"
+        " PRIMARY KEY (trade_date, code, basis, ts))"
+    )
     return con
 
 
@@ -211,7 +265,10 @@ def sample_once(hoga: dict | None, now: datetime | None = None,
     (실제/장중)도 함께 기록한다. 누적한 (code×basis) 행 수를 반환(0=구간밖/스킵)."""
     now = now or datetime.now(_KST)
     minute = now.hour * 60 + now.minute
-    if not (SESSION_START_MIN <= minute < SESSION_END_MIN):
+    # 판정·계산은 두 구간이 완전히 같고, 다른 건 '어느 테이블에 넣느냐' 뿐이다.
+    in_main = SESSION_START_MIN <= minute < SESSION_END_MIN
+    in_pre = PRE_START_MIN <= minute < SESSION_START_MIN
+    if not (in_main or in_pre):
         return 0
     if not hoga:
         return 0
@@ -267,6 +324,23 @@ def sample_once(hoga: dict | None, now: datetime | None = None,
         ))
     con = _connect()
     try:
+        if in_pre:
+            # 의무 면제 구간 — 평가 테이블 3종에는 한 줄도 안 넣는다. 괴리를 basis
+            # 행마다 복제해 붙여 한 테이블로 자립시킨다(조인 없이 CSV 로 바로 나감).
+            dev_by_code = {r[2]: (r[3], r[4]) for r in dev_rows}
+            pre_rows = [
+                row + dev_by_code.get(row[2], (None, None)) for row in ts_rows
+            ]
+            con.executemany(
+                "INSERT INTO lp_pre_ts (trade_date, ts, code, basis, tick, bp, price,"
+                " actual_dev, intraday_dev) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(trade_date, code, basis, ts) DO UPDATE SET "
+                "tick=excluded.tick, bp=excluded.bp, price=excluded.price, "
+                "actual_dev=excluded.actual_dev, intraday_dev=excluded.intraday_dev",
+                pre_rows,
+            )
+            con.commit()
+            return len(pre_rows)
         con.executemany(
             "INSERT INTO lp_spread_min (trade_date, code, basis, tick, count) "
             "VALUES (?,?,?,?,1) "
@@ -315,13 +389,22 @@ def _stats(bucket_counts: dict) -> dict:
     return {"mean": round(mean, 2), "mode": mode, "median": median, "alert_min": total}
 
 
+def _share(minutes: int) -> float:
+    """유지 분수 → 총 장 기간(09:05~15:20 = SESSION_MINUTES) 대비 비율(%).
+    분모를 '실제 표본 분수'가 아니라 장 전체로 잡는 이유: CHECK 수신이 끊긴 분까지
+    포함해야 '하루 중 몇 %를 그 상태로 보냈나'가 부풀지 않는다. 그래서 구간 비율의
+    합은 수신이 정상이었던 만큼만 100% 에 닿는다 (2026-08-04 사용자 요청)."""
+    return round(minutes / SESSION_MINUTES * 100, 1)
+
+
 def _band_row(key: str, label: str, values: list) -> dict:
-    """한 구간의 유지 분수 + bp 통계. 표본 1건 = 1분이므로 개수가 곧 유지 분수다.
+    """한 구간의 유지 분수 + 비율 + bp 통계. 표본 1건 = 1분이므로 개수가 곧 유지 분수다.
     최빈은 bp 가 연속값이라 그대로는 의미가 없어 **1bp 단위로 반올림**해 최다 값을
-    고른다(동률이면 작은 쪽). (2026-07-30 사용자 요청: 구간별 유지분수·평균·최빈)"""
+    고른다(동률이면 작은 쪽). (2026-07-30 사용자 요청: 구간별 유지분수·평균·최빈
+    / 2026-08-04 화면은 최빈 대신 share 를 쓴다 — mode 는 계약 유지용으로 남긴다.)"""
     n = len(values)
     if n == 0:
-        return {"key": key, "label": label, "minutes": 0,
+        return {"key": key, "label": label, "minutes": 0, "share": 0.0,
                 "mean": None, "mode": None, "median": None}
     vals = sorted(values)
     counter: dict[int, int] = {}
@@ -332,7 +415,7 @@ def _band_row(key: str, label: str, values: list) -> dict:
     median = (vals[n // 2] if n % 2
               else (vals[n // 2 - 1] + vals[n // 2]) / 2)
     return {
-        "key": key, "label": label, "minutes": n,
+        "key": key, "label": label, "minutes": n, "share": _share(n),
         "mean": round(sum(vals) / n, 1),
         "mode": mode,
         "median": round(median, 1),
@@ -345,10 +428,67 @@ def _bands(acc: dict) -> list:
         _band_row("calm", f"0~{SPREAD_WARN_BP}bp", acc["calm"]),
         _band_row("warn", f"{SPREAD_WARN_BP}~{SPREAD_CRIT_BP}bp", acc["warn"]),
         _band_row("crit", f"{SPREAD_CRIT_BP}bp↑", acc["crit"]),
-        # '없음' = 인정호가 부재(물량X). bp 가 없으므로 유지 분수만.
+        # '없음' = 인정호가 부재(물량X). bp 가 없으므로 유지 분수·비율만.
         {"key": "none", "label": "없음", "minutes": acc["none"],
-         "mean": None, "mode": None, "median": None},
+         "share": _share(acc["none"]), "mean": None, "mode": None, "median": None},
     ]
+
+
+def _ts_minute(ts: str) -> int | None:
+    """'HH:MM:SS' → 분 단위 시각. 형식이 깨진 표본은 None(구간 집계에서 제외)."""
+    try:
+        h, m, _ = ts.split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _windows(acc: dict | None, digits: int = 1) -> list:
+    """시간대별 평균 — SPREAD_WINDOWS 순서대로 [{key,label,mean,minutes}].
+    분모는 그 구간의 유효 표본 수다(스프레드는 '없음'이 bp 가 없어 빠진다).
+    표본이 하나도 없으면 mean=None → 화면은 '−'.
+
+    digits: 스프레드(bp)는 1자리면 충분하지만 괴리(%)는 2자리를 써야 한다 — 1자리로
+    끊으면 −0.26% 가 −0.3% 로, 0.04% 가 0.0% 로 뭉개져 구간 비교가 안 된다."""
+    acc = acc or {}
+    out = []
+    for key, label, short, _s, _e in SPREAD_WINDOWS:
+        vals = acc.get(key) or []
+        out.append({
+            "key": key, "label": label, "short": short,
+            "mean": round(sum(vals) / len(vals), digits) if vals else None,
+            "minutes": len(vals),
+        })
+    return out
+
+
+def _dev_stats(vals: list, wacc: dict | None) -> dict:
+    """실제괴리(%) 평균 — 카드 '평균 실제괴리' 박스용. basis(LP/총호가)와 무관해서
+    ETF 단위로 낸다.
+
+    mean 은 부호를 살린 평균이라 하루 내내 프리미엄/디스카운트로 치우쳤는지를 말하고,
+    abs_mean 은 부호가 상쇄돼 mean 이 0 에 가까워지는 경우를 드러낸다(실측 414270:
+    mean −0.216% vs abs 0.301%). 화면은 mean 을 크게, abs_mean 을 밑줄에 쓴다.
+    wacc 가 오면 시간대별 평균도 같이 낸다(전 종목 — 화면 '구간분석' 토글이 고른다)."""
+    out = {
+        "mean": round(sum(vals) / len(vals), 3) if vals else None,
+        "abs_mean": round(sum(abs(v) for v in vals) / len(vals), 3) if vals else None,
+        "minutes": len(vals),
+    }
+    if wacc is not None:
+        out["windows"] = _windows(wacc, digits=2)
+    return out
+
+
+def _day_mean_bp(acc: dict) -> tuple:
+    """그 날 ETF 하나의 대표값 — 구간 구분 없이 bp 표본 전체의 시간가중 평균과 그
+    표본 분수. 표본 1건 = 1분이라 단순 산술평균이 곧 시간가중 평균이다. '없음'(인정
+    호가 부재)은 bp 자체가 없어 분모에서 빠지므로 화면이 '없음' 분수를 같이 보여
+    줘야 오독이 없다 (2026-08-04 사용자 요청: 카드마다 평균 bp 대표값)."""
+    vals = acc["calm"] + acc["warn"] + acc["crit"]
+    if not vals:
+        return None, 0
+    return round(sum(vals) / len(vals), 1), len(vals)
 
 
 def _hist(bucket_counts: dict) -> dict:
@@ -356,6 +496,26 @@ def _hist(bucket_counts: dict) -> dict:
     for tick, c in sorted(bucket_counts.items()):
         key = "none" if tick == _NONE_TICK else "ok" if tick == _OK_TICK else str(tick)
         out[key] = c
+    return out
+
+
+def _tick_hist(tick_counts: dict | None, fallback: dict) -> dict:
+    """히스토그램 — **원시 틱 분포**(lp_spread_ts)로 만든다. 0~2틱은 한 막대로 묶고
+    3틱부터는 틱별로 센다 (2026-08-04 사용자 요청).
+
+    구 히스토그램은 집계 테이블(lp_spread_min)에서 왔는데, 그건 20bp 미만을 전부
+    'ok' 한 칸으로 접어버려서 촘촘한 구간이 통째로 안 보였다 — 비싼 ETF(예: 483320,
+    23,270원)는 7틱까지도 20bp 미만이라 막대가 아예 안 떴다. 원시 틱은 가격과 무관한
+    LP 호가 태도라 그대로 세는 게 맞다(가격 보정된 시각은 아래 bands 가 준다).
+
+    0~2 버킷은 표본이 0 이어도 항상 내보낸다 — 카드끼리 첫 막대 위치를 맞추고
+    '한 번도 2틱 이하로 좁힌 적 없음'을 0 으로 드러내기 위해서다.
+    시계열이 없는 과거일(2026-07-28 이전)은 구 집계 버킷으로 폴백한다."""
+    if not tick_counts:
+        return _hist(fallback)
+    out = {_LOW_TICK_KEY: tick_counts.get(_LOW_TICK_KEY, 0)}
+    for key in sorted((k for k in tick_counts if k != _LOW_TICK_KEY), key=int):
+        out[key] = tick_counts[key]
     return out
 
 
@@ -412,8 +572,12 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
         # 20~40 / 40↑ 를 가를 수 없다. bp 기록 전(2026-07-30 이전) 표본은 tick 은 있는데
         # bp 가 NULL 이므로 unbanded 로 따로 세어 화면이 그 사실을 드러내게 한다.
         bands: dict = {}
-        for code, b, tick, bp_val in cur.execute(
-            "SELECT code, basis, tick, bp FROM lp_spread_ts WHERE trade_date=?",
+        # 시간대별 평균(전 종목) — 같은 스캔에서 ts 를 구간으로 접는다.
+        wins: dict = {}
+        # 히스토그램용 원시 틱 분포 — 0~2 는 한 칸, 3틱부터 틱별. bp 폴딩 안 함.
+        ticks: dict = {}
+        for code, b, ts, tick, bp_val in cur.execute(
+            "SELECT code, basis, ts, tick, bp FROM lp_spread_ts WHERE trade_date=?",
             (query_date,),
         ):
             acc = bands.setdefault(
@@ -426,16 +590,54 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                 acc["unbanded"] += 1
             else:
                 acc[_band_of(bp_val)].append(bp_val)
+            if tick is not None:
+                tacc = ticks.setdefault((code, b), {})
+                tkey = _LOW_TICK_KEY if tick <= _LOW_TICK_MAX else str(tick)
+                tacc[tkey] = tacc.get(tkey, 0) + 1
+            if bp_val is None:
+                continue
+            minute = _ts_minute(ts)
+            if minute is None:
+                continue
+            wacc = wins.setdefault((code, b), {})
+            for key, _label, _short, start, end in SPREAD_WINDOWS:
+                if start <= minute < end:
+                    wacc.setdefault(key, []).append(bp_val)
     except sqlite3.Error as exc:
         _log(f"query failed: {exc!r}")
         con.close()
         return out
+
+    # 실제괴리 시계열 — basis 무관이라 종목당 한 벌. 테이블이 없는 구 DB 에서도
+    # 페이지 전체가 죽지 않도록 여기만 따로 감싼다(괴리 박스만 '−' 로 비는 게 낫다).
+    devs: dict = {}
+    dev_wins: dict = {}
+    try:
+        for code, ts, actual, intraday in cur.execute(
+            "SELECT code, ts, actual_dev, intraday_dev FROM lp_dev_ts WHERE trade_date=?",
+            (query_date,),
+        ):
+            val = intraday if code in DEV_MIRROR_TICKERS else actual
+            if val is None:
+                continue
+            devs.setdefault(code, []).append(val)
+            minute = _ts_minute(ts)
+            if minute is None:
+                continue
+            wacc = dev_wins.setdefault(code, {})
+            for key, _label, _short, start, end in SPREAD_WINDOWS:
+                if start <= minute < end:
+                    wacc.setdefault(key, []).append(val)
+    except sqlite3.Error as exc:
+        _log(f"dev query skipped: {exc!r}")
     con.close()
 
     bases = (basis,) if basis in ("lp", "total") else ("lp", "total")
     for code in ACE_TICKERS:
         entry = {"code": code, "name": names.get(code, "") or names.get(code.upper(), ""),
-                 "basis": {}}
+                 "basis": {},
+                 # 실제괴리 평균 — basis 토글과 무관해서 ETF 단위로 붙인다.
+                 "dev": _dev_stats(devs.get(code, []), dev_wins.get(code, {}))}
         for b in bases:
             bc = data.get((code, b), {})
             st = _stats(bc)
@@ -443,8 +645,9 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                 (code, b),
                 {"calm": [], "warn": [], "crit": [], "none": 0, "unbanded": 0},
             )
+            mean_bp, banded_min = _day_mean_bp(acc)
             entry["basis"][b] = {
-                "hist": _hist(bc),
+                "hist": _tick_hist(ticks.get((code, b)), bc),
                 "none_min": bc.get(_NONE_TICK, 0),
                 "ok_min": bc.get(_OK_TICK, 0),
                 "alert_min": st["alert_min"],
@@ -456,7 +659,14 @@ def build_lp_eval(trade_date: str | None = None, names: dict | None = None,
                 # = 그 날 표본 분수(=장중 수신이 정상이었던 분수).
                 "bands": _bands(acc),
                 "unbanded_min": acc["unbanded"],
+                # 2026-08-04 신설 — 카드 대표값. mean_bp = 그 날 bp 표본 전체 평균,
+                # banded_min = 그 평균의 분모(분).
+                "mean_bp": mean_bp,
+                "banded_min": banded_min,
             }
+            # 시간대별 평균 — 전 종목에 항상 넣는다(2026-08-04). 화면이 Topbar
+            # '구간분석' 토글로 단일 대표값과 5구간 중 무엇을 보여줄지 고른다.
+            entry["basis"][b]["windows"] = _windows(wins.get((code, b)))
         out["etfs"].append(entry)
     return out
 
@@ -521,15 +731,33 @@ def build_lp_eval_ts(trade_date: str | None = None, names: dict | None = None,
 # ── 일별 산출물 저장 (S: 아카이브) ─────────────────────────────────────────
 # DB 는 재빌드에 살아남는 named 볼륨이지만 컨테이너 안이다. 사용자 요청으로 하루치
 # 통계를 S: 폴더에 별도 보관한다 (2026-07-27):
-#   · lp_eval_{date}.json   — 그날 완전본(build_lp_eval, 히스토그램·통계, 두 basis)
-#   · lp_eval_history.csv    — 전 거래일 요약 마스터(일자×ETF×basis 한 행, 추세분석용)
+#   · lp_eval_{date}.json     — 그날 완전본(build_lp_eval, 히스토그램·통계, 두 basis)
+#   · lp_eval_ts_{date}.csv   — 그날 분단위 원시 시계열(호가 bp + 실제/장중 괴리 동행)
+#   · lp_eval_pre_{date}.csv  — 개장 직후 09:00~09:05(LP 의무 면제 구간) 같은 컬럼
+#   · lp_eval_history.csv     — 전 거래일 요약 마스터(일자×ETF×basis 한 행, 추세분석용)
 # 매 표본(60초)마다 덮어쓴다 → 15:20(의무 종료)에 자연히 그날 최종본이 된다.
 
 # 마스터 CSV 컬럼 — 일자 추세용 요약(틱별 히스토그램 전체는 일별 JSON 에 있다).
+# mean_bp = 그 날 대표값(화면 카드와 같은 값), banded_min = 그 평균의 분모(분).
 _CSV_HEADER = [
     "trade_date", "code", "name", "basis",
     "total_min", "none_min", "ok_min", "alert_min",
+    "mean_bp", "banded_min",
     "mean_tick", "mode_tick", "median_tick",
+]
+
+# 분단위 시계열 CSV 컬럼 — 한 행 = (표본시각 × ETF). basis 2종을 옆으로 펼쳐 한 행에
+# 담고(세로로 쌓으면 괴리율이 basis 마다 중복된다) 같은 표본의 실제괴리·장중괴리를
+# 붙인다 (2026-08-04 사용자 요청: 호가물량 bp 와 실제괴리를 같이 저장).
+#   · lp_*    = LP 물량 기준 인정 스프레드(리테일 제외)
+#   · total_* = 총호가 기준(리테일 포함, 화면 전광판과 동일)
+#   · tick 빈칸 = '없음'(5단 안에 1,000주↑ 인정호가 부재) → bp 도 빈칸
+#   · actual_dev   = 실제괴리(%) — 자체 iNAV 기준
+#   · intraday_dev = 장중괴리(%) — 거래소 공시(premiumIntra)
+_TS_CSV_HEADER = [
+    "trade_date", "ts", "code", "name", "price",
+    "lp_tick", "lp_bp", "total_tick", "total_bp",
+    "actual_dev", "intraday_dev",
 ]
 
 
@@ -555,10 +783,35 @@ def _all_buckets_by_key() -> dict:
     return data
 
 
+def _all_bp_stats() -> dict:
+    """DB 전체를 (trade_date, code, basis) -> (평균bp, 표본분수) 로 모은다(read-only).
+    bp 가 NULL 인 표본(2026-07-30 이전)은 SQL 집계에서 자동으로 빠진다."""
+    data: dict = {}
+    if not DB_PATH.exists():
+        return data
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"bp stats open failed: {exc!r}")
+        return data
+    try:
+        for td, code, b, avg_bp, n in con.execute(
+            "SELECT trade_date, code, basis, AVG(bp), COUNT(bp) FROM lp_spread_ts "
+            "WHERE bp IS NOT NULL GROUP BY trade_date, code, basis"
+        ):
+            data[(td, code, b)] = (round(avg_bp, 1), n)
+    except sqlite3.Error as exc:
+        _log(f"bp stats query failed: {exc!r}")
+    finally:
+        con.close()
+    return data
+
+
 def _write_master_csv(out_dir: Path, names: dict) -> None:
     """전 거래일 요약을 마스터 CSV 로 원자적 교체 저장. 정렬=일자↑·ACE순·lp먼저.
     Excel 한글 대응 UTF-8 BOM. 부분쓰기 노출 방지로 .tmp → replace."""
     data = _all_buckets_by_key()
+    bp_stats = _all_bp_stats()
     ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
     basis_rank = {"lp": 0, "total": 1}
     keys = sorted(
@@ -572,11 +825,13 @@ def _write_master_csv(out_dir: Path, names: dict) -> None:
         for (td, code, b) in keys:
             bc = data[(td, code, b)]
             st = _stats(bc)
+            mean_bp, banded_min = bp_stats.get((td, code, b), (None, 0))
             w.writerow([
                 td, code,
                 names.get(code, "") or names.get(code.upper(), ""), b,
                 sum(bc.values()), bc.get(_NONE_TICK, 0), bc.get(_OK_TICK, 0),
                 st["alert_min"],
+                "" if mean_bp is None else mean_bp, banded_min,
                 "" if st["mean"] is None else st["mean"],
                 "" if st["mode"] is None else st["mode"],
                 "" if st["median"] is None else st["median"],
@@ -584,10 +839,126 @@ def _write_master_csv(out_dir: Path, names: dict) -> None:
     tmp.replace(out_dir / "lp_eval_history.csv")
 
 
+def _write_ts_csv(out_dir: Path, names: dict, trade_date: str) -> None:
+    """그 날 분단위 원시 시계열을 CSV 로 원자적 교체 저장 — 호가 bp(basis 2종)와
+    같은 표본시각의 실제/장중 괴리를 한 행에 담는다.
+
+    구동은 lp_spread_ts(호가) 쪽이고 lp_dev_ts(괴리)는 (ts, code) 로 붙인다 —
+    호가 표본이 없는 시각은 애초에 bp 도 없으므로 행이 생기지 않는다. 두 테이블은
+    sample_once 한 번에 같은 ts 문자열로 함께 기록되므로 키가 어긋나지 않는다.
+    """
+    if not DB_PATH.exists():
+        return
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"ts csv open failed: {exc!r}")
+        return
+    rows: dict = {}   # (ts, code) -> 행 dict
+    try:
+        for ts, code, b, tick, bp, price in con.execute(
+            "SELECT ts, code, basis, tick, bp, price FROM lp_spread_ts WHERE trade_date=?",
+            (trade_date,),
+        ):
+            r = rows.setdefault((ts, code), {"price": None})
+            if price is not None:
+                r["price"] = price
+            r[f"{b}_tick"] = tick
+            r[f"{b}_bp"] = None if bp is None else round(bp, 2)
+        for ts, code, actual, intraday in con.execute(
+            "SELECT ts, code, actual_dev, intraday_dev FROM lp_dev_ts WHERE trade_date=?",
+            (trade_date,),
+        ):
+            r = rows.get((ts, code))
+            if r is None:
+                continue
+            r["actual_dev"] = None if actual is None else round(actual, 4)
+            r["intraday_dev"] = None if intraday is None else round(intraday, 4)
+    except sqlite3.Error as exc:
+        _log(f"ts csv query failed: {exc!r}")
+        con.close()
+        return
+    con.close()
+    if not rows:
+        return
+    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
+    blank = lambda v: "" if v is None else v  # noqa: E731
+    tmp = out_dir / f"lp_eval_ts_{trade_date}.csv.tmp"
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(_TS_CSV_HEADER)
+        for (ts, code) in sorted(rows, key=lambda k: (k[0], ace_rank.get(k[1], 99))):
+            r = rows[(ts, code)]
+            w.writerow([
+                trade_date, ts, code,
+                names.get(code, "") or names.get(code.upper(), ""),
+                blank(r.get("price")),
+                blank(r.get("lp_tick")), blank(r.get("lp_bp")),
+                blank(r.get("total_tick")), blank(r.get("total_bp")),
+                blank(r.get("actual_dev")), blank(r.get("intraday_dev")),
+            ])
+    tmp.replace(out_dir / f"lp_eval_ts_{trade_date}.csv")
+
+
+def _write_pre_csv(out_dir: Path, names: dict, trade_date: str) -> None:
+    """개장 직후(09:00~09:05) 표본을 별도 CSV 로 원자적 교체 저장.
+
+    컬럼은 본장 시계열 CSV(_TS_CSV_HEADER)와 동일해서 두 파일을 그대로 이어붙여
+    비교할 수 있다. 파일을 나눈 건 본장 CSV 를 읽는 쪽이 의무 면제 구간을 모르고
+    섞어 쓰는 사고를 막으려는 것 (2026-08-04).
+    """
+    if not DB_PATH.exists():
+        return
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        _log(f"pre csv open failed: {exc!r}")
+        return
+    rows: dict = {}
+    try:
+        for ts, code, b, tick, bp, price, actual, intraday in con.execute(
+            "SELECT ts, code, basis, tick, bp, price, actual_dev, intraday_dev "
+            "FROM lp_pre_ts WHERE trade_date=?",
+            (trade_date,),
+        ):
+            r = rows.setdefault((ts, code), {"price": None})
+            if price is not None:
+                r["price"] = price
+            r[f"{b}_tick"] = tick
+            r[f"{b}_bp"] = None if bp is None else round(bp, 2)
+            r["actual_dev"] = None if actual is None else round(actual, 4)
+            r["intraday_dev"] = None if intraday is None else round(intraday, 4)
+    except sqlite3.Error as exc:
+        # 테이블 미생성(첫 개장 전) 등 — 조용히 넘긴다.
+        _log(f"pre csv query skipped: {exc!r}")
+        con.close()
+        return
+    con.close()
+    if not rows:
+        return
+    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
+    blank = lambda v: "" if v is None else v  # noqa: E731
+    tmp = out_dir / f"lp_eval_pre_{trade_date}.csv.tmp"
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(_TS_CSV_HEADER)
+        for (ts, code) in sorted(rows, key=lambda k: (k[0], ace_rank.get(k[1], 99))):
+            r = rows[(ts, code)]
+            w.writerow([
+                trade_date, ts, code,
+                names.get(code, "") or names.get(code.upper(), ""),
+                blank(r.get("price")),
+                blank(r.get("lp_tick")), blank(r.get("lp_bp")),
+                blank(r.get("total_tick")), blank(r.get("total_bp")),
+                blank(r.get("actual_dev")), blank(r.get("intraday_dev")),
+            ])
+    tmp.replace(out_dir / f"lp_eval_pre_{trade_date}.csv")
+
+
 def write_daily_snapshot(names: dict | None = None) -> bool:
-    """오늘치 JSON + 전기간 마스터 CSV 를 S: 출력폴더에 덮어쓴다. 폴더가 없으면
-    조용히 skip(로컬·마운트 부재). 파일별로 예외를 삼켜 한쪽이 잠겨도(예: Excel
-    로 CSV 오픈 중) 다른 쪽 저장은 진행한다."""
+    """오늘치 JSON + 분단위 시계열 CSV + 개장직후 CSV + 전기간 마스터 CSV 를 S:
+    출력폴더에 덮어쓴다. 폴더가 없으면 조용히 skip(로컬·마운트 부재). 파일별로 예외를
+    삼켜 한쪽이 잠겨도(예: Excel 로 CSV 오픈 중) 다른 쪽 저장은 진행한다."""
     out_dir = LP_EVAL_OUT_DIR
     if not out_dir.is_dir():
         return False
@@ -595,13 +966,27 @@ def write_daily_snapshot(names: dict | None = None) -> bool:
     today = datetime.now(_KST).strftime("%Y-%m-%d")
     ok = True
     try:
-        snap = build_lp_eval(today, names)
+        _write_pre_csv(out_dir, names, today)
+    except OSError as exc:
+        _log(f"pre csv write failed: {exc!r}")
+        ok = False
+    # 본장 표본이 아직 없는 시각(09:00~09:05)에는 일별 JSON·마스터 CSV 를 건드리지
+    # 않는다 — 빈 껍데기로 덮어써 봐야 09:06 에 다시 채워질 뿐이다.
+    snap = build_lp_eval(today, names)
+    if not any(b.get("total_min") for e in snap["etfs"] for b in e["basis"].values()):
+        return ok
+    try:
         tmp = out_dir / f"lp_eval_{today}.json.tmp"
         tmp.write_text(json.dumps(snap, ensure_ascii=False, indent=2),
                        encoding="utf-8")
         tmp.replace(out_dir / f"lp_eval_{today}.json")
     except OSError as exc:
         _log(f"daily json write failed: {exc!r}")
+        ok = False
+    try:
+        _write_ts_csv(out_dir, names, today)
+    except OSError as exc:
+        _log(f"ts csv write failed: {exc!r}")
         ok = False
     try:
         _write_master_csv(out_dir, names)

@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  getInavWrapPerformance,
+  getFundSeries,
   getInavWrapRebalancing,
-  type WrapPerformance,
+  type FundSeriesResponse,
   type RebalSeries,
   type RebalEvent,
   type RebalCat,
@@ -24,13 +24,50 @@ const EMDASH = "−";
 const POS = "#e74c3c"; // status-failed
 const NEG = "#4a7ab5"; // status-running / ge-point
 
-// 라인 색 — 자사(강조)=포인트 블루, BM=딥 네이비. 명확히 구분되는 GE 팔레트.
+// 하단 리밸런싱 성과분석 패널은 여전히 이 두 포트폴리오 전용이다(편입 구성 이력이
+// 리밸런싱_히스토리 시트에만 있다). 위 차트는 등록된 펀드를 전부 그리므로 이 상수를 쓰지 않는다.
 const SELF_ID = "aicoretech";
 const BM_ID = "torus";
-const LINE_COLOR: Record<string, string> = {
-  aicoretech: "#4a7ab5", // ge-point
-  torus: "#243b5e", // ge-navy
+
+// 라인 색 — 펀드가 몇 개로 늘어나도 서로 구분되도록 팔레트를 돌려 쓴다. 자사/BM 같은
+// 고정 역할이 없어져서 "무슨 색이 누구"는 범례가 알려 준다. 다만 눈에 익은 두 포트폴리오는
+// 쓰던 색을 유지한다.
+const PALETTE = [
+  "#4a7ab5", // ge-point
+  "#243b5e", // ge-navy
+  "#c0873a", // bronze
+  "#3f8f74", // teal
+  "#8e5aa8", // violet
+  "#c4574f", // clay
+  "#5c8fa8", // steel
+  "#7f8a3f", // olive
+];
+const PINNED_COLOR: Record<string, string> = {
+  aicoretech: "#4a7ab5",
+  torus: "#243b5e",
 };
+
+function assignColors(ids: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const used = new Set<string>();
+  for (const id of ids) {
+    const c = PINNED_COLOR[id];
+    if (c) {
+      out[id] = c;
+      used.add(c);
+    }
+  }
+  let k = 0;
+  for (const id of ids) {
+    if (out[id]) continue;
+    // 팔레트를 다 쓰면 겹침을 허용하고 순환한다(색보다 그림이 우선).
+    while (used.size < PALETTE.length && used.has(PALETTE[k % PALETTE.length])) k++;
+    out[id] = PALETTE[k % PALETTE.length];
+    used.add(out[id]);
+    k++;
+  }
+  return out;
+}
 
 function signedPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return EMDASH;
@@ -52,47 +89,52 @@ function fmtMonth(m: string): string {
   return m.replace("-", ".");
 }
 
-/* ── 데이터 모델: 공통(교집합) 날짜축 위의 두 계열 ─────────────────────── */
+/* ── 데이터 모델: 공통 날짜축 위의 N 개 계열 ───────────────────────────── */
 
 interface Line {
   id: string;
   label: string;
+  color: string;
   values: (number | null)[]; // 각 계열 인셉션 기준 누적수익률%, 공통축 정렬
 }
 interface Model {
-  D: string[]; // 공통 날짜축 (교집합, 오름차순)
+  D: string[]; // 공통 날짜축 (합집합, 오름차순)
   lines: Line[];
 }
 
-function buildModel(data: WrapPerformance | undefined): Model | null {
-  const series = data?.series;
-  if (!series) return null;
-  const ai = series[SELF_ID];
-  const tr = series[BM_ID];
-  if (!ai || !tr) return null;
+/** 등록된 펀드 → 비교 모델. hidden 에 든 id 는 뺀다(범례에서 끄는 용도).
+ *
+ * 날짜축은 **합집합**이다. 예전에는 두 계열의 교집합을 썼는데, 펀드가 늘어나면 인셉션이
+ * 가장 늦은 하나가 비교 구간 전체를 잘라 버린다(2024-11 부터 있는 펀드와 2026-03 부터인
+ * 펀드를 같이 올리면 4개월만 남는다). 합집합으로 두고 값이 없는 구간은 null 로 비우면,
+ * buildPlot 이 각 선을 자기 첫 데이터부터 그리면서 창 시작 기준으로 리베이스한다.
+ */
+function buildModel(
+  data: FundSeriesResponse | undefined,
+  hidden: Set<string>,
+): Model | null {
+  // 색은 **등록된 전체** 기준으로 배정한다. 보이는 것만으로 배정하면 하나 껐을 때 남은
+  // 선들의 색이 바뀌어 버린다.
+  const colors = assignColors((data?.funds ?? []).map((f) => f.id));
+  const funds = (data?.funds ?? []).filter((f) => !hidden.has(f.id));
+  if (!funds.length) return null;
 
-  const aiMap = new Map(ai.points.map(([d, v]) => [d, v]));
-  const trMap = new Map(tr.points.map(([d, v]) => [d, v]));
-  // 공통 날짜축 = 두 계열 날짜의 교집합 (두 포트폴리오가 모두 존재하는 비교구간).
-  const common = Array.from(aiMap.keys())
-    .filter((d) => trMap.has(d))
-    .sort();
-  if (common.length < 2) return null;
+  const all = new Set<string>();
+  const maps = funds.map((f) => {
+    for (const [d] of f.points) all.add(d);
+    return new Map(f.points);
+  });
+  const D = Array.from(all).sort();
+  if (D.length < 2) return null;
 
   return {
-    D: common,
-    lines: [
-      {
-        id: SELF_ID,
-        label: ai.label,
-        values: common.map((d) => aiMap.get(d) ?? null),
-      },
-      {
-        id: BM_ID,
-        label: tr.label,
-        values: common.map((d) => trMap.get(d) ?? null),
-      },
-    ],
+    D,
+    lines: funds.map((f, i) => ({
+      id: f.id,
+      label: f.label,
+      color: colors[f.id],
+      values: D.map((d) => maps[i].get(d) ?? null),
+    })),
   };
 }
 
@@ -179,6 +221,7 @@ function computeWindow(period: Period, D: string[]): { s0: number; e: number } {
 interface PlotLine {
   id: string;
   label: string;
+  color: string;
   vals: (number | null)[]; // 윈도우 시작 기준 리베이스된 %
 }
 interface Plot {
@@ -214,7 +257,7 @@ function buildPlot(model: Model, win: { s0: number; e: number }): Plot {
         if (v > mx) mx = v;
       }
     }
-    return { id: ln.id, label: ln.label, vals };
+    return { id: ln.id, label: ln.label, color: ln.color, vals };
   });
 
   const pad = (mx - mn || 1) * 0.06;
@@ -257,8 +300,9 @@ interface RebalDelta {
   top: { name: string; cat1: string; weight: number }[]; // 최초구성 상위
 }
 interface Marker {
-  key: string;
+  key: string; // 펀드 id
   date: string;
+  color: string; // 그 펀드의 선 색 (삼각형도 같은 색)
   title: string; // 삼각형 네이티브 툴팁 요약
 }
 
@@ -342,12 +386,11 @@ interface RebalDetailData {
   deltas: RebalDelta | null;
 }
 
-function markerTitle(rd: RebalDelta): string {
-  const who = rd.key === SELF_ID ? "자사" : "TORUS";
-  if (rd.isFirst) return `${who} · ${dotDate(rd.date)} 최초 구성 · ${rd.nHoldings}종목`;
+function markerTitle(rd: RebalDelta, label: string): string {
+  if (rd.isFirst) return `${label} · ${dotDate(rd.date)} 최초 구성 · ${rd.nHoldings}종목`;
   const ins = rd.added.slice(0, 3).map((d) => d.name).join(", ") || "—";
   const outs = rd.removed.slice(0, 3).map((d) => d.name).join(", ") || "—";
-  return `${who} · ${dotDate(rd.date)} 리밸 · 편입 ${ins} / 편출 ${outs}`;
+  return `${label} · ${dotDate(rd.date)} 리밸 · 편입 ${ins} / 편출 ${outs}`;
 }
 
 // dates 오름차순에서 d 이하인 마지막 인덱스(as-of). 창 왼쪽 밖이면 -1.
@@ -364,14 +407,24 @@ function asofIndex(dates: string[], d: string): number {
 
 export default function TorusAicoretechPage() {
   const query = useQuery({
-    queryKey: ["wrapPerformance"],
-    queryFn: getInavWrapPerformance,
+    queryKey: ["fundSeries"],
+    queryFn: getFundSeries,
     refetchInterval: 60000,
     retry: false,
   });
   const data = query.data;
 
-  const model = useMemo(() => buildModel(data), [data]);
+  // 범례에서 끈 펀드. 기본은 등록된 것 전부 표시.
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const toggleFund = (id: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const model = useMemo(() => buildModel(data, hidden), [data, hidden]);
   const D = useMemo(() => model?.D ?? [], [model]);
 
   const [period, setPeriod] = useState<Period>({ kind: "recent", months: 3 });
@@ -413,10 +466,29 @@ export default function TorusAicoretechPage() {
     if (pfFilter !== "aicoretech") src.push(...rebalTr);
     return src;
   }, [rebalAi, rebalTr, pfFilter]);
-  const markers = useMemo<Marker[]>(
-    () => rebalFiltered.map((rd) => ({ key: rd.key, date: rd.date, title: markerTitle(rd) })),
-    [rebalFiltered],
-  );
+  // 마커는 차트에 그려진 펀드에서 나온다(범례로 끄면 마커도 사라진다). 편입 구성까지
+  // 아는 두 포트폴리오는 풍부한 요약을, 나머지는 이름과 날짜만 보여 준다.
+  const markers = useMemo<Marker[]>(() => {
+    const lines = model?.lines ?? [];
+    const labelOf = new Map(lines.map((l) => [l.id, l.label]));
+    const rich = new Map<string, string>();
+    for (const rd of [...rebalAi, ...rebalTr]) {
+      rich.set(`${rd.key}|${rd.date}`, markerTitle(rd, labelOf.get(rd.key) ?? rd.key));
+    }
+    const out: Marker[] = [];
+    for (const ln of lines) {
+      const f = data?.funds.find((x) => x.id === ln.id);
+      for (const d of f?.rebalancing ?? []) {
+        out.push({
+          key: ln.id,
+          date: d,
+          color: ln.color,
+          title: rich.get(`${ln.id}|${d}`) ?? `${ln.label} · ${dotDate(d)} 리밸`,
+        });
+      }
+    }
+    return out;
+  }, [model, data, rebalAi, rebalTr]);
   const panelList = useMemo(
     () =>
       [...rebalFiltered].sort(
@@ -455,7 +527,7 @@ export default function TorusAicoretechPage() {
     <>
       <Topbar
         title="TORUS / AI테크"
-        subtitle="성과 분석 · 자사(AI코어테크랩) vs 벤치마크(TORUS) 누적수익률 비교"
+        subtitle="성과 분석 · 등록된 펀드 누적수익률 비교"
         status={
           data ? (
             <span className="truncate text-[11px] text-slate-400">
@@ -479,8 +551,13 @@ export default function TorusAicoretechPage() {
               <div className="flex items-center gap-2">
                 <span className="h-4 w-1.5 rounded-full bg-ge-point" />
                 <span className="text-[14px] font-extrabold text-ge-navy">
-                  성과 비교 — 자사 vs TORUS(BM)
+                  누적 수익률 비교
                 </span>
+                {data && data.funds.length > 0 && (
+                  <span className="text-[11.5px] text-ink-faint">
+                    펀드 {data.funds.length - hidden.size}/{data.funds.length}
+                  </span>
+                )}
               </div>
               {plot && (
                 <div className="ml-auto">
@@ -505,12 +582,25 @@ export default function TorusAicoretechPage() {
                 <Skeleton className="h-[340px] w-full rounded-xl" />
               </div>
             ) : !plot ? (
-              <div className="flex h-[340px] items-center justify-center text-center text-sm text-ink-muted">
-                성과 데이터를 불러올 수 없습니다.
+              <div className="flex h-[340px] flex-col items-center justify-center gap-1.5 text-center text-sm text-ink-muted">
+                {!data?.funds.length ? (
+                  <>
+                    <span className="font-bold text-ge-navy">등록된 펀드가 없습니다</span>
+                    <span className="text-[12.5px]">
+                      S: 성과분석 폴더에서 register_funds.py 로 엑셀을 등록한 뒤
+                      build_funds.py 를 돌리면 여기에 뜹니다.
+                    </span>
+                  </>
+                ) : (
+                  <span>범례에서 펀드를 하나 이상 켜 주세요.</span>
+                )}
               </div>
             ) : (
               <ReadyChart
                 plot={plot}
+                funds={data?.funds ?? []}
+                hidden={hidden}
+                onToggle={toggleFund}
                 markers={markers}
                 selEvent={selEvent}
                 onSelectMarker={onSelectMarker}
@@ -542,11 +632,17 @@ export default function TorusAicoretechPage() {
 
 function ReadyChart({
   plot,
+  funds,
+  hidden,
+  onToggle,
   markers,
   selEvent,
   onSelectMarker,
 }: {
   plot: Plot;
+  funds: { id: string; label: string; inception: string; lastDate: string }[];
+  hidden: Set<string>;
+  onToggle: (id: string) => void;
   markers: Marker[];
   selEvent: { key: string; date: string } | null;
   onSelectMarker: (key: string, date: string) => void;
@@ -594,35 +690,52 @@ function ReadyChart({
         )}
       </div>
 
-      {/* 범례 + 윈도우 수익률 */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 border-t border-hairline pt-3">
-        {plot.lines.map((ln) => {
-          const finite = ln.vals.filter(
+      {/* 범례 + 윈도우 수익률. 등록된 펀드를 전부 보여 주고, 클릭하면 선을 껐다 켠다.
+          숨긴 펀드도 목록에 남아야 다시 켤 수 있다. */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-hairline pt-3">
+        {funds.map((f) => {
+          const ln = plot.lines.find((l) => l.id === f.id);
+          const off = hidden.has(f.id);
+          const finite = (ln?.vals ?? []).filter(
             (v): v is number => v != null && Number.isFinite(v),
           );
           const ret = finite.length ? finite[finite.length - 1] : null;
           return (
-            <div key={ln.id} className="flex items-center gap-2">
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => onToggle(f.id)}
+              title={
+                off
+                  ? "클릭하면 그래프에 표시합니다"
+                  : `${dotDate(f.inception)} ~ ${dotDate(f.lastDate)} · 클릭하면 숨깁니다`
+              }
+              className={cn(
+                "flex items-center gap-2 rounded-md px-1.5 py-0.5 transition hover:bg-canvas-soft",
+                off && "opacity-40",
+              )}
+            >
               <span
                 className="inline-block h-2.5 w-4 rounded-full"
-                style={{ background: LINE_COLOR[ln.id] }}
+                style={{ background: ln?.color ?? "#c9d1dd" }}
               />
-              <span className="text-[12.5px] font-bold text-ge-navy">
-                {ln.label}
-                {ln.id === SELF_ID ? " (자사)" : " (BM)"}
-              </span>
-              <span
-                className="text-[13px] font-extrabold tabular-nums"
-                style={{ color: signColor(ret) }}
-              >
-                {signedPct(ret)}
-              </span>
-            </div>
+              <span className="text-[12.5px] font-bold text-ge-navy">{f.label}</span>
+              {off ? (
+                <span className="text-[11px] text-ink-faint">숨김</span>
+              ) : (
+                <span
+                  className="text-[13px] font-extrabold tabular-nums"
+                  style={{ color: signColor(ret) }}
+                >
+                  {signedPct(ret)}
+                </span>
+              )}
+            </button>
           );
         })}
         {markers.length > 0 && (
           <span className="flex items-center gap-1 text-[11px] text-ink-faint">
-            <span className="text-ge-point">▲</span> 곡선 위 리밸 시점 · hover→시기선 · 클릭→상세
+            <span>▲</span> 곡선 위 리밸 시점 · hover→시기선 · 클릭→상세
           </span>
         )}
         <span className="ml-auto text-[11px] text-ink-faint">
@@ -799,6 +912,8 @@ function PerfChart({
     x: number;
     key: string;
     date: string;
+    color: string;
+    label: string;
   } | null>(null);
 
   const iw = Math.max(1, w - PAD_L - PAD_R);
@@ -881,24 +996,43 @@ function PerfChart({
     setHoverI(i);
   };
 
-  const ai = plot.lines.find((l) => l.id === SELF_ID);
-  const tr = plot.lines.find((l) => l.id === BM_ID);
-  const hAi = hoverI != null ? ai?.vals[hoverI] ?? null : null;
-  const hTr = hoverI != null ? tr?.vals[hoverI] ?? null : null;
-  const spread = hAi != null && hTr != null ? hAi - hTr : null;
+  // 그 시점에 값이 있는 선만 툴팁에 올린다(인셉션 전 구간은 null).
+  const hoverRows =
+    hoverI == null
+      ? []
+      : plot.lines
+          .map((ln) => ({ ln, v: ln.vals[hoverI] ?? null }))
+          .filter((r) => r.v != null && Number.isFinite(r.v));
+  // 두 개만 보고 있을 때는 차이를 같이 보여 준다. 셋 이상이면 무엇에서 무엇을 뺀 값인지
+  // 모호해지므로 넣지 않는다.
+  const spread =
+    hoverRows.length === 2
+      ? (hoverRows[0].v as number) - (hoverRows[1].v as number)
+      : null;
   const hx = hoverI != null ? X(hoverI) : 0;
   const tipRight = hx > w / 2;
 
-  // 빨간 세로선 + 리밸 유형 라벨: 마커 hover 우선, 없으면 선택된 마커.
+  // 빨간 세로선 + 리밸 라벨: 마커 hover 우선, 없으면 선택된 마커.
   const selHit = selEvent
     ? markerHits.find(
         (h) => h.mk.key === selEvent.key && h.mk.date === selEvent.date,
       )
     : undefined;
   const activeMk = hoverMarker
-    ? { key: hoverMarker.key, date: hoverMarker.date, x: hoverMarker.x }
+    ? {
+        date: hoverMarker.date,
+        x: hoverMarker.x,
+        color: hoverMarker.color,
+        label: hoverMarker.label,
+      }
     : selHit
-      ? { key: selHit.mk.key, date: selHit.mk.date, x: X(selHit.idx) }
+      ? {
+          date: selHit.mk.date,
+          x: X(selHit.idx),
+          color: selHit.mk.color,
+          label:
+            plot.lines.find((l) => l.id === selHit.mk.key)?.label ?? selHit.mk.key,
+        }
       : null;
   const redX = activeMk ? activeMk.x : null;
 
@@ -1002,7 +1136,7 @@ function PerfChart({
               key={`${ln.id}-${si}`}
               points={pts}
               fill="none"
-              stroke={LINE_COLOR[ln.id]}
+              stroke={ln.color}
               strokeWidth={2}
               strokeLinejoin="round"
               strokeLinecap="round"
@@ -1017,7 +1151,7 @@ function PerfChart({
           const v = line?.vals[idx];
           if (v == null || !Number.isFinite(v)) return null;
           const y = Y(v);
-          const color = LINE_COLOR[mk.key];
+          const color = mk.color;
           const isSel = selEvent?.key === mk.key && selEvent?.date === mk.date;
           const s = isSel ? 6.5 : 5; // 삼각형 반너비
           return (
@@ -1025,7 +1159,13 @@ function PerfChart({
               key={`mk-${mk.key}-${mk.date}`}
               style={{ cursor: "pointer" }}
               onMouseEnter={() =>
-                setHoverMarker({ x, key: mk.key, date: mk.date })
+                setHoverMarker({
+                  x,
+                  key: mk.key,
+                  date: mk.date,
+                  color,
+                  label: line?.label ?? mk.key,
+                })
               }
               onMouseLeave={() => setHoverMarker(null)}
               onClick={(e) => {
@@ -1058,7 +1198,7 @@ function PerfChart({
                 cx={X(hoverI)}
                 cy={Y(v)}
                 r={3.5}
-                fill={LINE_COLOR[ln.id]}
+                fill={ln.color}
                 stroke="#ffffff"
                 strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
@@ -1073,10 +1213,10 @@ function PerfChart({
           className="pointer-events-none absolute top-0 z-20 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-0.5 text-[10.5px] font-bold text-white shadow-sm"
           style={{
             left: Math.max(74, Math.min(redX, w - 74)),
-            background: LINE_COLOR[activeMk.key],
+            background: activeMk.color,
           }}
         >
-          {activeMk.key === SELF_ID ? "자사 리밸" : "BM 리밸"} · {dotDate(activeMk.date)}
+          {activeMk.label} 리밸 · {dotDate(activeMk.date)}
         </div>
       )}
 
@@ -1095,21 +1235,22 @@ function PerfChart({
             {dotDate(plot.dates[hoverI])}
           </div>
           <div className="space-y-0.5">
-            {ai && (
-              <TipRow color={LINE_COLOR[SELF_ID]} label={`${ai.label}`} v={hAi} />
+            {hoverRows.map(({ ln, v }) => (
+              <TipRow key={ln.id} color={ln.color} label={ln.label} v={v} />
+            ))}
+            {spread != null && (
+              <div className="mt-1 flex items-center justify-between gap-4 border-t border-hairline pt-1 text-[11px]">
+                <span className="text-ink-muted">
+                  {hoverRows[0].ln.label}−{hoverRows[1].ln.label}
+                </span>
+                <span
+                  className="font-extrabold tabular-nums"
+                  style={{ color: signColor(spread) }}
+                >
+                  {signedPct(spread)}
+                </span>
+              </div>
             )}
-            {tr && (
-              <TipRow color={LINE_COLOR[BM_ID]} label={`${tr.label}`} v={hTr} />
-            )}
-            <div className="mt-1 flex items-center justify-between gap-4 border-t border-hairline pt-1 text-[11px]">
-              <span className="text-ink-muted">자사−BM</span>
-              <span
-                className="font-extrabold tabular-nums"
-                style={{ color: signColor(spread) }}
-              >
-                {signedPct(spread)}
-              </span>
-            </div>
           </div>
         </div>
       )}
@@ -1283,8 +1424,9 @@ function FilterBtn({
 
 function RebalDetail({ detail }: { detail: RebalDetailData }) {
   const { key, date, isFirst, cur, catChange, deltas } = detail;
+  // 이 패널은 편입 구성 이력이 있는 두 포트폴리오 전용이라 이름·색을 그대로 둔다.
   const who = key === SELF_ID ? "자사(AI코어테크랩)" : "TORUS(BM)";
-  const color = LINE_COLOR[key];
+  const color = PINNED_COLOR[key] ?? "#243b5e";
   const aft = cur.perf?.after ?? null;
   const bef = cur.perf?.before ?? null;
   return (

@@ -10,6 +10,7 @@ the read-only mounts.
 Real legacy layout (discovered on S:), overridable via env:
   config          {LEGACY_CONFIG}/etf_inav_config.json
   KRX PDF/list/mkt {LEGACY_ETF_DATA}/output/results/etf_inav/{date}/krx_etf_*_{date}.csv
+  CHECK 원시 바스켓 {LEGACY_ETF_DATA}/check_pdf/check_pdf_raw_{date}.csv
   KIS token        {LEGACY_ETF_DATA}/cache/token_{YYYYMMDD}.json     (KST date)
   KIS masters      {LEGACY_ETF_DATA}/cache/master/{exch}mst_{YYYYMMDD}.parquet
   OpenFIGI DB      {LEGACY_DB}/ETF_INAV_MONITOR.db
@@ -26,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from collector import krx_fetch
+from collector import check_pdf, krx_fetch
 from collector.krx_prep import load_csv
 
 _KST = timezone(timedelta(hours=9))
@@ -57,10 +58,13 @@ FORCE_FETCH = _env_flag("COLLECTOR_FORCE_FETCH", "0")
 LEGACY_TOKEN_DIR = LEGACY_ETF_DATA / "cache"
 LEGACY_MASTER_DIR = LEGACY_ETF_DATA / "cache" / "master"
 LEGACY_KRX_ROOT = LEGACY_ETF_DATA / "output" / "results" / "etf_inav"
+LEGACY_CHECK_PDF_DIR = LEGACY_ETF_DATA / "check_pdf"
 LEGACY_DB_FILE = LEGACY_DB / "ETF_INAV_MONITOR.db"
 CONFIG_FILE = LEGACY_CONFIG / "etf_inav_config.json"
 
 KRX_FILES = ("krx_etf_pdf_{d}.csv", "krx_etf_list_{d}.csv", "krx_etf_market_{d}.csv")
+# CHECK 바스켓은 PDF 만 준다 — list/market 은 최신 가용일 것을 그대로 쓴다.
+AUX_FILES = ("krx_etf_list_{d}.csv", "krx_etf_market_{d}.csv")
 
 
 def _log(msg: str) -> None:
@@ -191,11 +195,15 @@ def sync_db() -> Path | None:
 
 
 # ── KRX inputs (PDF / list / market CSVs) ──────────────────────────────
+def _dir_has(day_dir: Path, date: str, names: tuple[str, ...]) -> bool:
+    return all((day_dir / name.format(d=date)).exists() for name in names)
+
+
 def _dir_has_all(day_dir: Path, date: str) -> bool:
-    return all((day_dir / name.format(d=date)).exists() for name in KRX_FILES)
+    return _dir_has(day_dir, date, KRX_FILES)
 
 
-def _latest_complete_date() -> str | None:
+def _latest_date_with(names: tuple[str, ...]) -> str | None:
     if not LEGACY_KRX_ROOT.exists():
         return None
     dates = sorted(
@@ -203,9 +211,13 @@ def _latest_complete_date() -> str | None:
         reverse=True,
     )
     for date in dates:
-        if _dir_has_all(LEGACY_KRX_ROOT / date, date):
+        if _dir_has(LEGACY_KRX_ROOT / date, date, names):
             return date
     return None
+
+
+def _latest_complete_date() -> str | None:
+    return _latest_date_with(KRX_FILES)
 
 
 def _covers(day_dir: Path, date: str, tickers: list[str]) -> bool:
@@ -234,17 +246,42 @@ def load_krx_inputs(
     """Return (pdf_df, etf_list_df, market_df, basis_date, source).
 
     source is:
+      * ``LEGACY_CACHE`` — today's legacy cache CSVs are present.
+      * ``CHECK_PDF``    — today's legacy PDF is missing but the CHECK sheet
+        reader's raw basket for today is, so we convert it ourselves (the job
+        구시스템 streaming.py used to do). list/market come from the latest
+        available legacy date — CHECK only supplies the basket.
       * ``SELF_FETCH``   — fetched fresh from KRX into the writable cache
         (COLLECTOR_ALLOW_FETCH=1 and today's legacy cache is missing, or
         COLLECTOR_FORCE_FETCH=1).
-      * ``LEGACY_CACHE`` — today's legacy cache CSVs are present.
       * ``STALE_CACHE``  — fell back to the latest available legacy date.
 
     When COLLECTOR_ALLOW_FETCH=0 the KRX network is never touched (Phase-1
-    behavior): only LEGACY_CACHE/STALE_CACHE are returned.
+    behavior): only LEGACY_CACHE/CHECK_PDF/STALE_CACHE are returned.
     """
     tickers = list(target_tickers or [])
     legacy_today = _dir_has_all(LEGACY_KRX_ROOT / run_date, run_date)
+
+    # CHECK_PDF: 오늘자 legacy PDF 가 없으면 CHECK 원시 바스켓을 직접 변환한다.
+    # 시트 리더(CHECK PC)는 계속 08:01 에 돌지만 변환·기록 주체였던 streaming.py 가
+    # 2026-07-31 정지 → 그 이후 매일 STALE_CACHE 로 떨어지던 걸 여기서 잇는다.
+    # FORCE_FETCH(드릴)는 KRX 를 직접 보려는 의도이므로 이 lane 을 건너뛴다.
+    if not legacy_today and not FORCE_FETCH:
+        aux_date = _latest_date_with(AUX_FILES)
+        if aux_date is None:
+            _log("list/market 캐시가 하나도 없음 — CHECK lane 건너뜀")
+        else:
+            pdf_df = check_pdf.load_check_pdf(LEGACY_CHECK_PDF_DIR, run_date, tickers)
+            if pdf_df is not None:
+                aux_dir = LEGACY_KRX_ROOT / aux_date
+                etf_list_df = load_csv(aux_dir / f"krx_etf_list_{aux_date}.csv")
+                market_df = load_csv(aux_dir / f"krx_etf_market_{aux_date}.csv")
+                _log(
+                    f"KRX inputs loaded basis={run_date} source=CHECK_PDF "
+                    f"pdf_rows={len(pdf_df)} list_rows={len(etf_list_df)} "
+                    f"market_rows={len(market_df)} (list/market basis={aux_date})"
+                )
+                return pdf_df, etf_list_df, market_df, run_date, "CHECK_PDF"
 
     # SELF_FETCH: today's legacy cache missing (or forced) and fetching allowed.
     if ALLOW_FETCH and (FORCE_FETCH or not legacy_today):

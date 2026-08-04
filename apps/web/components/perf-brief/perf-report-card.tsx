@@ -1,14 +1,15 @@
 "use client";
 
-/* [성과보고 HTML] TORUS/AI테크 하단 카드 (2026-07-30).
+/* [성과분석 보고서] TORUS/AI테크 하단 카드 (2026-08-03 개편).
  *
- * S: 의 bat 이 만든 자체완결 HTML 을 그대로 iframe(srcDoc)으로 띄운다 — 회의 탭과 같은
- * 방식. 계산·서사·서식이 전부 S: 소관이라 대시보드는 고르고 띄우기만 한다.
+ * S: 의 `단일PORT_분석.bat` · `비교PORT_분석.bat` 이 만든 자체완결 HTML 을 그대로
+ * iframe(srcDoc)으로 띄운다 — 회의 탭과 같은 방식. 계산·서식이 전부 S: 소관이라
+ * 대시보드는 고르고 띄우기만 한다.
  *
- * 최신성: HTML 은 안을 못 읽으므로 collector 가 파일명(=기준일)과 mtime(=작성일)으로
- * 판정한다. 오늘 만든 파일이 없으면 pending — **과거 보고서를 오늘 것처럼 자동으로
- * 띄우지 않는다**(어제 숫자를 오늘로 오인하는 사고 방지). 다만 드롭다운으로 과거분을
- * 직접 고르는 건 허용하고, 그때는 '오늘 아님' 배지를 띄운다. */
+ * 예전에는 월=위클리 / 화~금=데일리 스케줄을 가정해 오늘 만든 파일이 없으면 아무것도
+ * 보여 주지 않았다. 지금은 운용역이 필요할 때 돌리는 주문형이라 **가장 최근 보고서를
+ * 늘 띄우고**, 오늘 만든 것이 아니면 작성일 배지로 알린다. 낡은 값을 오늘 것으로
+ * 오인하는 사고는 배지가 막는다. 과거분은 드롭다운으로 직접 고른다. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -21,9 +22,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiErrorBanner } from "@/components/states";
 
-const KIND_LABEL: Record<PerfReportItem["kind"], string> = {
-  daily: "데일리",
-  weekly: "위클리",
+const KIND_LABEL: Record<string, string> = {
+  single: "단일",
+  compare: "비교",
+  legacy: "지난 보고서",
 };
 
 function Notice({ head, body }: { head: string; body: string }) {
@@ -92,8 +94,9 @@ export function PerfReportCard() {
     <section className="rounded-2xl border border-hairline bg-white p-6 shadow-card">
       <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-[16px] font-extrabold text-ge-navy">
-          오늘의 성과보고
-          {sel ? ` — ${KIND_LABEL[sel.kind]}` : ""}
+          성과분석 보고서
+          {sel ? ` — ${KIND_LABEL[sel.kind] ?? sel.kind}` : ""}
+          {sel?.scope ? ` · ${sel.scope}` : ""}
         </h2>
 
         {sel && (
@@ -116,7 +119,6 @@ export function PerfReportCard() {
                 onChange={(e) => setPicked(e.target.value || null)}
                 className="appearance-none rounded-lg border border-hairline bg-white py-1.5 pl-3 pr-8 text-[12px] font-semibold text-ink outline-none transition hover:bg-canvas-soft"
               >
-                {!d.current && <option value="">— 오늘 보고서 없음 —</option>}
                 {d.items.map((it) => (
                   <option key={it.rel} value={it.rel}>
                     {it.label}
@@ -157,19 +159,13 @@ export function PerfReportCard() {
         <Skeleton className="h-64 w-full rounded-xl" />
       ) : list.isError ? (
         <ApiErrorBanner error={list.error} />
-      ) : d?.status === "off" ? (
-        <Notice
-          head="오늘은 예정된 보고서가 없습니다"
-          body="주말입니다. 월요일 위클리 / 화~금 데일리 순서로 올라옵니다."
-        />
       ) : !sel ? (
         <Notice
-          head="오늘 보고서가 아직 없습니다"
+          head="아직 만들어진 보고서가 없습니다"
           body={
-            `S: 폴더에서 bat 을 돌리면 여기에 바로 뜹니다.` +
-            (d?.latest
-              ? ` 마지막 보고서는 ${d.latest.label} (${d.latest.savedAt} 저장)입니다 — 위 드롭다운에서 열 수 있습니다.`
-              : " 아직 생성된 보고서가 없습니다.")
+            "S: 성과분석 폴더의 분석 tools\\단일PORT_분석.bat 또는 " +
+            "비교PORT_분석.bat 을 돌리면 여기에 바로 뜹니다. " +
+            "기준일과 기간을 물어보고 몇 초 만에 끝납니다."
           }
         />
       ) : file.isPending ? (

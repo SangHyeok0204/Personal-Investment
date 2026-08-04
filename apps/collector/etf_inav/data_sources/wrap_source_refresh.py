@@ -37,9 +37,12 @@ DEFAULT_SHEET = "수익률_breakdown"
 OUTPUT_HEADER = ["ticker", "name", "weight_pct", "prev_close", "exchange"]
 
 # 고정 컬럼 인덱스(1-base) — 사용자 확정 레이아웃.
-COL_NAME, COL_TICKER, COL_PREV, COL_WEIGHT = 1, 2, 6, 9  # A, B, F, I
+COL_NAME, COL_TICKER, COL_PREV2, COL_PREV, COL_WEIGHT = 1, 2, 5, 6, 9  # A, B, E, F, I
 DATA_START_ROW = 3
-BASIS_DATE_CELL = (2, COL_PREV)  # F2 = T-1 기준일(datetime)
+BASIS_DATE_CELL = (2, COL_PREV)   # F2 = T-1 기준일(datetime)
+PREV2_DATE_CELL = (2, COL_PREV2)  # E2 = T-2 기준일(datetime)
+# 표 아래 별도 행(A열 라벨). E·F 에 T-2·T-1 USD/KRW(블룸버그 KRW L160) 가 있다.
+FX_ROW_LABEL = "USDKRW"
 MAX_BASIS_AGE_DAYS = 5           # 기준일이 이보다 오래되면 stale 로 거부
 WEIGHT_SUM_TOLERANCE = 1.0       # 상한: 100+1% 까지 허용
 WEIGHT_SUM_MIN = 75.0            # 하한(%): 운용역 시트가 리밸런스 중간 상태(합<100%)여도
@@ -82,7 +85,12 @@ def _portfolio_sources(cfg: dict) -> dict[str, tuple[Path, str, Path]]:
 
 
 def _read_source(src_path: Path, sheet: str):
-    """소스 시트 → (rows, basis_date). rows = [{name,ticker,prev,weight,is_cash}]."""
+    """소스 시트 → (rows, basis_date, extra).
+
+    rows  = [{name,ticker,prev2,prev,weight,is_cash}] — 3행부터 A·B 가 모두 빈 행 직전까지.
+    extra = {prev2_date, fx_t2, fx_t1} — T-2 기준일과 T-2·T-1 USD/KRW.
+            환율 행(``USDKRW``)은 표 아래 빈 행 너머에 있어 그리드 전체를 훑어 찾는다.
+    """
     import openpyxl
 
     wb = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
@@ -99,6 +107,14 @@ def _read_source(src_path: Path, sheet: str):
 
     basis_raw = cell(*BASIS_DATE_CELL)
     basis_date = basis_raw.date() if isinstance(basis_raw, datetime) else None
+    prev2_raw = cell(*PREV2_DATE_CELL)
+    prev2_date = prev2_raw.date() if isinstance(prev2_raw, datetime) else None
+
+    fx_t2 = fx_t1 = None
+    for r1 in range(1, len(grid) + 1):
+        if str(cell(r1, COL_NAME) or "").strip() == FX_ROW_LABEL:
+            fx_t2, fx_t1 = cell(r1, COL_PREV2), cell(r1, COL_PREV)
+            break
 
     rows = []
     for r1 in range(DATA_START_ROW, len(grid) + 1):
@@ -106,14 +122,22 @@ def _read_source(src_path: Path, sheet: str):
         ticker = cell(r1, COL_TICKER)
         if (name in (None, "")) and (ticker in (None, "")):
             break  # 데이터 끝
+        if str(name or "").strip() == FX_ROW_LABEL:
+            continue  # 환율 행은 보유종목이 아니다(표 안으로 들어와도 방어)
         rows.append({
             "name": name,
             "ticker": "" if ticker is None else str(ticker).strip().upper(),
+            "prev2": cell(r1, COL_PREV2),
             "prev": cell(r1, COL_PREV),
             "weight": cell(r1, COL_WEIGHT),
             "is_cash": _is_cash(name),
         })
-    return rows, basis_date
+    extra = {
+        "prev2_date": prev2_date,
+        "fx_t2": fx_t2 if _is_num(fx_t2) and fx_t2 > 0 else None,
+        "fx_t1": fx_t1 if _is_num(fx_t1) and fx_t1 > 0 else None,
+    }
+    return rows, basis_date, extra
 
 
 def _write_pdf(out_path: Path, out_rows: list[dict]) -> None:
@@ -143,7 +167,7 @@ def refresh_portfolio_pdf(
         return False, {"reason": "no_source", "path": str(src_path)}
 
     try:
-        rows, basis_date = _read_source(src_path, sheet)
+        rows, basis_date, _extra = _read_source(src_path, sheet)
     except Exception as exc:
         return False, {"reason": f"read_error: {exc}"}
 

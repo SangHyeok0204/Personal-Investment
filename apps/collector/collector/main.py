@@ -1345,6 +1345,17 @@ class Collector:
                 return JSONResponse({"detail": "not found"}, status_code=404)
             return JSONResponse({"path": path, "html": html})
 
+        # [누적 수익률 비교] S: 의 build_funds.py 가 만든 표준 시계열 JSON. 펀드가 몇 개로
+        # 늘어나든 이 엔드포인트는 그대로다 — 엑셀 레이아웃 편차는 전부 S: 에서 흡수한다.
+        @app.get("/fund-series")
+        def fund_series():
+            from collector import fund_series as _fs
+            try:
+                return JSONResponse(_fs.build())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"fund-series failed: {exc!r}")
+                return JSONResponse({"detail": "fund-series error"}, status_code=503)
+
         @app.get("/health")
         def health():
             return JSONResponse(state.health())

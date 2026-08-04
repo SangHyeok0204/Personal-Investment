@@ -163,6 +163,17 @@ def _is_stock_future_row(row: dict) -> bool:
     )
 
 
+def _is_korean_derivative_isin(isin: str) -> bool:
+    """KR4… = 파생 표준코드(선물·옵션). KR7…(현물)과 구분된다.
+
+    MKT_ID/SECUGRP_ID 는 KRX 원본 PDF 에만 채워져 있고 CHECK 에이전트가 올리는
+    바스켓에서는 공란이라, 그 두 컬럼만 보면 개별선물이 현물 분기로 떨어져
+    ISIN 3~8 자리를 심볼로 오인식한다(KR4A50680003 → 'A50680', KIS 무응답).
+    표준코드 자체로 파생을 먼저 걸러 컬럼 유무와 무관하게 KFO 로 보낸다.
+    """
+    return _is_korean_isin(isin) and isin[2] == "4"
+
+
 def resolve_instruments(
     stock_rows: list[dict[str, str]],
     store: KisStore,
@@ -186,14 +197,28 @@ def resolve_instruments(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
+
+    def lookup_stock_future(isin: str):
+        """선물 마스터 조회 — 실패는 '미해결' 처리(전체 resolve 를 깨지 않는다).
+
+        마스터는 첫 조회 때 원격 zip 을 받아 캐시하므로, 다운로드가 막히면
+        예외가 여기서 끝나야 나머지 현물 매핑이 살아남는다.
+        """
+        try:
+            return futureoption_master.lookup_stock_future(isin)
+        except Exception:  # noqa: BLE001 - fail-soft: 파생만 미가격, 현물은 유지
+            return None
+
     for row in stock_rows:
         isin = clean_text(row.get("ISIN")).upper()
         if not isin or isin in input_ticker_by_isin:
             continue
         ticker = clean_text(row.get("ticker")).upper()
         input_ticker_by_isin[isin] = ticker
-        if _is_korean_isin(isin) and _is_stock_future_row(row):
-            hit = futureoption_master.lookup_stock_future(isin)
+        if _is_korean_derivative_isin(isin) or (
+            _is_korean_isin(isin) and _is_stock_future_row(row)
+        ):
+            hit = lookup_stock_future(isin)
             if hit is not None:
                 domestic_instruments.append(
                     {

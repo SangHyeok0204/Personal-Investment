@@ -163,15 +163,18 @@ export interface WrapHolding {
   exchange: string | null;
   currency?: string | null;
   is_cash?: boolean;
-  // 환 자체 등락률(통화 기준). '환 수익률' 열은 현금 행에서만 이 값을 쓴다.
-  fx_return_pct?: number | null;
-  // 환을 반영했을 때의 종목 수익률 = (1+현지수익률)(1+환등락) − 1.
-  return_krw_pct?: number | null;
   weight_pct: number;
-  prev_close: number | null;
+  prev2_close: number | null; // T-2 종가 (소스 시트 E열)
+  prev_close: number | null; // T-1 종가 (소스 시트 F열)
   livePrice: number | null;
+  // 수익률 = 전일종가/전전일종가 − 1 (현지통화). 카드 ① 의 재료.
   return_pct: number | null;
+  // 같은 구간에 환까지 반영 = (1+수익률)(1+환등락) − 1.
+  return_krw_pct?: number | null;
+  // 기여 = 수익률 × 비중. 이 열의 합이 카드 ① 의 주식분.
   contribution_pct: number | null;
+  // 실시간수익률 = 현재가/전일종가 − 1 (장중 등락).
+  realtime_return_pct: number | null;
   matched: boolean;
   tradeTime: string | null;
   cat1: string;
@@ -190,18 +193,22 @@ export interface WrapPortfolio {
   holdings: WrapHolding[];
   holdings_source: "SOURCE" | "PDF_FALLBACK" | null;
   basis_date: string | null;
-  // 환 노출 통화(비중 최대 외화)와 그 순수 등락률 — 현금 행의 '환 수익률'로 표시.
+  // 환등락률 원본 — 검산용. ① 은 T-2→T-1(소스 시트), ② 는 T-1→실시간(네이버).
   fx_currency?: string | null;
   fx_return_pct?: number | null;
-  // ② 전일종가→최근체결가 (USD / 원화)
+  fx_realtime_pct?: number | null;
+  fx_t2?: number | null;
+  fx_t1?: number | null;
+  // ② 전일종가→최근체결가 (현지통화 / 환 반영)
   return2_usd?: number | null;
   return2_krw?: number | null;
-  // ① 전전일→전일 종가수익률 (USD / 원화) + 기준일·신선도
+  // ① 전전일→전일 종가수익률 (현지통화 / 환 반영) + 기준일·신선도
   return1_usd?: number | null;
   return1_krw?: number | null;
   return1_basis_date?: string | null; // "YYYYMMDD"
   return1_prev_date?: string | null; // "YYYYMMDD"
   return1_is_current?: boolean;
+  ret1_weight_pct?: number | null; // ① 계산에 실제 들어간 비중합
 }
 
 export interface WrapPayload {
@@ -232,6 +239,34 @@ export interface WrapPerformance {
 
 export function getInavWrapPerformance(): Promise<WrapPerformance> {
   return request<WrapPerformance>("/api/v1/inav/wrap-performance");
+}
+
+// [누적 수익률 비교] 등록된 펀드 시계열. S: 의 build_funds.py 가 만든 표준 스키마를 그대로
+// 받는다. 엑셀 레이아웃 편차(시트명·헤더 위치·단위)는 전부 S: 에서 흡수되므로 여기서부터는
+// 펀드가 2개든 20개든 같은 모양이다.
+// points = [날짜 "YYYY-MM-DD", 누적수익률%(각 펀드 인셉션 기준)].
+export interface FundSeries {
+  id: string;
+  label: string;
+  inception: string;
+  lastDate: string;
+  count: number;
+  points: [string, number][];
+  rebalancing: string[]; // 리밸런싱 날짜 → 차트 마커
+  source?: string | null;
+  sourceModified?: string | null;
+  generatedAt?: string | null;
+  qa?: string[];
+}
+
+export interface FundSeriesResponse {
+  generatedAt: string;
+  funds: FundSeries[];
+  skipped: string[]; // 스키마가 안 맞아 건너뛴 파일명
+}
+
+export function getFundSeries(): Promise<FundSeriesResponse> {
+  return request<FundSeriesResponse>("/api/v1/inav/fund-series");
 }
 
 // 리밸런싱 이력(track record): 자사·TORUS 시점별 편입 구성.
@@ -479,24 +514,24 @@ export function getMeetingFile(path: string): Promise<MeetingFile> {
 // ── [성과보고 HTML] S: bat 산출물 뷰어 ────────────────────────────────
 // 계산·서사가 전부 S: 쪽 bat 으로 넘어간 구조. 대시보드는 파일명 규약으로 고른
 // 자체완결 HTML 을 iframe(srcDoc)으로 띄우기만 한다. 기준일=파일명, 작성일=mtime.
+// [성과분석 보고서] S: 의 단일PORT_분석.bat / 비교PORT_분석.bat 산출물.
+// legacy 는 은퇴한 파이프라인이 남긴 지난 보고서다(목록에서 사라지지 않게 계속 읽는다).
 export interface PerfReportItem {
   rel: string; // 루트 기준 상대경로 (파일 요청 키)
   name: string;
-  kind: "daily" | "weekly";
-  asOf: string;
-  start: string | null;
-  end: string;
-  label: string; // "데일리 · 2026.07.29 기준"
+  kind: "single" | "compare" | "legacy";
+  scope: string; // "일간" | "주간" | "월간" | "데일리" | "위클리"
+  who: string; // "AI코어테크" | "AI코어테크 vs TORUS"
+  asOf: string; // 기준일 (파일명에서)
+  label: string; // "단일 · AI코어테크 · 월간 · 2026.07.31 기준"
   writtenOn: string; // 파일 mtime 날짜
   savedAt: string; // 파일 mtime (분까지)
 }
 export interface PerfReportListing {
   today: string;
-  weekday: number;
-  expected: "daily" | "weekly" | null;
-  status: "ready" | "pending" | "off";
-  current: PerfReportItem | null; // 오늘 만들어진 보고서 (없으면 null)
-  latest: PerfReportItem | null; // 종류 무관 최신분 (pending 안내용)
+  status: "ready" | "empty";
+  current: PerfReportItem | null; // 가장 최근 보고서 (기준일 → 작성일 순)
+  latest: PerfReportItem | null; // current 와 같다. 호환용
   items: PerfReportItem[];
   generatedAt: string;
 }
@@ -917,12 +952,18 @@ export interface LpEvalBand {
   key: "calm" | "warn" | "crit" | "none";
   label: string;
   minutes: number;
+  // 2026-08-04 신설 — minutes / session_minutes(총 장 기간 375분) × 100. 화면 통계표는
+  // mode 대신 이 값을 쓴다. 수신이 끊긴 분은 어느 구간에도 안 들어가므로 합 < 100%.
+  share: number;
   mean: number | null;
   mode: number | null;
   median: number | null;
 }
 
 export interface LpEvalBasisStat {
+  // 히스토그램 = 원시 틱 분포. 키 "0-2"(0~2틱 묶음, 표본 0 이어도 항상 옴) + "3","4",…
+  // 2026-08-04 이전 로직은 20bp 미만을 "ok" 한 칸으로 접었다. 시계열이 없는 과거일
+  // (2026-07-28 이전)은 서버가 구 버킷(none/ok/틱)으로 폴백하므로 "0-2" 키가 없다.
   hist: Record<string, number>;
   none_min: number;
   ok_min: number;
@@ -935,11 +976,40 @@ export interface LpEvalBasisStat {
   bands: LpEvalBand[];
   // bp 기록 전(2026-07-30 이전) 표본 분수. 틱만 있어 구간 분류 불가 → 합계에서 빠진다.
   unbanded_min: number;
+  // 2026-08-04 신설 — 카드 대표값. mean_bp = 그 날 bp 표본 전체의 시간가중 평균,
+  // banded_min = 그 평균의 분모(분). '없음'은 bp 가 없어 분모에서 빠진다.
+  mean_bp: number | null;
+  banded_min: number;
+  // 시간대별 평균 스프레드(bp) — 전 종목. 마지막 구간(전체)은 mean_bp 와 같은 값.
+  windows?: LpEvalWindow[];
+}
+// 시간대별 평균 — 전 종목에 항상 온다(2026-08-04. 그 전에는 중국 편입 3종만).
+// 5구간: 09:05~10:30 / 10:30~13:00 / 13:00~14:00 / 14:00~15:30 / 09:05~15:20(전체).
+// short = 카드에 5칸을 나란히 놓을 때 쓰는 짧은 라벨(앞 4구간은 시작시각, 마지막은
+// '전체'). 앞 4구간이 빈틈없이 이어져 있어 시작시각만으로 구간이 특정된다.
+export interface LpEvalWindow {
+  key: string;
+  label: string;
+  short: string;
+  mean: number | null;
+  minutes: number;
+}
+// 실제괴리(자체 iNAV 기준, %) 평균 — basis(LP/총호가) 토글과 무관해 ETF 단위다.
+// mean 은 부호를 살린 평균(프리미엄/디스카운트 치우침), abs_mean 은 부호 상쇄로
+// mean 이 0 에 가까워지는 경우를 드러낸다. windows 는 전 종목에 온다.
+// ※ 0199C0 은 서버가 거래소 공시 장중괴리로 덮어 보낸다(iNAV 페이지의 DEV_MIRROR
+//   임시조치와 같은 집합) — 두 화면이 같은 '실제괴리'를 말하게 하려는 것.
+export interface LpEvalDev {
+  mean: number | null;
+  abs_mean: number | null;
+  minutes: number;
+  windows?: LpEvalWindow[];
 }
 export interface LpEvalEtf {
   code: string;
   name: string;
   basis: { lp?: LpEvalBasisStat; total?: LpEvalBasisStat };
+  dev?: LpEvalDev;
 }
 export interface LpEval {
   trade_date: string;

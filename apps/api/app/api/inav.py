@@ -269,6 +269,13 @@ async def get_perf_report_file(
     )
 
 
+# ── [누적 수익률 비교] 등록된 펀드 시계열 ────────────────────────────────
+@router.get("/fund-series")
+async def get_fund_series(if_none_match: str | None = Header(default=None)) -> Response:
+    """Proxy 표준 스키마 펀드 시계열(누적수익률% + 리밸 날짜). 펀드 N 개."""
+    return await _proxy_collector("/fund-series", if_none_match)
+
+
 # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────────────
 @router.get("/meeting/list")
 async def get_meeting_list(

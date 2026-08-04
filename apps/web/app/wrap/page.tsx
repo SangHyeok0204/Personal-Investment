@@ -144,8 +144,11 @@ export default function WrapPage() {
             <section className="rounded-2xl border border-hairline bg-canvas p-5 shadow-card">
               <div className="mb-1 flex items-center gap-2">
                 <span className="h-4 w-1.5 rounded-full bg-ge-point" />
-                <span className="text-[13px] font-extrabold text-ge-navy">
-                  분류별 비중·기여도 — {selected.name}
+                <span
+                  className="text-[13px] font-extrabold text-ge-navy"
+                  title="기여도는 전일확정(전전일→전일 종가) 기준 — 테이블 '기여' 열의 분류별 합"
+                >
+                  분류별 비중·기여도 (전일확정) — {selected.name}
                 </span>
               </div>
               <CategoryTree p={selected} />
@@ -203,22 +206,38 @@ function fmtBasis(d: string | null | undefined): string {
   return `${Number(d.slice(4, 6))}/${Number(d.slice(6, 8))}`;
 }
 
-/* 환 반영 수익률의 분해 — "(−5.54% 주식 + −0.70% 환)".
- * 표시값(total)은 환을 반영한 수익률이고, 주식분은 현지통화 수익률, 환분은 그 차이다.
- * 곱셈으로 결합되므로(1+주식)(1+환) 두 성분의 산술합은 total 과 미세하게 다를 수 있는데,
- * 환분을 total−주식으로 잡아 화면에서는 항상 합이 맞게 둔다. */
+// ① 구간에 쓰인 환율 원본 — 툴팁으로 검산할 수 있게.
+function fxNote(
+  t2: number | null | undefined,
+  t1: number | null | undefined,
+): string | undefined {
+  if (t2 == null || t1 == null) return undefined;
+  return `USD/KRW ${fmtNum(t2, 2, 2)} → ${fmtNum(t1, 2, 2)}`;
+}
+
+/* 환 반영 수익률의 분해 — "(+8.23% 주식 + −1.68% 환)".
+ * 표시값(total) = (1+주식)(1+환등락) − 1, 주식분은 현지통화 수익률.
+ * 환분 = total − 주식 = 환등락 × (1+주식). 환은 원금뿐 아니라 불어난 평가액 전체에
+ * 걸리므로, 순수 환등락률보다 (1+주식)배 만큼 크다(환등락률 원본은 툴팁에 있다). */
 function FxBreakdown({
   total,
   local,
+  rawFx,
 }: {
   total: number | null | undefined;
   local: number | null | undefined;
+  rawFx?: number | null;
 }) {
   if (total == null || local == null) return null;
   const fx = total - local;
+  const title =
+    rawFx == null
+      ? undefined
+      : `환등락률 ${signedPct(rawFx)} × (1 ${signedPct(local)}) = ${signedPct(fx)}`;
   return (
     // 서체·색은 위 수익률 숫자와 동일하게(그 숫자의 부호색을 그대로 물려받는다).
     <span
+      title={title}
       className={cn(
         "text-[12px] font-extrabold tabular-nums",
         signTextClass(total),
@@ -240,10 +259,13 @@ function PortfolioCard({
 }) {
   // ② 전일종가→최근체결가, ① 전전일→전일 종가수익률 — 둘 다 환 반영값을 대표로 쓰고,
   // 괄호 안에 주식/환 분해를 붙인다(원화 환산 토글은 제거됨).
-  const ret2 = p.return2_krw ?? p.return2_usd ?? p.return_pct;
+  const ret2 = p.return2_krw ?? p.return2_usd ?? null;
   const ret1 = p.return1_krw ?? p.return1_usd ?? null;
   const basis = fmtBasis(p.return1_basis_date);
+  const prevBasis = fmtBasis(p.return1_prev_date);
   const stale1 = p.return1_is_current === false;
+  // ① 커버 부족 — 종가 두 개가 다 있는 종목의 비중합이 99% 미만이면 배지로 드러낸다.
+  const thin1 = p.ret1_weight_pct != null && p.ret1_weight_pct < 99;
 
   return (
     <button
@@ -268,9 +290,12 @@ function PortfolioCard({
         )}
       </div>
 
-      {/* ① 전일확정 (전전일→전일 종가) */}
+      {/* ① 전일확정 (전전일→전일 종가) — 아래 테이블 '기여' 열의 합 */}
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-semibold text-ink-muted">
+        <span
+          className="text-[11px] font-semibold text-ink-muted"
+          title="테이블 기여(수익률×비중) 합에 환등락을 반영한 값"
+        >
           ① 전일확정
         </span>
         <span
@@ -283,13 +308,31 @@ function PortfolioCard({
         </span>
       </div>
       <div className="flex justify-end">
-        <FxBreakdown total={ret1} local={p.return1_usd} />
+        <FxBreakdown
+          total={ret1}
+          local={p.return1_usd}
+          rawFx={p.fx_return_pct}
+        />
       </div>
       <div className="flex items-center gap-1.5 text-[10px] text-ink-faint">
-        <span>{basis ? `${basis} 종가기준` : "기준일 대기"}</span>
+        <span title={fxNote(p.fx_t2, p.fx_t1)}>
+          {prevBasis && basis
+            ? `${prevBasis} → ${basis} 종가`
+            : basis
+              ? `${basis} 종가기준`
+              : "기준일 대기"}
+        </span>
         {stale1 && (
           <span className="rounded-full border border-amber-400/40 bg-amber-400/[0.12] px-1.5 py-0.5 font-semibold text-amber-700">
             미갱신
+          </span>
+        )}
+        {thin1 && (
+          <span
+            title={`① 계산에 들어간 비중 ${p.ret1_weight_pct?.toFixed(1)}% — 종가가 없는 종목이 빠졌습니다`}
+            className="rounded-full border border-amber-400/40 bg-amber-400/[0.12] px-1.5 py-0.5 font-semibold text-amber-700"
+          >
+            반영 {p.ret1_weight_pct?.toFixed(0)}%
           </span>
         )}
       </div>
@@ -309,7 +352,11 @@ function PortfolioCard({
         </span>
       </div>
       <div className="flex justify-end">
-        <FxBreakdown total={ret2} local={p.return2_usd ?? p.return_pct} />
+        <FxBreakdown
+          total={ret2}
+          local={p.return2_usd}
+          rawFx={p.fx_realtime_pct}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-ink-muted">
@@ -595,18 +642,40 @@ function TreeNode({
 /* ── ③ 구성종목 기여도 테이블 ────────────────────────────────────────── */
 
 const WRAP_COLS = [
-  { key: "ticker", label: "TICKER", num: false },
-  { key: "name", label: "이름", num: false },
-  { key: "cat1", label: "대분류", num: false },
-  { key: "cat2", label: "중분류", num: false },
-  { key: "cat3", label: "소분류", num: false },
-  { key: "currency", label: "기준통화", num: false },
-  { key: "prev_close", label: "전일종가", num: true },
-  { key: "livePrice", label: "현재가", num: true },
-  { key: "return_pct", label: "수익률", num: true },
-  { key: "fx_return_pct", label: "환 수익률", num: true },
-  { key: "weight_pct", label: "비중", num: true },
-  { key: "contribution_pct", label: "기여(수익률×비중)", num: true },
+  { key: "ticker", label: "TICKER", num: false, hint: "" },
+  { key: "name", label: "이름", num: false, hint: "" },
+  { key: "cat1", label: "대분류", num: false, hint: "" },
+  { key: "cat2", label: "중분류", num: false, hint: "" },
+  { key: "cat3", label: "소분류", num: false, hint: "" },
+  { key: "currency", label: "기준통화", num: false, hint: "" },
+  { key: "prev2_close", label: "전전일종가", num: true, hint: "T-2 종가" },
+  { key: "prev_close", label: "전일종가", num: true, hint: "T-1 종가" },
+  { key: "livePrice", label: "현재가", num: true, hint: "실시간 체결가" },
+  {
+    key: "return_pct",
+    label: "수익률",
+    num: true,
+    hint: "전일종가 / 전전일종가 − 1 (현지통화)",
+  },
+  {
+    key: "return_krw_pct",
+    label: "환 수익률",
+    num: true,
+    hint: "(1+수익률) × (1+환등락) − 1",
+  },
+  {
+    key: "realtime_return_pct",
+    label: "실시간수익률",
+    num: true,
+    hint: "현재가 / 전일종가 − 1",
+  },
+  { key: "weight_pct", label: "비중", num: true, hint: "소스 시트 (T-1)일 비중" },
+  {
+    key: "contribution_pct",
+    label: "기여(수익률×비중)",
+    num: true,
+    hint: "이 열의 합이 카드 ① 의 주식분",
+  },
 ] as const;
 type WrapSortKey = (typeof WRAP_COLS)[number]["key"];
 
@@ -686,7 +755,7 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
               <th
                 key={c.key}
                 onClick={() => toggleSort(c.key)}
-                title="클릭하여 정렬"
+                title={c.hint ? `${c.hint} — 클릭하여 정렬` : "클릭하여 정렬"}
                 className={cn(
                   "cursor-pointer select-none whitespace-nowrap px-2 py-2 text-[11px] font-bold uppercase tracking-wide text-ink-secondary",
                   c.num ? "text-right" : "text-left",
@@ -703,7 +772,7 @@ function HoldingsTable({ p }: { p: WrapPortfolio }) {
         </thead>
         <tbody>
           {rows.map((h, i) => (
-            <HoldingRow key={`${h.ticker}-${i}`} h={h} fxPct={p.fx_return_pct} />
+            <HoldingRow key={`${h.ticker}-${i}`} h={h} />
           ))}
         </tbody>
       </table>
@@ -721,31 +790,24 @@ const CURRENCY_TEXT: Record<string, string> = {
   CNY: "text-rose-500",
 };
 
-/* '환 수익률' 열의 값 — 두 의미를 한 열에 담는다.
- *   현금 행 : 순수 환 등락률(현금의 수익은 환 변동이 전부라 둘이 같은 값이다)
- *   종목 행 : 환을 반영했을 때의 종목 수익률 (1+현지수익률)(1+환등락) − 1
- * 국내물은 환이 상쇄돼 종목 수익률과 같은 값이 나온다. */
-function fxCell(h: WrapHolding, fxPct: number | null | undefined) {
-  if (h.is_cash) {
-    return {
-      value: fxPct ?? null,
-      title: "현금 — 순수 환 등락률 (현금 수익은 환 변동이 전부)",
-    };
-  }
-  return {
-    value: h.return_krw_pct ?? null,
-    title: "환을 반영했을 때의 종목 수익률 = (1+현지수익률)×(1+환등락)−1",
-  };
+/* '환 수익률' 열 = 같은 구간(전전일→전일)을 환까지 반영한 값.
+ * 현금은 수익률이 0 이라 이 값이 환등락률 그대로 나오고, 원화자산은 수익률과 같다. */
+function fxTitle(h: WrapHolding): string {
+  return h.is_cash
+    ? "달러현금 — 수익률 0 이라 환등락률이 그대로 나온다"
+    : "(1+수익률) × (1+환등락) − 1";
 }
 
-function HoldingRow({
-  h,
-  fxPct,
-}: {
-  h: WrapHolding;
-  fxPct: number | null | undefined;
-}) {
-  const fx = fxCell(h, fxPct);
+// 값이 없는 칸 — 왜 없는지 배지로 구분한다(종가 누락 vs 현재가 누락).
+function MissBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded bg-canvas-soft px-1.5 py-0.5 text-[10px] font-semibold text-ink-faint">
+      {label}
+    </span>
+  );
+}
+
+function HoldingRow({ h }: { h: WrapHolding }) {
   return (
     <tr
       className={cn(
@@ -786,6 +848,9 @@ function HoldingRow({
         )}
       </td>
       <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
+        {h.prev2_close == null ? EMDASH : fmtNum(h.prev2_close, 2, 2)}
+      </td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
         {h.prev_close == null ? EMDASH : fmtNum(h.prev_close, 2, 2)}
       </td>
       <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
@@ -793,6 +858,7 @@ function HoldingRow({
           text={h.livePrice == null ? EMDASH : fmtNum(h.livePrice, 2, 2)}
         />
       </td>
+      {/* 수익률 — 전전일→전일 종가 (현지통화) */}
       <td
         className={cn(
           "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
@@ -800,21 +866,35 @@ function HoldingRow({
         )}
       >
         {h.return_pct == null ? (
-          <span className="rounded bg-canvas-soft px-1.5 py-0.5 text-[10px] font-semibold text-ink-faint">
-            미커버
-          </span>
+          <MissBadge label="종가없음" />
         ) : (
           signedPct(h.return_pct)
         )}
       </td>
+      {/* 환 수익률 — 같은 구간에 환 반영 */}
       <td
         className={cn(
           "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
-          fx.value == null ? "text-ink-faint" : signTextClass(fx.value),
+          h.return_krw_pct == null
+            ? "text-ink-faint"
+            : signTextClass(h.return_krw_pct),
         )}
-        title={fx.title}
+        title={fxTitle(h)}
       >
-        {fx.value == null ? EMDASH : signedPct(fx.value)}
+        {h.return_krw_pct == null ? EMDASH : signedPct(h.return_krw_pct)}
+      </td>
+      {/* 실시간수익률 — 전일종가→현재가 */}
+      <td
+        className={cn(
+          "whitespace-nowrap px-2 py-1.5 text-right font-semibold tabular-nums",
+          signTextClass(h.realtime_return_pct),
+        )}
+      >
+        {h.realtime_return_pct == null ? (
+          <MissBadge label="미커버" />
+        ) : (
+          signedPct(h.realtime_return_pct)
+        )}
       </td>
       <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums">
         {fmtNum(h.weight_pct, 2, 2)}

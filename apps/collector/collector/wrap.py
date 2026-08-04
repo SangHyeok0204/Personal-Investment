@@ -23,14 +23,10 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime, time as dtime
+from datetime import datetime
 from pathlib import Path
 
-from collector.wrap_returns import (
-    compute_ret1,
-    expected_basis_date,
-    read_price_closes,
-)
+from collector.wrap_returns import expected_basis_date
 from etf_inav.data_sources.wrap_classification import (
     _read_classification_sheet,
     load_classification,
@@ -222,25 +218,26 @@ def map_windows_path(win_path: str) -> Path | None:
 
 def holdings_from_source(
     src_path: Path, sheet: str
-) -> tuple[list[dict] | None, str]:
+) -> tuple[list[dict] | None, str, dict]:
     """운용역 소스 시트 → wrap_watchlist 보유행(list) 를 메모리에서 구성.
 
     검증 규칙은 ``wrap_source_refresh.refresh_portfolio_pdf`` 와 동일 (파일
-    기록·sidecar 만 없음). 실패 시 (None, 사유) — 호출부가 PDF 폴백.
+    기록·sidecar 만 없음). 실패 시 (None, 사유, {}) — 호출부가 PDF 폴백.
+    세 번째 원소는 ① 종가수익률에 쓰는 T-2 기준일·환율(extra).
     """
-    rows, basis_date = _read_source(src_path, sheet)
+    rows, basis_date, extra = _read_source(src_path, sheet)
     if basis_date is None:
-        return None, "no_basis_date(F2)"
+        return None, "no_basis_date(F2)", {}
     if (datetime.now().date() - basis_date).days > MAX_BASIS_AGE_DAYS:
-        return None, f"stale_basis({basis_date})"
+        return None, f"stale_basis({basis_date})", {}
 
     securities = [r for r in rows if not r["is_cash"]]
     cash_rows = [r for r in rows if r["is_cash"]]
     if not securities:
-        return None, "no_securities"
+        return None, "no_securities", {}
     bad = [r["ticker"] or r["name"] for r in securities if not _is_num(r["weight"])]
     if bad:
-        return None, f"non_numeric_weight(n={len(bad)})"
+        return None, f"non_numeric_weight(n={len(bad)})", {}
     cash_w_raw = sum(r["weight"] for r in cash_rows if _is_num(r["weight"]))
     sec_w_raw = sum(r["weight"] for r in securities)
     total_raw = sec_w_raw + cash_w_raw
@@ -251,19 +248,21 @@ def holdings_from_source(
     elif WEIGHT_SUM_MIN <= total_raw <= 100.0 + 5.0:
         factor = 1.0
     else:
-        return None, f"weight_sum_off({total_raw:.4f})"
+        return None, f"weight_sum_off({total_raw:.4f})", {}
     final_total = total_raw * factor
     if not (WEIGHT_SUM_MIN <= final_total <= 100.0 + WEIGHT_SUM_TOLERANCE):
-        return None, f"weight_sum_off({final_total:.3f}%)"
+        return None, f"weight_sum_off({final_total:.3f}%)", {}
 
     out: list[dict] = []
     for r in securities:
         prev = r["prev"] if (_is_num(r["prev"]) and r["prev"] > 0) else None
+        prev2 = r["prev2"] if (_is_num(r["prev2"]) and r["prev2"] > 0) else None
         out.append(
             {
                 "ticker": r["ticker"],
                 "name": "" if r["name"] is None else str(r["name"]),
                 "weight_pct": round(r["weight"] * factor, 6),
+                "prev2_close": prev2,
                 "prev_close": prev,
                 "exchange": None,  # WrapWatchlist 가 KisMaster 로 자동 해소
             }
@@ -274,11 +273,12 @@ def holdings_from_source(
                 "ticker": "CASH",
                 "name": "현금",
                 "weight_pct": round(cash_w_raw * factor, 6),
+                "prev2_close": None,
                 "prev_close": None,
                 "exchange": None,
             }
         )
-    return out, basis_date.strftime("%Y%m%d")
+    return out, basis_date.strftime("%Y%m%d"), extra
 
 
 class WrapCollector:
@@ -291,14 +291,6 @@ class WrapCollector:
         self._last_source_check = 0.0
         self._cls_cache: dict = {}
         self._cls_mtime: float | None = None
-        # ── ① 전전일→전일 종가수익률 (Price 시트, 하루 고정 + 08:00~10:00 게이트) ──
-        self._ret1: dict[str, dict] = {}  # key -> {usd, krw, basis, prev}
-        self._price_closes: dict | None = None  # 마지막 Price 시트 판독(② base·환율)
-        self._ret1_basis: date | None = None  # 현재 ① 기준 종가일
-        self._ret1_locked_date: date | None = None  # 오늘자 신선 갱신 확정된 KST 날짜
-        self._ret1_tries = 0
-        self._ret1_tries_date: date | None = None
-        self._ret1_last_try = 0.0
         # ── 성과 비교(track record): Port_Bloommberg/Port_TORUS 누적수익률% 시계열 ──
         self._perf_cache: dict | None = None
         self._perf_mtime: float | None = None
@@ -599,12 +591,17 @@ class WrapCollector:
                 ):
                     continue  # 소스 무변경 — 기존 보유목록 유지
                 try:
-                    holdings, basis = holdings_from_source(src_path, sheet)
+                    holdings, basis, extra = holdings_from_source(src_path, sheet)
                 except Exception as exc:  # noqa: BLE001
-                    holdings, basis = None, f"read_error: {exc}"
+                    holdings, basis, extra = None, f"read_error: {exc}", {}
                 if holdings:
                     loaded = holdings
-                    meta = {"source": "SOURCE", "basis": basis, "src_mtime": src_mtime}
+                    meta = {
+                        "source": "SOURCE",
+                        "basis": basis,
+                        "src_mtime": src_mtime,
+                        "extra": extra,
+                    }
                     _log(f"{key}: 소스 적용 basis={basis} n={len(holdings)}")
                 else:
                     _log(f"{key}: 소스 검증 실패({basis}) — PDF 폴백")
@@ -613,7 +610,11 @@ class WrapCollector:
                 if pdf_path is not None and pdf_path.exists():
                     try:
                         loaded = _read_pdf_rows(pdf_path)
-                        meta = {"source": "PDF_FALLBACK", "basis": None, "src_mtime": None}
+                        # 폴백 PDF 에는 T-2 종가·환율이 없다 → ① 은 이 랩만 미표시.
+                        meta = {
+                            "source": "PDF_FALLBACK", "basis": None,
+                            "src_mtime": None, "extra": {},
+                        }
                         _log(f"{key}: PDF 폴백 적용 n={len(loaded)}")
                     except Exception as exc:  # noqa: BLE001
                         _log(f"{key}: PDF 읽기 실패: {exc!r}")
@@ -644,68 +645,7 @@ class WrapCollector:
                 return data
         return self._cls_cache
 
-    def _price_source_path(self, cfg: dict) -> Path | None:
-        """Price 시트가 든 소스 xlsx(포폴 공용) 경로 — wrap_sources 첫 유효 항목."""
-        for src in (cfg.get("wrap_sources") or {}).values():
-            p = map_windows_path((src or {}).get("path", ""))
-            if p is not None and p.exists():
-                return p
-        return None
-
-    def _maybe_update_ret1(self, cfg: dict, rows_by_pf: dict) -> None:
-        """① 종가수익률 갱신 — 08:00~10:00 사이 30분 간격 최대 5회 시도.
-
-        최초 1회(값 없음)는 게이트 무관하게 즉시 계산(재기동 후 빈 카드 방지).
-        Price 시트 최신 종가일이 이전보다 새로우면 계산 후 그날 lock(재시도 중단).
-        """
-        now = datetime.now()
-        today = now.date()
-        if self._ret1_tries_date != today:
-            self._ret1_tries_date = today
-            self._ret1_tries = 0
-
-        first_time = not self._ret1
-        in_window = dtime(8, 0) <= now.time() <= dtime(10, 30)
-        locked = self._ret1_locked_date == today
-        can_try = (not locked) and in_window and (self._ret1_tries < 5)
-        cadence_ok = (self._ret1_last_try == 0.0) or (
-            time.time() - self._ret1_last_try >= 1800.0
-        )
-        if not (first_time or (can_try and cadence_ok)):
-            return
-
-        self._ret1_last_try = time.time()
-        if in_window and not locked:
-            self._ret1_tries += 1
-
-        src = self._price_source_path(cfg)
-        if src is None:
-            return
-        try:
-            price = read_price_closes(src)
-        except Exception as exc:  # noqa: BLE001 - last-good 유지
-            _log(f"ret1 Price 판독 실패: {exc!r}")
-            return
-        if not price:
-            return
-
-        self._price_closes = price
-        new_basis = price["last_date"]
-        is_new = self._ret1_basis is None or new_basis > self._ret1_basis
-        if first_time or is_new:
-            self._ret1 = compute_ret1(rows_by_pf, price, CASH_TICKERS)
-            self._ret1_basis = new_basis
-            _log(f"ret1 갱신 basis={new_basis} (신규={is_new}, 최초={first_time})")
-            # 최초 1회(재기동 부트스트랩)는 lock 하지 않는다 — _ret1_basis 가 None 이라
-            # is_new 가 무조건 True 라서, 그날 종가가 아직 안 들어온 소스를 읽어도
-            # '오늘치 확보'로 오인해 그날 재시도를 전부 막아버린다(2026-07-28 실제 발생:
-            # 08:50 재기동이 07-24 를 읽고 잠가, 09:25 에 들어온 07-27 을 놓침).
-            if in_window and is_new and not first_time:
-                self._ret1_locked_date = today
-        elif in_window:
-            _log(f"ret1 대기: 소스 최신 종가일 {new_basis} (보유 {self._ret1_basis}) — 재시도")
-
-    # ── 페이로드 (구 wrap_watchlist.run_cycle 의 집계와 동일) ──────────
+    # ── 페이로드 ───────────────────────────────────────────────────────
     def build_payload(self, fx_table: dict | None = None) -> dict | None:
         cfg = self._load_config()
         if not cfg:
@@ -718,18 +658,9 @@ class WrapCollector:
         classification = self._classification(cfg)
         rows_by_pf = self._holdings
         price_by_symbol = self.watchlist._fetch_prices(rows_by_pf)
-        # 환 수익률 = 네이버 FX 의 전일 대비 등락률(fluctuationsRatio). KRW 는 대상 아님.
-        fx_detail = (fx_table or {}).get("detail") or {}
 
-        # ① 종가수익률 게이트 갱신 + ②·① 원화 계산에 쓸 실시간/종가 환율.
-        self._maybe_update_ret1(cfg, rows_by_pf)
         fx_live = (fx_table or {}).get("rates", {}).get("USD")  # 실시간 USD/KRW
-        pc_closes = (self._price_closes or {}).get("closes") or {}
-        fx_close = (self._price_closes or {}).get("fx_last")  # 전일 종가 시점 환율
-        ret1_is_current = bool(
-            self._ret1_basis
-            and self._ret1_basis == expected_basis_date(datetime.now().date())
-        )
+        expected_basis = expected_basis_date(datetime.now().date()).strftime("%Y%m%d")
 
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ts = int(time.time() * 1000)
@@ -738,74 +669,72 @@ class WrapCollector:
             k for k in rows_by_pf if k not in order
         ]:
             rows = rows_by_pf[key]
+            meta = self._holdings_meta.get(key) or {}
+            extra = meta.get("extra") or {}
+            fx_t2, fx_t1 = extra.get("fx_t2"), extra.get("fx_t1")
+            # ① 환등락 = T-2 → T-1 (소스 시트 USDKRW 행 = 블룸버그 KRW L160).
+            # ② 환등락 = T-1 → 실시간 (네이버 USD/KRW).
+            fx_chg1 = (fx_t1 / fx_t2 - 1.0) if (fx_t1 and fx_t2) else None
+            fx_chg2 = (fx_live / fx_t1 - 1.0) if (fx_live and fx_t1) else None
+
             holdings: list[dict] = []
-            ret_sum = ret_sum_krw = mw = tw = 0.0
-            nm = 0
-            # 포트폴리오의 환 노출 통화(비중 최대 외화) — 현금 행에 '순수 환 변동'을
-            # 표시할 때 어느 통화의 등락률을 쓸지 정하는 데 쓴다.
-            fx_weight: dict[str, float] = {}
+            ret1_sum = ret2_sum = mw = tw = w1 = 0.0
+            nm = n1 = 0
             for h in rows:
                 is_cash = str(h["ticker"]).upper() in CASH_TICKERS
                 r = self.watchlist._resolved.get(h["ticker"])
                 info = price_by_symbol.get(r[1]) if r else None
                 live = info["last"] if info else None
                 exchange = h["exchange"] or (info["exchange"] if info else None)
-                # 기준통화: 현금은 KRW(티커가 USD 면 달러현금), 그 외는 거래소→통화
-                # 맵(KIS_EXCHANGE_CURRENCY). 국내(KRX/미해소)는 KRW.
+                # 기준통화: 현금은 달러현금으로 본다(소스 시트가 현금 행 수익률을 환등락률
+                # 그대로 잡는다 — 2026-07-31 사용자 확정). 그 외는 거래소→통화 맵.
                 if is_cash:
-                    currency = "USD" if str(h["ticker"]).upper() == "USD" else "KRW"
+                    currency = "KRW" if str(h["ticker"]).upper() == "KRW" else "USD"
                 else:
                     currency = KIS_EXCHANGE_CURRENCY.get(
                         str(exchange or "").upper(), "KRW"
                     )
-                # ② base(전일 종가) = Price 시트 최신 종가로 통일, 없으면 소스 prev_close.
-                base_pair = pc_closes.get(str(h["ticker"]).upper())
-                prev = (base_pair[1] if base_pair else None) or h["prev_close"]
+                w = h["weight_pct"] or 0.0
+                prev2 = h.get("prev2_close")   # E열 T-2 종가
+                prev = h["prev_close"]         # F열 T-1 종가
+
+                # 수익률      = 전전일종가 → 전일종가 (현지통화). 카드 ① 의 재료.
+                # 실시간수익률 = 전일종가 → 현재가 (장중 등락). 카드 ② 의 재료.
                 if is_cash:
-                    # 현금은 자기 통화 기준 불변 → 수익률 0%, 커버로 집계(0 기여)
-                    ret, contrib, ret_krw, contrib_krw, live, matched = (
-                        0.0, 0.0, 0.0, 0.0, prev, True,
-                    )
+                    ret1, rt, live, matched = 0.0, 0.0, prev, True
                 else:
-                    ret = (
+                    ret1 = ((prev / prev2) - 1.0) * 100.0 if (prev and prev2) else None
+                    rt = (
                         ((live / prev) - 1.0) * 100.0
                         if (live is not None and prev)
                         else None
                     )
-                    contrib = (
-                        (h["weight_pct"] / 100.0 * ret) if ret is not None else None
-                    )
                     matched = live is not None
-                    # ② 원화: 미국물만 (체결가×실시간환율)/(전일종가×종가환율)−1,
-                    # 국내물은 usd 와 동일(환율 상쇄).
-                    if (
-                        currency == "USD"
-                        and fx_live
-                        and fx_close
-                        and live is not None
-                        and prev
-                    ):
-                        ret_krw = ((live * fx_live) / (prev * fx_close) - 1.0) * 100.0
-                    else:
-                        ret_krw = ret
-                    contrib_krw = (
-                        (h["weight_pct"] / 100.0 * ret_krw)
-                        if ret_krw is not None
-                        else None
-                    )
-                tw += h["weight_pct"]
-                if not is_cash and currency != "KRW":
-                    fx_weight[currency] = fx_weight.get(currency, 0.0) + (
-                        h["weight_pct"] or 0.0
-                    )
+                # 환 반영 = (1+수익률)(1+환등락) − 1. 원금 전체가 환에 노출된다는 전제로,
+                # 소스 시트의 종목별 원화수익률 관례(G·H열)와 같은 식이다.
+                # 환은 전 행에 적용한다 — 이 랩들은 소스 시트가 현금까지 USD 로 잡는
+                # 미국물 전용이고, currency 는 KIS 가 해소한 거래소에서 오므로 가격이
+                # 안 잡힌 행만 환이 빠지면 테이블 합이 카드와 어긋난다(① 은 현재가와
+                # 무관해야 한다). 명시적 원화현금(ticker=KRW)만 예외.
+                fxc = 0.0 if (is_cash and currency == "KRW") else fx_chg1
+                ret1_krw = (
+                    ((1.0 + ret1 / 100.0) * (1.0 + fxc) - 1.0) * 100.0
+                    if (ret1 is not None and fxc is not None)
+                    else None
+                )
+                contrib = (w / 100.0 * ret1) if ret1 is not None else None
+
+                tw += w
                 if contrib is not None:
-                    ret_sum += contrib
-                    mw += h["weight_pct"]
+                    ret1_sum += contrib
+                    w1 += w
+                    if not is_cash:
+                        n1 += 1
+                if rt is not None:
+                    ret2_sum += w / 100.0 * rt
+                    mw += w
                     nm += 1
-                if contrib_krw is not None:
-                    ret_sum_krw += contrib_krw
                 cls = classification.get(str(h["ticker"]).upper(), {})
-                fx_row = fx_detail.get(currency) if currency != "KRW" else None
                 holdings.append(
                     {
                         "ticker": h["ticker"],
@@ -813,17 +742,17 @@ class WrapCollector:
                         "exchange": exchange,
                         "currency": currency,
                         "is_cash": is_cash,
-                        # 환 자체 등락률(통화 기준). 화면의 '환 수익률' 열은 현금 행에서만
-                        # 이 값을 쓰고, 종목 행은 아래 return_krw_pct(환 반영 수익률)를 쓴다.
-                        "fx_return_pct": fx_row.get("fluctuations_pct") if fx_row else None,
-                        "weight_pct": h["weight_pct"],
+                        "weight_pct": w,
+                        "prev2_close": prev2,
                         "prev_close": prev,
                         "livePrice": live,
-                        "return_pct": ret,
-                        # 환을 반영했을 때의 종목 수익률 = (1+현지수익률)(1+환등락) − 1.
-                        # 국내물은 환이 상쇄돼 return_pct 와 같다.
-                        "return_krw_pct": ret_krw,
+                        # 종가-대-종가(전전일→전일). 카드 ① = Σ(이 값 × 비중).
+                        "return_pct": ret1,
+                        # 같은 구간에 환까지 반영 = (1+수익률)(1+환등락) − 1.
+                        "return_krw_pct": ret1_krw,
                         "contribution_pct": contrib,
+                        # 전일종가 → 현재가.
+                        "realtime_return_pct": rt,
                         "matched": matched,
                         "tradeTime": info["tradeTime"] if info else None,
                         "cat1": cls.get("cat1") or "",
@@ -832,36 +761,49 @@ class WrapCollector:
                     }
                 )
             holdings.sort(key=lambda x: x["weight_pct"] or 0, reverse=True)
-            meta = self._holdings_meta.get(key) or {}
-            r1 = self._ret1.get(key) or {}
-            fx_cur = max(fx_weight, key=lambda c: fx_weight[c]) if fx_weight else None
-            fx_pct = (
-                (fx_detail.get(fx_cur) or {}).get("fluctuations_pct") if fx_cur else None
-            )
+
+            def _with_fx(ret: float, chg: float | None) -> float | None:
+                """포트폴리오 수익률에 환 반영 — (1+R)(1+환등락) − 1."""
+                if chg is None:
+                    return None
+                return ((1.0 + ret / 100.0) * (1.0 + chg) - 1.0) * 100.0
+
+            basis = meta.get("basis")
+            has1 = n1 > 0  # 종가 두 개가 다 있는 종목이 하나도 없으면 ① 미표시
             portfolios.append(
                 {
                     "key": key,
                     "name": names.get(key, key),
-                    "return_pct": ret_sum,
+                    # 분류 트리 루트 = ① 주식분(테이블 기여도 합과 같은 값).
+                    "return_pct": ret1_sum if has1 else 0.0,
                     "matched_weight_pct": mw,
                     "total_weight_pct": tw,
                     "n_matched": nm,
                     "n_total": len(rows),
                     "holdings": holdings,
                     "holdings_source": meta.get("source"),
-                    "basis_date": meta.get("basis"),
-                    # 환 노출 통화와 그 순수 등락률 — 현금 행의 '환 수익률'로 표시.
-                    "fx_currency": fx_cur,
-                    "fx_return_pct": fx_pct,
-                    # ② 전일종가→최근체결가 (USD / 원화)
-                    "return2_usd": ret_sum,
-                    "return2_krw": ret_sum_krw,
-                    # ① 전전일→전일 종가수익률 (USD / 원화) + 기준일·신선도
-                    "return1_usd": r1.get("usd"),
-                    "return1_krw": r1.get("krw"),
-                    "return1_basis_date": r1.get("basis"),
-                    "return1_prev_date": r1.get("prev"),
-                    "return1_is_current": ret1_is_current,
+                    "basis_date": basis,
+                    # 환등락률 원본 — 화면 툴팁 검산용.
+                    "fx_currency": "USD",
+                    "fx_return_pct": fx_chg1 * 100.0 if fx_chg1 is not None else None,
+                    "fx_realtime_pct": fx_chg2 * 100.0 if fx_chg2 is not None else None,
+                    "fx_t2": fx_t2,
+                    "fx_t1": fx_t1,
+                    # ② 전일종가→최근체결가 (현지통화 / 환 반영)
+                    "return2_usd": ret2_sum,
+                    "return2_krw": _with_fx(ret2_sum, fx_chg2),
+                    # ① 전전일→전일 종가수익률 (현지통화 / 환 반영) + 기준일·신선도
+                    "return1_usd": ret1_sum if has1 else None,
+                    "return1_krw": _with_fx(ret1_sum, fx_chg1) if has1 else None,
+                    "return1_basis_date": basis,
+                    "return1_prev_date": (
+                        extra["prev2_date"].strftime("%Y%m%d")
+                        if extra.get("prev2_date")
+                        else None
+                    ),
+                    "return1_is_current": bool(basis and basis == expected_basis),
+                    # ① 계산에 실제 들어간 비중합 (100% 미만이면 커버 누락).
+                    "ret1_weight_pct": w1 if has1 else None,
                 }
             )
         if not portfolios:

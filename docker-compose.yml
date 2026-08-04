@@ -121,9 +121,13 @@ services:
       #   =0: 레거시 캐시만 읽음(KRX 무접속, Phase-1 동작).
       # ⚠️ 2026-07-22 임시 "0": KRX per-ticker PDF 셀프수집이 전패(빈 pdf csv 를
       #   SELF_FETCH 로 반환 → 엔진 raise 크래시루프)하고, 구시스템 아침잡도 7/21부터
-      #   krx_etf_pdf 를 안 만듦(list/market 만). STALE 캐시(0720)로 기동 — 실시간
-      #   바스켓은 CHECK 에이전트 POST 가 소유하므로 시드 지연 무해. 셀프수집 원인
-      #   해결 후 "1" 복귀할 것.
+      #   krx_etf_pdf 를 안 만듦(list/market 만). STALE 캐시(0720)로 기동. 셀프수집
+      #   원인 해결 후 "1" 복귀할 것.
+      # ※ 2026-08-03 정정: 위 주석의 "바스켓은 CHECK 에이전트 POST 가 소유하므로
+      #   시드 지연 무해"는 사실이 아니었다 — POST(/ingest/hoga)는 호가·체결가만
+      #   나르고 바스켓은 안 나른다. 그래서 streaming.py 가 7/31 정지한 뒤 매일
+      #   STALE 바스켓으로 돌고 있었다(8/3 발견: 457480 TSLA 수량 425 vs 당일 427).
+      #   legacy_inputs 의 CHECK_PDF lane 이 그 자리를 메운다 — 이 플래그와 무관.
       COLLECTOR_ALLOW_FETCH: "0"
       # COLLECTOR_FORCE_FETCH=1: 레거시 캐시가 있어도 항상 self-fetch(테스트/드릴용).
       #   ALLOW_FETCH=1 일 때만 유효. 평시엔 "0"(레거시 캐시 우선).

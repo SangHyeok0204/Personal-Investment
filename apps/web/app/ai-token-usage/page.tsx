@@ -53,6 +53,10 @@ function extraAmount(label: string): string | null {
   return m ? `US$${m[1]}` : null;
 }
 
+// 크레딧이 꺼진 계정에서는 청구 초기화일보다 이 사실이 중요하다 — 주간 한도에 닿는
+// 순간 초기화까지 그대로 멈춘다.
+const CREDITS_OFF_NOTE = "사용 크레딧 꺼짐 · 한도 도달 시 중단";
+
 /** 카드 하단 막대 한 줄. meter=null 은 그 계정에 해당 한도가 없는 상태. */
 interface MeterRowModel {
   key: string;
@@ -79,6 +83,11 @@ function buildRows(
         label: displayLabel(m.label),
         meter: m,
         value: kind === "extra" ? extraAmount(m.label) ?? pctText : pctText,
+        // 미터가 있어도 토글이 꺼져 있으면 그 사실을 초기화일 대신 적는다.
+        note:
+          kind === "extra" && creditsEnabled === false
+            ? CREDITS_OFF_NOTE
+            : undefined,
       });
     }
   }
@@ -86,16 +95,15 @@ function buildRows(
   // 어긋난다. 금액을 'US$0.00' 으로 지어내지는 않는다(실제 과금이 있을 때 조용히
   // 틀린 값이 된다).
   //
-  // ★행이 없는 이유는 두 가지이고, 겉으로는 똑같이 보인다:
-  //   ① 그 계정의 '사용 크레딧'이 꺼져 있어 claude.ai 가 애초에 이 미터를 안 그린다
-  //   ② 크레딧은 켜져 있는데 수집만 실패했다
-  // 예전엔 이걸 구분할 수 없어 ①을 추측으로 단정했다. 이제 스크래퍼가 토글
-  // (role=switch aria-checked)을 직접 읽어 extra_usage_enabled 로 실어주므로
-  // 실측값으로 갈라 쓴다 (2026-07-30 실측: 계정1~3 = true, 계정4 = false).
+  // ★US$ 미터와 크레딧 토글은 독립이다 (2026-07-30 실측). 미터는 '당월 초과분
+  // 청구액' 표시라 결제수단이 붙어 있으면 토글을 꺼도 계속 그려진다 — 계정1~3 은
+  // 토글 off 인데도 'US$0.00 사용' 이 남아 있고, 계정4 만 미터 자체가 없다.
+  // 그래서 "미터가 있으면 크레딧이 켜져 있다"고 읽으면 안 되고(초기엔 그렇게 읽어
+  // 틀렸다), 문구는 언제나 토글 실측값(extra_usage_enabled)으로 정한다.
   if (provider === "Claude" && !rows.some((r) => r.key.startsWith("extra:"))) {
     const [value, note] =
       creditsEnabled === false
-        ? ["미설정", "사용 크레딧 꺼짐 · 한도 도달 시 중단"]
+        ? ["미설정", CREDITS_OFF_NOTE]
         : creditsEnabled === true
           ? ["미수집", "크레딧 켜짐 · 금액 행 수집 실패"]
           : ["—", "크레딧 설정 확인 불가"];
