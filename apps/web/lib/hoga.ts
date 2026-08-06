@@ -130,12 +130,14 @@ function recognizedQuotePrice(
 // 2026-07-27 카드 표시가 LP 로 넘어간 뒤로 "화면은 LP, 알림은 총호가"로 갈라져 있었다
 // (2026-07-29 사용자 지시로 LP 통일). 총호가는 리테일이 섞여 LP 성실도를 못 잰다.
 //
-// ★원·틱 둘 다 낸다 — 화면 칩은 bp(원 ÷ 체결가), 임계 판정(3틱·20틱)은 틱이라 둘 다
-// 필요하다 (2026-07-29). 스캔 범위는 ladderPrices 가 주는 길이를 따른다 — 10단 피드가
-// 붙은 뒤로는 10단계, 구 피드에서는 5단계.
+// ★원·틱·MID 셋 다 낸다 — 화면 칩은 bp(원 ÷ MID), 임계 판정(3틱·20틱)은 틱이라 둘 다
+// 필요하다 (2026-07-29). MID = (인정매도 + 인정매수) / 2 로, bp 의 분모다
+// (2026-08-05 사용자 지정 — 그 전에는 체결가로 나눴다. spreadBp 주석 참고).
+// 스캔 범위는 ladderPrices 가 주는 길이를 따른다 — 10단 피드가 붙은 뒤로는 10단계,
+// 구 피드에서는 5단계.
 export function recognizedSpread(
   etf: HogaEtf,
-): { won: number; ticks: number } | null {
+): { won: number; ticks: number; mid: number } | null {
   const recAsk = recognizedQuotePrice(
     ladderPrices(etf.askPrices10, etf.askPrices, "ask"),
     etf.lpAskQtys,
@@ -148,15 +150,20 @@ export function recognizedSpread(
   const tick = tickSize(recAsk);
   if (tick <= 0) return null;
   const won = recAsk - recBid;
-  return { won, ticks: Math.round(won / tick) };
+  return { won, ticks: Math.round(won / tick), mid: (recAsk + recBid) / 2 };
 }
 
-// 스프레드를 bp 로 — 실시간 체결가 대비 몇 bp 벌어졌는가 (2026-07-29 사용자 지정).
-// 체결가가 없으면 null (호출부가 틱 표시로 폴백한다).
-export function spreadBp(won: number, price: number | null | undefined): number | null {
-  const p = toNum(price);
-  if (p == null || p <= 0) return null;
-  return (won / p) * 10_000;
+// 스프레드를 bp 로 — 분모는 **인정호가 MID**다 (2026-08-05 사용자 지정).
+//
+// 전에는 체결가로 나눴다(2026-07-29). 값 차이는 거의 없지만(라이브 9종 실측 평균
+// 0.005bp·최대 0.013bp) 분모의 성격이 다르다 — 체결가는 마지막 '체결'이라 거래가
+// 뜸하면 낡은 값이 남고, 스프레드가 벌어질수록 체결가가 매수·매도 중 어느 쪽에
+// 붙었느냐로 bp 가 흔들린다. MID 는 그 순간 호가에서 바로 나와 분모로 일관된다.
+// collector lp_eval.py _spread_bp 와 값이 일치해야 한다.
+export function spreadBp(won: number, mid: number | null | undefined): number | null {
+  const m = toNum(mid);
+  if (m == null || m <= 0) return null;
+  return (won / m) * 10_000;
 }
 
 // LP가 매도·매수 한쪽이라도 물량을 아예 깔지 않았는가 — 이 경우를 '물량X' 알림으로

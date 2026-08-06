@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import {
   getFundSeries,
   getInavWrapRebalancing,
@@ -25,7 +26,8 @@ const POS = "#e74c3c"; // status-failed
 const NEG = "#4a7ab5"; // status-running / ge-point
 
 // 하단 리밸런싱 성과분석 패널은 여전히 이 두 포트폴리오 전용이다(편입 구성 이력이
-// 리밸런싱_히스토리 시트에만 있다). 위 차트는 등록된 펀드를 전부 그리므로 이 상수를 쓰지 않는다.
+// 리밸런싱_히스토리 시트에만 있다). 위 차트에서는 SELF_ID 를 처음 보여 줄 기본 펀드로만
+// 쓴다(범례에서 다른 펀드를 고르면 그쪽으로 바뀐다).
 const SELF_ID = "aicoretech";
 const BM_ID = "torus";
 
@@ -102,21 +104,64 @@ interface Model {
   lines: Line[];
 }
 
-/** 등록된 펀드 → 비교 모델. hidden 에 든 id 는 뺀다(범례에서 끄는 용도).
+/* ── 펀드 그룹: 펀드와 그 참조지수를 한 쌍으로 묶는다 ─────────────────────
+   적재 규약이 `{id}` · `{id}-bm` 이라(funds_map) 접미사만 떼면 짝이 나온다. */
+const BM_SUFFIX = "-bm";
+function groupOf(id: string): string {
+  return id.endsWith(BM_SUFFIX) ? id.slice(0, -BM_SUFFIX.length) : id;
+}
+/** 등록 순서(인셉션순) 그대로의 그룹 키 목록. */
+function groupsOf(funds: { id: string }[]): string[] {
+  const out: string[] = [];
+  for (const f of funds) {
+    const g = groupOf(f.id);
+    if (!out.includes(g)) out.push(g);
+  }
+  return out;
+}
+
+/* 동시 표시 예외 — 아래 그룹끼리는 한 화면에 같이 올릴 수 있다.
+ * 근거(2026-08-06 실측):
+ *  ① 참조지수가 같은 지수다. 공통 첫날(2026-03-10) 기준으로 리베이스하면 두 참조지수의
+ *     경로차가 최대 0.0000041%p — 저장된 누적수익률 반올림 수준이다. 그래서 참조지수는
+ *     하나만 그린다(아래 buildModel 의 dedup).
+ *  ② 날짜축이 겹친다. aicoretech 의 106 영업일이 torus 의 128 영업일에 전부 들어 있고,
+ *     torus 에만 있는 22일은 모두 aicoretech 인셉션 이전이라 중간 결측이 없다. 둘 다
+ *     주말 0일(전기차 펀드는 주말 60일 — 그래서 여전히 같이 못 올린다).
+ * 새 펀드를 여기 넣기 전에 위 두 가지를 반드시 실측할 것. */
+const COVIEW_GROUPS = ["torus", "aicoretech"];
+const canCoview = (gs: string[]) => gs.every((g) => COVIEW_GROUPS.includes(g));
+
+/** 등록된 펀드 → 비교 모델. 기본은 **한 그룹(펀드 + 그 참조지수)만** 그린다.
  *
- * 날짜축은 **합집합**이다. 예전에는 두 계열의 교집합을 썼는데, 펀드가 늘어나면 인셉션이
- * 가장 늦은 하나가 비교 구간 전체를 잘라 버린다(2024-11 부터 있는 펀드와 2026-03 부터인
- * 펀드를 같이 올리면 4개월만 남는다). 합집합으로 두고 값이 없는 구간은 null 로 비우면,
- * buildPlot 이 각 선을 자기 첫 데이터부터 그리면서 창 시작 기준으로 리베이스한다.
+ * 여러 펀드를 한 번에 올리면 날짜축이 서로 다른 계열의 합집합이 된다. 달력일이 다 들어
+ * 있는 소스가 하나라도 끼면(전기차 기준가 CSV 는 주말도 들고 있다) 그 날짜만큼 축이
+ * 늘어나고, 거래일만 있는 나머지 선은 그 자리에서 값이 없어 끊겨 보인다. 그래서 한 번에
+ * 한 쌍만 그린다. 펀드와 그 참조지수는 같은 소스라 날짜가 같아 축에 구멍이 안 생긴다.
+ *
+ * 예외는 COVIEW_GROUPS — 거기 적힌 근거대로 날짜축이 겹치는 그룹끼리는 같이 올린다.
+ * 이때 참조지수가 같은 지수이므로 **맨 앞 그룹의 것 하나만** 남기고 나머지는 버린다
+ * (같은 선을 두 번 겹쳐 그리면 색만 덮어쓰고 범례에 중복으로 뜬다).
+ *
+ * 축을 합집합으로 두는 것 자체는 그대로다(교집합으로 자르면 인셉션이 늦은 계열이 구간
+ * 전체를 잘라 버린다). 값이 없는 구간은 null 로 비우고, buildPlot 이 각 선을 자기 첫
+ * 데이터부터 그리면서 창 시작 기준으로 리베이스한다.
  */
 function buildModel(
   data: FundSeriesResponse | undefined,
-  hidden: Set<string>,
+  groups: string[],
 ): Model | null {
-  // 색은 **등록된 전체** 기준으로 배정한다. 보이는 것만으로 배정하면 하나 껐을 때 남은
-  // 선들의 색이 바뀌어 버린다.
+  // 색은 **등록된 전체** 기준으로 배정한다. 보이는 것만으로 배정하면 그룹을 바꿀 때마다
+  // 남은 선들의 색이 바뀌어 버린다.
   const colors = assignColors((data?.funds ?? []).map((f) => f.id));
-  const funds = (data?.funds ?? []).filter((f) => !hidden.has(f.id));
+  let seenBm = false;
+  const funds = (data?.funds ?? []).filter((f) => {
+    if (!groups.includes(groupOf(f.id))) return false;
+    if (!f.id.endsWith(BM_SUFFIX)) return true;
+    if (seenBm) return false; // 공통 참조지수 — 첫 번째 것만 그린다
+    seenBm = true;
+    return true;
+  });
   if (!funds.length) return null;
 
   const all = new Set<string>();
@@ -414,17 +459,37 @@ export default function TorusAicoretechPage() {
   });
   const data = query.data;
 
-  // 범례에서 끈 펀드. 기본은 등록된 것 전부 표시.
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const toggleFund = (id: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // 범례에서 고른 펀드 그룹. 기본은 하나만 그리고(그 펀드 + 그 참조지수),
+  // COVIEW_GROUPS 끼리는 여러 개를 같이 그린다.
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const groups = useMemo(() => groupsOf(data?.funds ?? []), [data]);
+  // 고른 적이 없거나 고른 것이 목록에서 사라졌으면 자사 펀드로, 그것도 없으면 첫 그룹으로
+  // 떨어진다. 상태를 effect 로 맞추지 않고 여기서 되짚어야 펀드 목록이 바뀌는 순간에도
+  // 빈 화면이 생기지 않는다.
+  const shown = useMemo(() => {
+    const alive = (picked ?? []).filter((g) => groups.includes(g));
+    if (alive.length) {
+      // 범례·차트 순서는 언제나 등록 순서를 따른다(고른 순서가 아니다).
+      return groups.filter((g) => alive.includes(g));
+    }
+    return groups.includes(SELF_ID) ? [SELF_ID] : groups.slice(0, 1);
+  }, [picked, groups]);
 
-  const model = useMemo(() => buildModel(data, hidden), [data, hidden]);
+  /* 범례 클릭 — 기본은 '갈아 끼우기', 동시 표시가 허용된 조합일 때만 '더하기/빼기'.
+   * 마지막 하나는 빼지 않는다(빈 차트가 되어 버린다). */
+  const onPick = (g: string) => {
+    setPicked(
+      shown.includes(g)
+        ? shown.length > 1
+          ? shown.filter((x) => x !== g)
+          : shown
+        : canCoview([...shown, g])
+          ? [...shown, g]
+          : [g],
+    );
+  };
+
+  const model = useMemo(() => buildModel(data, shown), [data, shown]);
   const D = useMemo(() => model?.D ?? [], [model]);
 
   const [period, setPeriod] = useState<Period>({ kind: "recent", months: 3 });
@@ -456,17 +521,10 @@ export default function TorusAicoretechPage() {
     [rebalQuery.data],
   );
 
-  const [pfFilter, setPfFilter] = useState<"all" | "aicoretech" | "torus">("all");
+  // 리밸 상세는 차트의 ▲ 마커로만 연다. 페이지에 상설 패널을 두지 않는다.
   const [selEvent, setSelEvent] = useState<{ key: string; date: string } | null>(null);
 
-  // 필터 반영한 리밸 목록(패널: 최신순) + 마커(차트 오버레이).
-  const rebalFiltered = useMemo(() => {
-    const src: RebalDelta[] = [];
-    if (pfFilter !== "torus") src.push(...rebalAi);
-    if (pfFilter !== "aicoretech") src.push(...rebalTr);
-    return src;
-  }, [rebalAi, rebalTr, pfFilter]);
-  // 마커는 차트에 그려진 펀드에서 나온다(범례로 끄면 마커도 사라진다). 편입 구성까지
+  // 마커는 차트에 그려진 펀드에서 나온다(다른 펀드를 고르면 마커도 바뀐다). 편입 구성까지
   // 아는 두 포트폴리오는 풍부한 요약을, 나머지는 이름과 날짜만 보여 준다.
   const markers = useMemo<Marker[]>(() => {
     const lines = model?.lines ?? [];
@@ -489,14 +547,6 @@ export default function TorusAicoretechPage() {
     }
     return out;
   }, [model, data, rebalAi, rebalTr]);
-  const panelList = useMemo(
-    () =>
-      [...rebalFiltered].sort(
-        (a, b) => b.date.localeCompare(a.date) || a.key.localeCompare(b.key),
-      ),
-    [rebalFiltered],
-  );
-
   const onSelectMarker = (key: string, date: string) => setSelEvent({ key, date });
 
   // 선택된 리밸 시점 상세 조립(변경내역 + cats + perf).
@@ -553,9 +603,12 @@ export default function TorusAicoretechPage() {
                 <span className="text-[14px] font-extrabold text-ge-navy">
                   누적 수익률 비교
                 </span>
-                {data && data.funds.length > 0 && (
-                  <span className="text-[11.5px] text-ink-faint">
-                    펀드 {data.funds.length - hidden.size}/{data.funds.length}
+                {groups.length > 0 && (
+                  <span
+                    className="text-[11.5px] text-ink-faint"
+                    title="범례에서 펀드를 고릅니다. 날짜축이 달라 기본은 한 번에 하나만 그리고, 참조지수가 같고 거래일이 겹치는 펀드끼리만 함께 그립니다."
+                  >
+                    펀드 {groups.length}개 · 보는 중 {shown.length}개
                   </span>
                 )}
               </div>
@@ -592,15 +645,15 @@ export default function TorusAicoretechPage() {
                     </span>
                   </>
                 ) : (
-                  <span>범례에서 펀드를 하나 이상 켜 주세요.</span>
+                  <span>그릴 수 있는 계열이 없습니다. 점이 2개 이상이어야 합니다.</span>
                 )}
               </div>
             ) : (
               <ReadyChart
                 plot={plot}
                 funds={data?.funds ?? []}
-                hidden={hidden}
-                onToggle={toggleFund}
+                shown={shown}
+                onPick={onPick}
                 markers={markers}
                 selEvent={selEvent}
                 onSelectMarker={onSelectMarker}
@@ -609,21 +662,21 @@ export default function TorusAicoretechPage() {
           </div>
         </section>
 
-        {/* 리밸런싱 성과분석 (마커/칩 클릭 → 해당 시점 상세) */}
-        <RebalAnalysis
-          chips={panelList}
-          pfFilter={pfFilter}
-          setPfFilter={setPfFilter}
-          detail={detail}
-          selEvent={selEvent}
-          setSelEvent={setSelEvent}
-          isLoading={rebalQuery.isLoading}
-          isError={rebalQuery.isError}
-        />
-
         {/* 성과보고 (월=위클리 / 화~금=데일리) — S: bat 이 만든 HTML 을 iframe 렌더 */}
         <PerfReportCard />
       </PageContainer>
+
+      {/* 리밸런싱 성과분석 — 차트의 ▲ 를 누르면 겹쳐 뜬다. 페이지에 상설 자리를 두지
+          않는 이유는 볼 일이 있을 때만 보는 화면이기 때문이다. PageContainer 바깥에
+          두어야 카드의 overflow-hidden 이나 스크롤에 걸리지 않는다. */}
+      {selEvent && (
+        <RebalModal
+          detail={detail}
+          isLoading={rebalQuery.isLoading}
+          isError={rebalQuery.isError}
+          onClose={() => setSelEvent(null)}
+        />
+      )}
     </>
   );
 }
@@ -633,16 +686,16 @@ export default function TorusAicoretechPage() {
 function ReadyChart({
   plot,
   funds,
-  hidden,
-  onToggle,
+  shown,
+  onPick,
   markers,
   selEvent,
   onSelectMarker,
 }: {
   plot: Plot;
   funds: { id: string; label: string; inception: string; lastDate: string }[];
-  hidden: Set<string>;
-  onToggle: (id: string) => void;
+  shown: string[];
+  onPick: (g: string) => void;
   markers: Marker[];
   selEvent: { key: string; date: string } | null;
   onSelectMarker: (key: string, date: string) => void;
@@ -690,47 +743,93 @@ function ReadyChart({
         )}
       </div>
 
-      {/* 범례 + 윈도우 수익률. 등록된 펀드를 전부 보여 주고, 클릭하면 선을 껐다 켠다.
-          숨긴 펀드도 목록에 남아야 다시 켤 수 있다. */}
+      {/* 범례 = **펀드** 선택기. 고르는 단위는 펀드 하나뿐이고, 참조지수는 그 펀드를
+          고르면 따라 붙는다(선택지가 아니라 딸림 정보라서 버튼이 아닌 글자로 둔다).
+          클릭은 껐다 켜기가 아니라 갈아 끼우기다. */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-hairline pt-3">
-        {funds.map((f) => {
-          const ln = plot.lines.find((l) => l.id === f.id);
-          const off = hidden.has(f.id);
-          const finite = (ln?.vals ?? []).filter(
-            (v): v is number => v != null && Number.isFinite(v),
-          );
-          const ret = finite.length ? finite[finite.length - 1] : null;
+        {groupsOf(funds).map((g) => {
+          // 그룹의 본체(펀드)와 딸린 참조지수. 참조지수만 등록된 그룹이면 본체가 없으니
+          // 그때는 그 계열을 본체로 세운다.
+          const main = funds.find((f) => f.id === g) ?? funds.find((f) => groupOf(f.id) === g);
+          if (!main) return null;
+          const off = !shown.includes(g);
+          // 참조지수 칩은 **차트에 실제로 그려진** 것만 단다. 공통 참조지수는 buildModel 이
+          // 하나로 합쳐 버리므로, 합쳐지면서 빠진 쪽에는 칩이 붙지 않는다(값 없는 "—" 방지).
+          const bmId = g + BM_SUFFIX;
+          const bm = funds.find((f) => f.id === bmId);
+          const bmDrawn = plot.lines.some((l) => l.id === bmId);
+          // 여러 펀드를 같이 보고 있으면 그 참조지수는 공통이다 — 라벨로 그렇게 알린다.
+          const bmShared = shown.length > 1;
+          const retOf = (id: string) => {
+            const finite = (plot.lines.find((l) => l.id === id)?.vals ?? []).filter(
+              (v): v is number => v != null && Number.isFinite(v),
+            );
+            return finite.length ? finite[finite.length - 1] : null;
+          };
+          const colorOf = (id: string) =>
+            plot.lines.find((l) => l.id === id)?.color ?? "#c9d1dd";
           return (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => onToggle(f.id)}
-              title={
-                off
-                  ? "클릭하면 그래프에 표시합니다"
-                  : `${dotDate(f.inception)} ~ ${dotDate(f.lastDate)} · 클릭하면 숨깁니다`
-              }
-              className={cn(
-                "flex items-center gap-2 rounded-md px-1.5 py-0.5 transition hover:bg-canvas-soft",
-                off && "opacity-40",
-              )}
-            >
-              <span
-                className="inline-block h-2.5 w-4 rounded-full"
-                style={{ background: ln?.color ?? "#c9d1dd" }}
-              />
-              <span className="text-[12.5px] font-bold text-ge-navy">{f.label}</span>
-              {off ? (
-                <span className="text-[11px] text-ink-faint">숨김</span>
-              ) : (
+            <span key={g} className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-pressed={!off}
+                onClick={() => onPick(g)}
+                title={
+                  off
+                    ? canCoview([...shown, g])
+                      ? "클릭하면 지금 보는 펀드와 함께 그립니다 (참조지수가 같아 하나로 그림)"
+                      : "클릭하면 이 펀드로 갈아 끼웁니다 (날짜축이 달라 같이 못 올립니다)"
+                    : shown.length > 1
+                      ? `클릭하면 이 펀드를 뺍니다 · ${dotDate(main.inception)} ~ ${dotDate(main.lastDate)}`
+                      : `${dotDate(main.inception)} ~ ${dotDate(main.lastDate)}`
+                }
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-1.5 py-0.5 transition hover:bg-canvas-soft",
+                  off && "opacity-40",
+                )}
+              >
                 <span
-                  className="text-[13px] font-extrabold tabular-nums"
-                  style={{ color: signColor(ret) }}
-                >
-                  {signedPct(ret)}
+                  className="inline-block h-2.5 w-4 rounded-full"
+                  style={{ background: off ? "#c9d1dd" : colorOf(main.id) }}
+                />
+                <span className="text-[12.5px] font-bold text-ge-navy">{main.label}</span>
+                {off ? (
+                  <span className="text-[11px] text-ink-faint">보기</span>
+                ) : (
+                  <span
+                    className="text-[13px] font-extrabold tabular-nums"
+                    style={{ color: signColor(retOf(main.id)) }}
+                  >
+                    {signedPct(retOf(main.id))}
+                  </span>
+                )}
+              </button>
+              {/* 참조지수는 고른 펀드에만 딸려 나온다. 누를 수 없다. */}
+              {!off && bm && bmDrawn && (
+                <span className="flex items-center gap-1.5 border-l border-hairline pl-3">
+                  <span
+                    className="inline-block h-2.5 w-4 rounded-full"
+                    style={{ background: colorOf(bm.id) }}
+                  />
+                  <span
+                    className="text-[12px] font-semibold text-ink-secondary"
+                    title={
+                      bmShared
+                        ? "지금 보고 있는 펀드들의 공통 참조지수 (같은 지수라 하나만 그립니다)"
+                        : bm.label
+                    }
+                  >
+                    참조지수{bmShared && " (공통)"}
+                  </span>
+                  <span
+                    className="text-[12.5px] font-bold tabular-nums"
+                    style={{ color: signColor(retOf(bm.id)) }}
+                  >
+                    {signedPct(retOf(bm.id))}
+                  </span>
                 </span>
               )}
-            </button>
+            </span>
           );
         })}
         {markers.length > 0 && (
@@ -1286,139 +1385,80 @@ function TipRow({
   );
 }
 
-/* ── 리밸런싱 성과분석 (시점 선택 → 상세) ─────────────────────────────── */
+/* ── 리밸런싱 성과분석 모달 ───────────────────────────────────────────────
+   차트의 ▲(리밸 시점)를 누르면 겹쳐 뜬다. 페이지에 상설 자리를 주지 않는 이유는 평소에는
+   곡선만 보고, 특정 리밸을 따질 때만 여는 화면이기 때문이다. 배경 클릭·ESC·✕ 로 닫는다.
+   구조는 이 대시보드의 다른 모달(LP평가 상세)과 같게 맞췄다. */
 
-function RebalAnalysis({
-  chips,
-  pfFilter,
-  setPfFilter,
+function RebalModal({
   detail,
-  selEvent,
-  setSelEvent,
   isLoading,
   isError,
+  onClose,
 }: {
-  chips: RebalDelta[];
-  pfFilter: "all" | "aicoretech" | "torus";
-  setPfFilter: (v: "all" | "aicoretech" | "torus") => void;
   detail: RebalDetailData | null;
-  selEvent: { key: string; date: string } | null;
-  setSelEvent: (v: { key: string; date: string } | null) => void;
   isLoading: boolean;
   isError: boolean;
+  onClose: () => void;
 }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const who = detail ? (detail.key === SELF_ID ? "자사(AI코어테크랩)" : "TORUS(BM)") : "";
+
   return (
-    <section
-      id="rebal-analysis"
-      className="mt-4 overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ge-navy/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
     >
-      <div className="h-2 rounded-t-2xl bg-ge-navy" />
-      <div className="px-5 pb-5 pt-4">
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="flex items-center gap-2">
-            <span className="h-4 w-1.5 rounded-full bg-ge-navy" />
-            <span className="text-[14px] font-extrabold text-ge-navy">
+      <div
+        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-canvas shadow-panel"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-hairline px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-[15px] font-extrabold text-ge-navy">
               리밸런싱 성과분석
-            </span>
+            </h2>
+            <div className="mt-0.5 text-[12px] tabular-nums text-ink-muted">
+              {detail ? `${dotDate(detail.date)} · ${who}` : "불러오는 중…"}
+            </div>
           </div>
-          <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-hairline bg-canvas-soft p-0.5">
-            <FilterBtn active={pfFilter === "all"} onClick={() => setPfFilter("all")}>
-              전체
-            </FilterBtn>
-            <FilterBtn active={pfFilter === "aicoretech"} onClick={() => setPfFilter("aicoretech")}>
-              자사
-            </FilterBtn>
-            <FilterBtn active={pfFilter === "torus"} onClick={() => setPfFilter("torus")}>
-              TORUS
-            </FilterBtn>
-          </div>
+          <button
+            type="button"
+            aria-label="닫기"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-ink-muted transition hover:bg-canvas-soft hover:text-ink"
+          >
+            <X className="h-4 w-4" strokeWidth={2} />
+          </button>
         </div>
 
-        {isLoading ? (
-          <Skeleton className="h-40 w-full rounded-xl" />
-        ) : isError || chips.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-center text-sm text-ink-muted">
-            리밸런싱 데이터를 불러올 수 없습니다.
-          </div>
-        ) : (
-          <>
-            {/* 리밸 시점 드롭다운 (포트별 optgroup) */}
-            <div className="mb-4">
-              <select
-                value={selEvent ? `${selEvent.key}|${selEvent.date}` : ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    setSelEvent(null);
-                    return;
-                  }
-                  const [key, date] = v.split("|");
-                  setSelEvent({ key, date });
-                }}
-                className="w-full max-w-xs rounded-lg border border-hairline bg-canvas px-3 py-2 text-[13px] font-semibold text-ge-navy outline-none focus:border-ge-point"
-              >
-                <option value="">리밸 시점 선택…</option>
-                {chips.some((c) => c.key === SELF_ID) && (
-                  <optgroup label="자사 (AI코어테크랩)">
-                    {chips
-                      .filter((c) => c.key === SELF_ID)
-                      .map((c) => (
-                        <option key={c.date} value={`${c.key}|${c.date}`}>
-                          {dotDate(c.date)}
-                        </option>
-                      ))}
-                  </optgroup>
-                )}
-                {chips.some((c) => c.key === BM_ID) && (
-                  <optgroup label="TORUS (BM)">
-                    {chips
-                      .filter((c) => c.key === BM_ID)
-                      .map((c) => (
-                        <option key={c.date} value={`${c.key}|${c.date}`}>
-                          {dotDate(c.date)}
-                        </option>
-                      ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-
-            {detail ? (
-              <RebalDetail detail={detail} />
-            ) : (
-              <div className="flex h-28 items-center justify-center px-4 text-center text-[13px] leading-relaxed text-ink-muted">
-                위 그래프의 삼각형(리밸 시점) 또는 상단 날짜 칩을 클릭하면
-                <br />
-                해당 리밸런싱의 성과분석이 여기 표시됩니다.
-              </div>
-            )}
-          </>
-        )}
+        <div className="overflow-y-auto px-5 py-4">
+          {isLoading ? (
+            <Skeleton className="h-40 w-full rounded-xl" />
+          ) : isError ? (
+            <p className="py-10 text-center text-sm text-ink-muted">
+              리밸런싱 데이터를 불러올 수 없습니다.
+            </p>
+          ) : !detail ? (
+            <p className="py-10 text-center text-sm text-ink-muted">
+              이 시점의 편입 구성 이력이 없습니다. 구성 이력은 리밸런싱_히스토리 시트가 있는
+              AI코어테크랩·TORUS 만 있습니다.
+            </p>
+          ) : (
+            <RebalDetail detail={detail} />
+          )}
+        </div>
       </div>
-    </section>
-  );
-}
-
-function FilterBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-md px-3 py-1 text-[12px] font-bold transition-colors",
-        active ? "bg-ge-navy text-white shadow-sm" : "text-ink-muted hover:text-ge-navy",
-      )}
-    >
-      {children}
-    </button>
+    </div>
   );
 }
 

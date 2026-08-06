@@ -19,7 +19,7 @@
 lp_dev_ts 에 함께 기록한다 — 스프레드가 벌어진 순간의 괴리를 나중에 붙여볼 수 있게
 (2026-07-28). S: 아카이브의 lp_eval_ts_{date}.csv 가 둘을 한 행으로 합쳐 내보낸다.
 
-프론트 lib/hoga.ts 의 recognizedSpreadTicks/recognizedQuotePrice/tickSize 를 그대로
+프론트 lib/hoga.ts 의 recognizedSpread/recognizedQuotePrice/spreadBp/tickSize 를 그대로
 이식한다(값 일치 보장). 순수 판독·누적 — 예외는 삼키고 그 표본만 건너뛴다.
 """
 from __future__ import annotations
@@ -155,9 +155,9 @@ def _recognized_quote_price(prices, qtys):
     return None
 
 
-def _recognized_spread_ticks(ask_prices, ask_qtys, bid_prices, bid_qtys):
-    """(인정매도호가 − 인정매수호가) 를 틱으로 환산. 한쪽이라도 인정호가가 없으면
-    None (= '없음'). lib/hoga.ts recognizedSpreadTicks 이식."""
+def _recognized_spread(ask_prices, ask_qtys, bid_prices, bid_qtys):
+    """인정 스프레드 — (원, 틱수, MID). 한쪽이라도 인정호가가 없으면 None (= '없음').
+    MID = (인정매도호가 + 인정매수호가) / 2. lib/hoga.ts recognizedSpread 이식."""
     rec_ask = _recognized_quote_price(ask_prices, ask_qtys)
     rec_bid = _recognized_quote_price(bid_prices, bid_qtys)
     if rec_ask is None or rec_bid is None:
@@ -165,18 +165,21 @@ def _recognized_spread_ticks(ask_prices, ask_qtys, bid_prices, bid_qtys):
     tick = _tick_size(rec_ask)
     if tick <= 0:
         return None
-    return round((rec_ask - rec_bid) / tick)
+    won = rec_ask - rec_bid
+    return won, round(won / tick), (rec_ask + rec_bid) / 2
 
 
-def _spread_bp(spread_ticks, price):
-    """인정 스프레드를 bp 로. 가격이 틱 격자에 있으므로 (틱수 × 호가단위) = 스프레드(원).
-    lib/hoga.ts spreadBp 와 같은 산식. 틱수/체결가가 없으면 None."""
-    if spread_ticks is None:
+def _spread_bp(won, mid):
+    """인정 스프레드를 bp 로 — 분모는 **인정호가 MID**다 (2026-08-05 사용자 지정).
+
+    전에는 체결가로 나눴다. 값 차이는 거의 없지만(같은 날 라이브 9종 실측: 평균
+    0.005bp·최대 0.013bp) 분모의 성격이 다르다 — 체결가는 마지막 '체결'이라 거래가
+    뜸하면 낡은 값이 남고, 스프레드가 벌어질수록 체결가가 매수·매도 중 어느 쪽에
+    붙었느냐로 bp 가 흔들린다. MID 는 그 순간 호가에서 바로 나오므로 스프레드를
+    재는 분모로 일관된다. lib/hoga.ts spreadBp 와 같은 산식(값 일치 보장)."""
+    if won is None or mid is None or mid <= 0:
         return None
-    p = _to_num(price)
-    if p is None or p <= 0:
-        return None
-    return (spread_ticks * _tick_size(p)) / p * 10_000
+    return won / mid * 10_000
 
 
 def _band_of(bp):
@@ -190,20 +193,21 @@ def _band_of(bp):
     return "calm"
 
 
-def _bucket(spread_ticks, price=None) -> int:
+def _bucket(spread_ticks, bp=None) -> int:
     """틱 값을 히스토그램 버킷으로. 화면 요약과 같은 기준을 쓴다 (2026-07-30 통일).
 
     · _NONE_TICK('없음') = 인정호가 부재(None) 뿐이다 = 화면의 '물량X'. 구 기준의
       '20틱 초과'는 빠졌다 — 화면이 아무리 벌어져도 그 bp 를 그대로 보여주므로
       여기서도 숫자 버킷으로 남긴다(lib/hoga.ts lpQuoteMissing 주석 참고).
-    · _OK_TICK('정상')   = 옅은 회색 밴드(<SPREAD_WARN_BP=20bp). 체결가가 있으면 bp 로
+    · _OK_TICK('정상')   = 옅은 회색 밴드(<SPREAD_WARN_BP=20bp). bp 가 오면 그걸로
       비교하고, 없으면 구 틱 기준으로 폴백한다.
+
+    bp 를 인자로 받는다 — 여기서 다시 계산하면 분모(2026-08-05 부터 인정호가 MID)를
+    두 곳에서 관리하게 되고, 한쪽만 고치면 버킷과 밴드가 조용히 어긋난다.
     """
     if spread_ticks is None:
         return _NONE_TICK
-    p = _to_num(price)
-    if p is not None and p > 0:
-        bp = (spread_ticks * _tick_size(p)) / p * 10_000
+    if bp is not None:
         return _OK_TICK if bp < SPREAD_WARN_BP else int(spread_ticks)
     if spread_ticks < SPREAD_ALERT_MIN_TICKS:
         return _OK_TICK
@@ -300,11 +304,11 @@ def sample_once(hoga: dict | None, now: datetime | None = None,
             ("lp", e.get("lpAskQtys"), e.get("lpBidQtys")),
             ("total", e.get("askQtys"), e.get("bidQtys")),
         ):
-            st = _recognized_spread_ticks(ask_ladder, aq, bid_ladder, bq)
-            rows.append((trade_date, code, basis, _bucket(st, price)))
-            ts_rows.append(
-                (trade_date, ts, code, basis, st, _spread_bp(st, price), price)
-            )
+            spread = _recognized_spread(ask_ladder, aq, bid_ladder, bq)
+            st = None if spread is None else spread[1]
+            bp = None if spread is None else _spread_bp(spread[0], spread[2])
+            rows.append((trade_date, code, basis, _bucket(st, bp)))
+            ts_rows.append((trade_date, ts, code, basis, st, bp, price))
     if not rows:
         return 0
     # 괴리율 시계열(종목별, basis 무관) — iNAV 스냅샷에서 실제괴리(deviation_pct)와
@@ -429,7 +433,9 @@ def _bands(acc: dict) -> list:
         _band_row("warn", f"{SPREAD_WARN_BP}~{SPREAD_CRIT_BP}bp", acc["warn"]),
         _band_row("crit", f"{SPREAD_CRIT_BP}bp↑", acc["crit"]),
         # '없음' = 인정호가 부재(물량X). bp 가 없으므로 유지 분수·비율만.
-        {"key": "none", "label": "없음", "minutes": acc["none"],
+        # 라벨에 '(미제출)'을 붙인다 — 값이 안 잡힌 게 아니라 LP 가 1,000주 이상
+        # 호가를 안 냈다는 뜻이라, '없음'만으로는 수집 실패로 읽힌다 (2026-08-05).
+        {"key": "none", "label": "없음(미제출)", "minutes": acc["none"],
          "share": _share(acc["none"]), "mean": None, "mode": None, "median": None},
     ]
 
@@ -761,6 +767,98 @@ _TS_CSV_HEADER = [
 ]
 
 
+def _csv_append_state(path: Path, header: list) -> str | None:
+    """이어쓰기 준비 — 반환값 = 이미 파일에 들어간 마지막 ts(없으면 None).
+
+    시계열 CSV 는 한 번 쓰인 행이 절대 안 바뀌는 append-only 데이터라 매 표본마다
+    하루치를 통째로 다시 쓸 이유가 없다(2026-08-05 실측 204KB·167ms). 이어쓰기
+    지점은 **파일 자체**에서 읽는다 — 메모리에 들고 있으면 컨테이너가 재기동할 때
+    잃어버리고, 파일을 기준으로 하면 쓰기가 한 번 실패해도(예: Excel 이 잠금) 다음
+    표본에서 빠진 구간까지 알아서 따라잡는다.
+
+    · 파일 없음/빈 파일        → 헤더만 쓰고 None
+    · 헤더가 지금 스펙과 다름  → 컬럼이 바뀐 것이므로 헤더부터 새로 쓴다(자동 복구)
+    · 마지막 줄이 개행으로 안 끝남 → 쓰다 만 줄이므로 잘라낸다
+    · **마지막 ts 그룹은 통째로 되감는다** — 한 표본시각에 종목 수만큼(9행) 붙는데
+      쓰다가 끊기면 그 그룹이 반만 남는다. 그 상태로 `ts > 마지막ts` 를 조회하면
+      남은 반이 영영 빠지므로, 그룹 전체를 잘라내고 직전 ts 를 체크포인트로 준다.
+    """
+    head_line = ",".join(header)
+    try:
+        size = path.stat().st_size if path.exists() else 0
+    except OSError:
+        size = 0
+
+    def _fresh() -> None:
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            csv.writer(f).writerow(header)
+
+    if size == 0:
+        _fresh()
+        return None
+    with open(path, "rb") as f:
+        first = f.readline().decode("utf-8-sig", errors="replace").strip()
+        if first != head_line:
+            _log(f"{path.name}: 헤더가 바뀌어 전체 재작성")
+            _fresh()
+            return None
+        start = max(0, size - 8192)
+        f.seek(start)
+        tail = f.read()
+    # 쓰다 만 마지막 줄 정리
+    if not tail.endswith(b"\n"):
+        cut = tail.rfind(b"\n")
+        if cut < 0:
+            _fresh()
+            return None
+        size = start + cut + 1
+        with open(path, "r+b") as f:
+            f.truncate(size)
+        tail = tail[: cut + 1]
+
+    def _ts_of(raw_line: bytes) -> str | None:
+        # ts 는 2번째 컬럼 'HH:MM:SS'. 헤더 줄('ts')은 콜론 수로 걸러진다.
+        parts = raw_line.decode("utf-8", errors="replace").split(",")
+        return parts[1] if len(parts) > 1 and parts[1].count(":") == 2 else None
+
+    lines = tail[:-1].split(b"\n")
+    if start > 0:
+        lines = lines[1:]   # 창 경계에서 잘린 첫 줄은 신뢰할 수 없다
+    last_ts = prev_ts = None
+    drop = 0                # 잘라낼 바이트(마지막 ts 그룹)
+    for raw_line in reversed(lines):
+        ts = _ts_of(raw_line)
+        if ts is None:
+            break
+        if last_ts is None:
+            last_ts = ts
+        if ts != last_ts:
+            prev_ts = ts
+            break
+        drop += len(raw_line) + 1
+    if last_ts is None:
+        return None         # 헤더뿐 — 처음부터 채우면 된다
+    if prev_ts is None:
+        # 창 안이 전부 한 ts 그룹 = 그룹이 창 밖까지 이어질 수 있다(사실상 첫 표본
+        # 직후에만 발생). 판단이 안 서면 안전하게 처음부터 다시 쓴다.
+        _fresh()
+        return None
+    with open(path, "r+b") as f:
+        f.truncate(size - drop)
+    return prev_ts
+
+
+def _csv_append(path: Path, rows: list) -> None:
+    """행을 이어붙인다. utf-8-sig 로 열면 BOM 이 파일 중간에 박히므로 utf-8 로 연다
+    (헤더를 쓸 때만 utf-8-sig 를 쓴다 — Excel 한글 대응은 그걸로 충분하다)."""
+    if not rows:
+        return
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        for row in rows:
+            w.writerow(row)
+
+
 def _all_buckets_by_key() -> dict:
     """DB 전체를 (trade_date, code, basis) -> {tick: count} 로 모은다(read-only)."""
     data: dict = {}
@@ -783,35 +881,57 @@ def _all_buckets_by_key() -> dict:
     return data
 
 
-def _all_bp_stats() -> dict:
-    """DB 전체를 (trade_date, code, basis) -> (평균bp, 표본분수) 로 모은다(read-only).
+# 마스터 CSV 용 평균 bp 캐시 — trade_date -> {(code, basis): (평균bp, 표본분수)}.
+# 지난 거래일 값은 두 번 다시 안 변하는데 매 표본(60초)마다 lp_spread_ts 전체를
+# GROUP BY 하고 있었다(2026-08-05 실측 5만행·130ms, 매일 3,300행씩 증가). 오늘치만
+# 다시 세고 과거일은 프로세스 캐시에서 꺼낸다. 재기동하면 첫 1회만 전량 집계한다.
+_BP_STATS_CACHE: dict = {}
+
+
+def _all_bp_stats(today: str) -> dict:
+    """(trade_date, code, basis) -> (평균bp, 표본분수) (read-only).
     bp 가 NULL 인 표본(2026-07-30 이전)은 SQL 집계에서 자동으로 빠진다."""
-    data: dict = {}
     if not DB_PATH.exists():
-        return data
+        return {}
     try:
         con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
     except sqlite3.Error as exc:
         _log(f"bp stats open failed: {exc!r}")
-        return data
+        return {}
     try:
-        for td, code, b, avg_bp, n in con.execute(
-            "SELECT trade_date, code, basis, AVG(bp), COUNT(bp) FROM lp_spread_ts "
-            "WHERE bp IS NOT NULL GROUP BY trade_date, code, basis"
-        ):
-            data[(td, code, b)] = (round(avg_bp, 1), n)
+        dates = [r[0] for r in con.execute(
+            "SELECT DISTINCT trade_date FROM lp_spread_ts"
+        )]
+        # 오늘은 계속 쌓이는 중이라 항상 다시 센다. 나머지는 캐시에 없을 때만.
+        need = [d for d in dates if d == today or d not in _BP_STATS_CACHE]
+        if need:
+            marks = ",".join("?" * len(need))
+            fresh: dict = {d: {} for d in need}
+            for td, code, b, avg_bp, n in con.execute(
+                "SELECT trade_date, code, basis, AVG(bp), COUNT(bp) FROM lp_spread_ts "
+                f"WHERE bp IS NOT NULL AND trade_date IN ({marks}) "
+                "GROUP BY trade_date, code, basis", need,
+            ):
+                fresh[td][(code, b)] = (round(avg_bp, 1), n)
+            _BP_STATS_CACHE.update(fresh)
     except sqlite3.Error as exc:
         _log(f"bp stats query failed: {exc!r}")
+        con.close()
+        return {}
     finally:
         con.close()
-    return data
+    return {
+        (d, code, b): v
+        for d, m in _BP_STATS_CACHE.items()
+        for (code, b), v in m.items()
+    }
 
 
 def _write_master_csv(out_dir: Path, names: dict) -> None:
     """전 거래일 요약을 마스터 CSV 로 원자적 교체 저장. 정렬=일자↑·ACE순·lp먼저.
     Excel 한글 대응 UTF-8 BOM. 부분쓰기 노출 방지로 .tmp → replace."""
     data = _all_buckets_by_key()
-    bp_stats = _all_bp_stats()
+    bp_stats = _all_bp_stats(datetime.now(_KST).strftime("%Y-%m-%d"))
     ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
     basis_rank = {"lp": 0, "total": 1}
     keys = sorted(
@@ -839,26 +959,51 @@ def _write_master_csv(out_dir: Path, names: dict) -> None:
     tmp.replace(out_dir / "lp_eval_history.csv")
 
 
+def _rows_to_csv(rows: dict, names: dict, trade_date: str) -> list:
+    """(ts, code) -> 필드 dict 를 _TS_CSV_HEADER 순서의 행 리스트로. 정렬 = ts↑·ACE순.
+    본장·개장직후 CSV 가 같은 컬럼을 쓰므로 조판은 여기 한 곳에서만 한다."""
+    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
+    blank = lambda v: "" if v is None else v  # noqa: E731
+    out = []
+    for (ts, code) in sorted(rows, key=lambda k: (k[0], ace_rank.get(k[1], 99))):
+        r = rows[(ts, code)]
+        out.append([
+            trade_date, ts, code,
+            names.get(code, "") or names.get(code.upper(), ""),
+            blank(r.get("price")),
+            blank(r.get("lp_tick")), blank(r.get("lp_bp")),
+            blank(r.get("total_tick")), blank(r.get("total_bp")),
+            blank(r.get("actual_dev")), blank(r.get("intraday_dev")),
+        ])
+    return out
+
+
 def _write_ts_csv(out_dir: Path, names: dict, trade_date: str) -> None:
-    """그 날 분단위 원시 시계열을 CSV 로 원자적 교체 저장 — 호가 bp(basis 2종)와
+    """그 날 분단위 원시 시계열을 CSV 에 **이어쓴다** — 호가 bp(basis 2종)와
     같은 표본시각의 실제/장중 괴리를 한 행에 담는다.
 
     구동은 lp_spread_ts(호가) 쪽이고 lp_dev_ts(괴리)는 (ts, code) 로 붙인다 —
     호가 표본이 없는 시각은 애초에 bp 도 없으므로 행이 생기지 않는다. 두 테이블은
     sample_once 한 번에 같은 ts 문자열로 함께 기록되므로 키가 어긋나지 않는다.
+
+    파일 끝의 ts 를 읽어 그보다 뒤(ts > last)만 조회해 덧붙인다. DB 조회 범위도 같이
+    좁아져서 하루가 길어져도 표본당 비용이 일정하다 (2026-08-05).
     """
     if not DB_PATH.exists():
         return
+    path = out_dir / f"lp_eval_ts_{trade_date}.csv"
+    after = _csv_append_state(path, _TS_CSV_HEADER)
     try:
         con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
     except sqlite3.Error as exc:
         _log(f"ts csv open failed: {exc!r}")
         return
+    where = "WHERE trade_date=?" + ("" if after is None else " AND ts>?")
+    params = (trade_date,) if after is None else (trade_date, after)
     rows: dict = {}   # (ts, code) -> 행 dict
     try:
         for ts, code, b, tick, bp, price in con.execute(
-            "SELECT ts, code, basis, tick, bp, price FROM lp_spread_ts WHERE trade_date=?",
-            (trade_date,),
+            f"SELECT ts, code, basis, tick, bp, price FROM lp_spread_ts {where}", params
         ):
             r = rows.setdefault((ts, code), {"price": None})
             if price is not None:
@@ -866,8 +1011,7 @@ def _write_ts_csv(out_dir: Path, names: dict, trade_date: str) -> None:
             r[f"{b}_tick"] = tick
             r[f"{b}_bp"] = None if bp is None else round(bp, 2)
         for ts, code, actual, intraday in con.execute(
-            "SELECT ts, code, actual_dev, intraday_dev FROM lp_dev_ts WHERE trade_date=?",
-            (trade_date,),
+            f"SELECT ts, code, actual_dev, intraday_dev FROM lp_dev_ts {where}", params
         ):
             r = rows.get((ts, code))
             if r is None:
@@ -879,47 +1023,33 @@ def _write_ts_csv(out_dir: Path, names: dict, trade_date: str) -> None:
         con.close()
         return
     con.close()
-    if not rows:
-        return
-    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
-    blank = lambda v: "" if v is None else v  # noqa: E731
-    tmp = out_dir / f"lp_eval_ts_{trade_date}.csv.tmp"
-    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(_TS_CSV_HEADER)
-        for (ts, code) in sorted(rows, key=lambda k: (k[0], ace_rank.get(k[1], 99))):
-            r = rows[(ts, code)]
-            w.writerow([
-                trade_date, ts, code,
-                names.get(code, "") or names.get(code.upper(), ""),
-                blank(r.get("price")),
-                blank(r.get("lp_tick")), blank(r.get("lp_bp")),
-                blank(r.get("total_tick")), blank(r.get("total_bp")),
-                blank(r.get("actual_dev")), blank(r.get("intraday_dev")),
-            ])
-    tmp.replace(out_dir / f"lp_eval_ts_{trade_date}.csv")
+    _csv_append(path, _rows_to_csv(rows, names, trade_date))
 
 
 def _write_pre_csv(out_dir: Path, names: dict, trade_date: str) -> None:
-    """개장 직후(09:00~09:05) 표본을 별도 CSV 로 원자적 교체 저장.
+    """개장 직후(09:00~09:05) 표본을 별도 CSV 에 이어쓴다.
 
     컬럼은 본장 시계열 CSV(_TS_CSV_HEADER)와 동일해서 두 파일을 그대로 이어붙여
     비교할 수 있다. 파일을 나눈 건 본장 CSV 를 읽는 쪽이 의무 면제 구간을 모르고
-    섞어 쓰는 사고를 막으려는 것 (2026-08-04).
+    섞어 쓰는 사고를 막으려는 것 (2026-08-04). 이어쓰기 규칙은 본장 CSV 와 같다 —
+    09:05 이후로는 새 행이 없어 매 표본마다 파일 꼬리만 읽고 끝난다.
     """
     if not DB_PATH.exists():
         return
+    path = out_dir / f"lp_eval_pre_{trade_date}.csv"
+    after = _csv_append_state(path, _TS_CSV_HEADER)
     try:
         con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
     except sqlite3.Error as exc:
         _log(f"pre csv open failed: {exc!r}")
         return
+    where = "WHERE trade_date=?" + ("" if after is None else " AND ts>?")
+    params = (trade_date,) if after is None else (trade_date, after)
     rows: dict = {}
     try:
         for ts, code, b, tick, bp, price, actual, intraday in con.execute(
             "SELECT ts, code, basis, tick, bp, price, actual_dev, intraday_dev "
-            "FROM lp_pre_ts WHERE trade_date=?",
-            (trade_date,),
+            f"FROM lp_pre_ts {where}", params,
         ):
             r = rows.setdefault((ts, code), {"price": None})
             if price is not None:
@@ -934,25 +1064,7 @@ def _write_pre_csv(out_dir: Path, names: dict, trade_date: str) -> None:
         con.close()
         return
     con.close()
-    if not rows:
-        return
-    ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
-    blank = lambda v: "" if v is None else v  # noqa: E731
-    tmp = out_dir / f"lp_eval_pre_{trade_date}.csv.tmp"
-    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(_TS_CSV_HEADER)
-        for (ts, code) in sorted(rows, key=lambda k: (k[0], ace_rank.get(k[1], 99))):
-            r = rows[(ts, code)]
-            w.writerow([
-                trade_date, ts, code,
-                names.get(code, "") or names.get(code.upper(), ""),
-                blank(r.get("price")),
-                blank(r.get("lp_tick")), blank(r.get("lp_bp")),
-                blank(r.get("total_tick")), blank(r.get("total_bp")),
-                blank(r.get("actual_dev")), blank(r.get("intraday_dev")),
-            ])
-    tmp.replace(out_dir / f"lp_eval_pre_{trade_date}.csv")
+    _csv_append(path, _rows_to_csv(rows, names, trade_date))
 
 
 def write_daily_snapshot(names: dict | None = None) -> bool:

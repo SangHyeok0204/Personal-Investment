@@ -70,7 +70,7 @@ function BandTable({ bands }: { bands: LpEvalBand[] }) {
       <table className="w-full table-fixed border-collapse text-[10.5px] tabular-nums">
         <thead>
           <tr className="text-ink-faint">
-            <th className="w-[32%] py-0.5 text-left font-semibold">구간</th>
+            <th className="w-[38%] py-0.5 text-left font-semibold">구간</th>
             <th className="py-0.5 text-right font-semibold">유지</th>
             <th className="py-0.5 text-right font-semibold">비중</th>
             <th className="py-0.5 text-right font-semibold">평균</th>
@@ -81,7 +81,7 @@ function BandTable({ bands }: { bands: LpEvalBand[] }) {
             <tr key={b.key} className={b.minutes === 0 ? "opacity-45" : undefined}>
               <td
                 className={cn(
-                  "py-[1px] text-left font-bold",
+                  "whitespace-nowrap py-[1px] text-left font-bold",
                   BAND_TEXT[b.key] ?? "text-ink",
                 )}
               >
@@ -324,7 +324,7 @@ function LpEvalCard({
             showWindows={splitWindows}
             windows={windows}
             value={meanBp}
-            sub={`${bandedMin}분 평균${noneMin > 0 ? ` · 없음 ${noneMin}분 제외` : ""}`}
+            sub={`${bandedMin}분 평균${noneMin > 0 ? ` · 없음(미제출) ${noneMin}분 제외` : ""}`}
             format={(v) => (v == null ? EMDASH : fmtNum(v, 1, 1))}
             tone={(v) => meanBpTone(v, warnBp, critBp)}
           />

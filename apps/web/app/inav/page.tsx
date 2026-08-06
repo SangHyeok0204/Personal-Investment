@@ -792,7 +792,7 @@ function buildAceSummaries(
         cell = { kind: "missing" };
       } else {
         const spread = recognizedSpread(hoga);
-        const bp = spread != null ? spreadBp(spread.won, hoga.price) : null;
+        const bp = spread != null ? spreadBp(spread.won, spread.mid) : null;
         // ticks = 스프레드(원) ÷ 호가단위. 대상 ETF는 전부 2,000원 이상이라 5원 단위
         // 이므로 사용자가 말한 "스프레드를 5로 나눈 값"과 같다 (2026-07-30).
         if (bp != null && spread != null)
@@ -899,6 +899,7 @@ function AlertBar({
         blockedText={phaseText ?? (devReady ? null : "스냅샷 대기 중")}
         isCrit={(s) => isDevCrit(s.actual)}
         render={(s) => ({ main: <DevValue pct={s.actual} /> })}
+        alignRight
       />
       <div className="border-t border-hairline/70" />
       <SummaryRow
@@ -907,6 +908,7 @@ function AlertBar({
         blockedText={phaseText ?? (devReady ? null : "스냅샷 대기 중")}
         isCrit={(s) => isDevCrit(s.intra)}
         render={(s) => ({ main: <DevValue pct={s.intra} /> })}
+        alignRight
       />
     </div>
   );
@@ -1042,6 +1044,7 @@ function SummaryRow({
   blockedText,
   isCrit,
   render,
+  alignRight = false,
 }: {
   label: string;
   summaries: AceSummary[];
@@ -1051,6 +1054,11 @@ function SummaryRow({
   isCrit: (s: AceSummary) => boolean;
   // main = 정렬 대상 수치(오른쪽 정렬), suffix = 부가 표기(왼쪽 정렬, 예 "(2틱)").
   render: (s: AceSummary) => { main: ReactNode; suffix?: ReactNode };
+  // 부가 표기를 아예 안 쓰는 줄(괴리 2종)은 수치를 셀 오른쪽 끝에 붙인다
+  // (2026-08-05 사용자 요청). 호가 줄은 "(N틱)" 자리를 비워둬야 bp 가 헤더 약칭과
+  // 같은 축에 서므로 그대로 둔다. **줄 단위** 선택이라 한 줄 안에서 칸이 들쭉날쭉해질
+  // 일은 없다 — 셀마다 판단하면 '물량X'(틱 없음)만 오른쪽으로 튄다.
+  alignRight?: boolean;
 }) {
   const blocked = blockedText != null;
   // 상시 표시라 '새 알림'이 없다 — 대신 **빨강으로 새로 진입한 종목**이 생기면
@@ -1096,8 +1104,14 @@ function SummaryRow({
               className={cn(GRID_CELL, "flex items-center")}
               title={s.name}
             >
-              <span className={GRID_MAIN}>{main}</span>
-              <span className={GRID_SUFFIX}>{suffix}</span>
+              {alignRight ? (
+                <span className={GRID_MAIN_FULL}>{main}</span>
+              ) : (
+                <>
+                  <span className={GRID_MAIN}>{main}</span>
+                  <span className={GRID_SUFFIX}>{suffix}</span>
+                </>
+              )}
             </span>
           );
         })
@@ -1143,6 +1157,8 @@ const GRID_LABEL = "w-[112px] shrink-0"; // 줄 라벨 칸
 const GRID_CELL = "w-[120px] shrink-0 border-l border-hairline/60 px-1"; // 종목 1칸
 const GRID_MAIN = "w-[68px] shrink-0 text-right"; // 정렬 대상 수치
 const GRID_SUFFIX = "w-[44px] shrink-0 pl-1 text-left"; // 부가 표기 "(N틱)"
+// 부가 표기가 아예 없는 줄(괴리 2종)용 — 수치가 셀 오른쪽 끝에 붙는다.
+const GRID_MAIN_FULL = "w-full text-right";
 const GRID_ROW_H = "h-[30px]"; // 값 줄 높이 (고정)
 
 // 값 줄들이 공유하는 열 머리 — ETF 약칭을 한 번만 쓴다. 수치와 같은 GRID_MAIN 칸에

@@ -28,6 +28,16 @@ const KIND_LABEL: Record<string, string> = {
   legacy: "지난 보고서",
 };
 
+const SELECT_CLS =
+  "appearance-none rounded-lg border border-hairline bg-white py-1.5 pl-3 pr-8 " +
+  "text-[12px] font-semibold text-ink outline-none transition hover:bg-canvas-soft";
+
+const dot = (s: string) => s.replace(/-/g, ".");
+// 두 번째 드롭다운에서는 날짜가 이미 정해져 있으니 label 꼬리의 "· 2026.07.31 기준" 을
+// 뗀다. 위클리·월간처럼 그 꼬리가 없는 label 은 그대로 둔다.
+const stripAsOf = (label: string) =>
+  label.replace(/\s*·\s*\d{4}\.\d{2}\.\d{2}\s*기준$/, "");
+
 function Notice({ head, body }: { head: string; body: string }) {
   return (
     <div className="rounded-xl border border-hairline bg-canvas-soft px-5 py-6">
@@ -51,9 +61,32 @@ export function PerfReportCard() {
   const d = list.data;
   const sel: PerfReportItem | null = useMemo(() => {
     if (!d) return null;
-    if (picked) return d.items.find((x) => x.rel === picked) ?? null;
+    // 고른 파일이 목록에서 사라졌으면(폴더 정리·갱신) 최신본으로 되돌아간다.
+    if (picked) return d.items.find((x) => x.rel === picked) ?? d.current;
     return d.current;
   }, [d, picked]);
+
+  // ── 고르기는 두 단계다: 기준일 → 그 날짜의 파일 ──
+  // 한 목록에 전부 넣으면 날짜가 쌓일수록 끝없이 길어진다. 어느 날 것인지는 대개 먼저
+  // 정해져 있으므로 날짜로 한 번 좁히고 그 안에서 고르게 한다. items 는 서버가
+  // (기준일, 저장시각) 내림차순으로 주므로 Map 의 삽입 순서가 곧 최신순이다.
+  const byDate = useMemo(() => {
+    const m = new Map<string, PerfReportItem[]>();
+    for (const it of d?.items ?? []) {
+      const arr = m.get(it.asOf);
+      if (arr) arr.push(it);
+      else m.set(it.asOf, [it]);
+    }
+    return m;
+  }, [d]);
+  const dates = useMemo(() => [...byDate.keys()], [byDate]);
+  const curDate = sel?.asOf ?? dates[0] ?? "";
+  const sameDay = byDate.get(curDate) ?? [];
+  // 날짜를 바꾸면 그 날의 최신 파일로 바로 넘어간다(빈 화면을 거치지 않게).
+  const pickDate = (dt: string) => {
+    const first = byDate.get(dt)?.[0];
+    if (first) setPicked(first.rel);
+  };
 
   const file = useQuery({
     queryKey: ["perf-report-file", sel?.rel],
@@ -113,20 +146,40 @@ export function PerfReportCard() {
 
         <div className="ml-auto flex items-center gap-2">
           {d && d.items.length > 0 && (
-            <div className="relative">
-              <select
-                value={sel?.rel ?? ""}
-                onChange={(e) => setPicked(e.target.value || null)}
-                className="appearance-none rounded-lg border border-hairline bg-white py-1.5 pl-3 pr-8 text-[12px] font-semibold text-ink outline-none transition hover:bg-canvas-soft"
-              >
-                {d.items.map((it) => (
-                  <option key={it.rel} value={it.rel}>
-                    {it.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
-            </div>
+            <>
+              {/* ① 기준일 */}
+              <div className="relative">
+                <select
+                  value={curDate}
+                  onChange={(e) => pickDate(e.target.value)}
+                  title="기준일"
+                  className={SELECT_CLS}
+                >
+                  {dates.map((dt) => (
+                    <option key={dt} value={dt}>
+                      {dot(dt)} 기준 ({byDate.get(dt)?.length ?? 0})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
+              </div>
+              {/* ② 그 날짜의 보고서 */}
+              <div className="relative">
+                <select
+                  value={sel?.rel ?? ""}
+                  onChange={(e) => setPicked(e.target.value || null)}
+                  title="보고서"
+                  className={SELECT_CLS}
+                >
+                  {sameDay.map((it) => (
+                    <option key={it.rel} value={it.rel}>
+                      {stripAsOf(it.label)} · {it.savedAt.slice(5)} 저장
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
+              </div>
+            </>
           )}
           <button
             type="button"

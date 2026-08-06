@@ -51,6 +51,19 @@ function signTextClass(v: number | null | undefined): string {
       : "text-ink-secondary";
 }
 
+/* 카드 표시 순서 — 페이로드 순서는 레거시 config.json(S: 읽기전용 마운트)이 쥐고 있어
+ * 여기서 고정한다. 목록 맨 앞이 왼쪽 첫 카드이자 페이지 진입 시 기본 선택.
+ * 여기 없는 포트폴리오는 페이로드 순서 그대로 뒤에 붙는다(sort 안정성). */
+const PORTFOLIO_ORDER = ["AICORETECH", "TORUS"];
+
+function orderPortfolios(list: WrapPortfolio[]): WrapPortfolio[] {
+  const rank = (p: WrapPortfolio) => {
+    const i = PORTFOLIO_ORDER.indexOf(String(p.key).toUpperCase());
+    return i < 0 ? PORTFOLIO_ORDER.length : i;
+  };
+  return [...list].sort((a, b) => rank(a) - rank(b));
+}
+
 // 현금 판정: ticker=CASH 또는 이름에 '현금' — 정렬 시 항상 맨 아래 (구 뷰어와 동일).
 function isCashHolding(h: WrapHolding): boolean {
   return (
@@ -68,6 +81,8 @@ export default function WrapPage() {
   });
 
   const [selKey, setSelKey] = useState<string | null>(null);
+  const [treeMode, setTreeMode] = useState<TreeMode>("confirmed");
+  const treeModeDef = TREE_MODES.find((m) => m.key === treeMode) ?? TREE_MODES[0];
 
   const data = query.data;
   const collectorDown =
@@ -75,7 +90,10 @@ export default function WrapPage() {
     query.error instanceof ApiError &&
     query.error.status === 503;
 
-  const portfolios = data?.portfolios ?? [];
+  const portfolios = useMemo(
+    () => orderPortfolios(data?.portfolios ?? []),
+    [data],
+  );
   const selected =
     portfolios.find((p) => p.key === selKey) ?? portfolios[0] ?? null;
 
@@ -140,18 +158,38 @@ export default function WrapPage() {
               ))}
             </div>
 
-            {/* ② 분류별 비중·기여도 트리 */}
+            {/* ② 분류별 비중·기여도 트리 (전일확정 / 실시간 토글) */}
             <section className="rounded-2xl border border-hairline bg-canvas p-5 shadow-card">
-              <div className="mb-1 flex items-center gap-2">
-                <span className="h-4 w-1.5 rounded-full bg-ge-point" />
-                <span
-                  className="text-[13px] font-extrabold text-ge-navy"
-                  title="기여도는 전일확정(전전일→전일 종가) 기준 — 테이블 '기여' 열의 분류별 합"
-                >
-                  분류별 비중·기여도 (전일확정) — {selected.name}
-                </span>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="h-4 w-1.5 rounded-full bg-ge-point" />
+                  <span
+                    className="text-[13px] font-extrabold text-ge-navy"
+                    title={treeModeDef.hint}
+                  >
+                    분류별 비중·기여도 ({treeModeDef.label}) — {selected.name}
+                  </span>
+                </div>
+                <div className="flex shrink-0 overflow-hidden rounded-lg border border-hairline text-[11px] font-bold">
+                  {TREE_MODES.map((m) => (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => setTreeMode(m.key)}
+                      title={m.hint}
+                      className={cn(
+                        "px-2.5 py-1 transition-colors",
+                        treeMode === m.key
+                          ? "bg-ge-navy text-white"
+                          : "bg-canvas text-ink-muted hover:bg-canvas-soft",
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <CategoryTree p={selected} />
+              <CategoryTree p={selected} mode={treeMode} />
             </section>
 
             {/* ③ 구성종목 기여도 테이블 */}
@@ -373,6 +411,33 @@ function PortfolioCard({
 
 /* ── ② 분류별 비중·기여도 트리 (구 뷰어 wrapCategoryTreeHtml 이식) ────── */
 
+/* 트리 기준 구간 — 카드 ①·② 와 같은 두 구간을 그대로 쓴다.
+ * 어느 쪽이든 노드 값은 '기여 = 그 구간 수익률 × 비중' 의 분류별 합이고,
+ * 루트는 그 합계(= 카드의 주식분)와 일치한다. */
+const TREE_MODES = [
+  {
+    key: "confirmed",
+    label: "전일확정",
+    hint: "전전일→전일 종가 기준 — 테이블 '기여' 열의 분류별 합 (카드 ①)",
+  },
+  {
+    key: "realtime",
+    label: "실시간",
+    hint: "전일종가→현재 체결가 기준 — 실시간수익률 × 비중의 분류별 합 (카드 ②)",
+  },
+] as const;
+type TreeMode = (typeof TREE_MODES)[number]["key"];
+
+// 종목의 기여도 — 모드별로 구간만 갈아끼운다. 값이 없으면 null(집계에서 0 취급).
+function holdingContrib(h: WrapHolding, mode: TreeMode): number | null {
+  if (mode === "confirmed") {
+    return typeof h.contribution_pct === "number" ? h.contribution_pct : null;
+  }
+  return typeof h.realtime_return_pct === "number"
+    ? (h.weight_pct / 100) * h.realtime_return_pct
+    : null;
+}
+
 interface CatMid {
   name: string;
   weight: number;
@@ -388,13 +453,13 @@ interface Cat1 {
 }
 
 // 보유종목 → 대분류→중분류 집계 (비중 합 + 기여도 합, 비중 내림차순).
-function aggregateCategories(p: WrapPortfolio): Cat1[] {
+function aggregateCategories(p: WrapPortfolio, mode: TreeMode): Cat1[] {
   const byCat1 = new Map<string, Cat1>();
   for (const h of p.holdings ?? []) {
     const c1 = (h.cat1 || "").trim() || "미분류";
     const c2 = (h.cat2 || "").trim() || "기타";
     const w = typeof h.weight_pct === "number" ? h.weight_pct : 0;
-    const c = typeof h.contribution_pct === "number" ? h.contribution_pct : 0;
+    const c = holdingContrib(h, mode) ?? 0;
     let g = byCat1.get(c1);
     if (!g) {
       g = { name: c1, weight: 0, contrib: 0, mids: [], x: 0 };
@@ -423,8 +488,8 @@ const ROOT_Y = 8;
 const C1_Y = 84;
 const C2_Y = 160;
 
-function CategoryTree({ p }: { p: WrapPortfolio }) {
-  const cats = useMemo(() => aggregateCategories(p), [p]);
+function CategoryTree({ p, mode }: { p: WrapPortfolio; mode: TreeMode }) {
+  const cats = useMemo(() => aggregateCategories(p, mode), [p, mode]);
   if (!cats.length) {
     return <p className="py-6 text-sm text-ink-muted">분류 데이터가 없습니다.</p>;
   }
@@ -458,6 +523,9 @@ function CategoryTree({ p }: { p: WrapPortfolio }) {
     : W / 2;
 
   const sign = (v: number) => (v >= 0 ? POS : NEG);
+
+  // 루트 = 그 구간 기여도의 총합(카드의 주식분). ① return_pct(=return1_usd) / ② return2_usd.
+  const rootRet = mode === "confirmed" ? p.return_pct : (p.return2_usd ?? 0);
 
   return (
     <div className="overflow-x-auto">
@@ -502,8 +570,8 @@ function CategoryTree({ p }: { p: WrapPortfolio }) {
           cx={rootX}
           top={ROOT_Y}
           label={p.name}
-          color={sign(p.return_pct)}
-          sub={<tspan fill={sign(p.return_pct)}>{signedPct(p.return_pct)}</tspan>}
+          color={sign(rootRet)}
+          sub={<tspan fill={sign(rootRet)}>{signedPct(rootRet)}</tspan>}
         />
         {cats.map((g) => (
           <TreeNode
