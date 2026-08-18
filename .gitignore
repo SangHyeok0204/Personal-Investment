@@ -18,6 +18,7 @@ apps/collector/somansa-root.crt
 # Storage: keep folder structure, ignore uploaded/processed files
 storage/raw/*
 storage/processed/*
+storage/trigger/*.json
 !storage/**/.gitkeep
 
 # Windows / WSL artifacts

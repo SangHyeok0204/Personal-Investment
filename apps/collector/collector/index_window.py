@@ -31,9 +31,13 @@ _KST = timezone(timedelta(hours=9))
 SRC_DB = LEGACY_DB / "INDEX_MONITOR.db"
 DEST_DB = CACHE_DIR / "index_monitor.db"
 
-# 대상 지수(코드→표시명). CHECK 코드계: KOSPI/KOSDAQ/NQ_FUT.
-DEFAULT_CODES = ("KOSPI", "KOSDAQ", "NQ_FUT")
-DISPLAY = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ", "NQ_FUT": "나스닥 선물"}
+# 대상 지수(코드→표시명). ★2026-08-14 사용자 지정으로 종합지수 → 파생 기초지수
+# (KOSPI200·KOSDAQ150)로 교체. DB(index_ticks)에는 KOSPI/KOSDAQ/KRX300/NDX/SPX 도
+# 같은 밀도로 들어와 있으므로(실측 전부 40,411틱) 코드만 바꾸면 된다.
+# 이 튜플은 실시간 등락률(build_index_window)과 급등락 알림(build_index_alerts)이
+# 공유한다 — 화면에서 두 값이 같은 지수를 가리켜야 하므로 갈라놓지 않는다.
+DEFAULT_CODES = ("KOSPI200", "KOSDAQ150", "NQ_FUT")
+DISPLAY = {"KOSPI200": "KOSPI200", "KOSDAQ150": "KOSDAQ150", "NQ_FUT": "나스닥 선물"}
 
 WINDOW_MIN = 60  # max−min 을 보는 롤링 창
 BUFFER_MIN = 90  # DB 에서 끌어오는 범위(창보다 넓게 — 여유/사후용)
@@ -50,8 +54,6 @@ ACC_END_MIN = 16 * 60        # 16:00 까지
 # 롤1h 60분 창은 장 개시(09:00) 이후 틱만 본다 — 장전 동시호가(08:30~09:00)의 지시가
 # 스윙이 가짜 변동폭을 만들어 스푸리어스 발화하던 문제 차단 (2026-07-29).
 MARKET_OPEN_MIN = 9 * 60      # 09:00
-OPEN_LO_MIN = 9 * 60 + 5     # 09:05~09:08 장초반(전일比) 1회
-OPEN_HI_MIN = 9 * 60 + 8
 _ALERTS_TTL_S = 15.0  # 하루 스캔 재계산 최소 간격(요청마다 재계산 방지)
 
 _last_refresh_ts = 0.0
@@ -228,10 +230,10 @@ def build_index_window(
 def build_index_alerts(codes=DEFAULT_CODES) -> dict:
     """오늘(KST) 발화한 지수 급등락 알림의 서버측 하루 로그(최신 우선).
 
-    INDEX_MONITOR 전일 이력을 스캔해 프론트 트리거와 동일한 판정을 서버에서 재현한다:
+    INDEX_MONITOR 전일 이력을 스캔해 판정을 서버에서 재현한다. 갈래는 하나다:
       · roll1h — 08:55~16:00 표본마다 60분 변동폭(정리된 창 max−min)을 보고, ≥2%p 이면
         발화·비무장, <1.5%p 로 줄면 재무장(히스테리시스). 같은 스윙은 1회만.
-      · open5 — 09:05~09:08 첫 표본의 전일比 등락률, 지수당 1회.
+    (구 open5 갈래는 2026-08-14 폐지 — 아래 주석 참조.)
     ~15초 TTL 캐시(요청마다 재스캔 방지). 반환 alert:
       {id, code, label, kind, changePct, spreadPct, rose, maxAt, minAt, price, at(epoch ms)}
     """
@@ -272,19 +274,14 @@ def build_index_alerts(codes=DEFAULT_CODES) -> dict:
                     except (ValueError, TypeError):
                         continue
 
-                    # ── open5 (전일比 장초반, 지수당 1회) ──
-                    for r, dt in zip(rows, dts):
-                        if r[1] is None:
-                            continue
-                        m = dt.hour * 60 + dt.minute
-                        if OPEN_LO_MIN <= m <= OPEN_HI_MIN:
-                            alerts.append({
-                                "id": f"open5:{code}:{r[0]}", "code": code, "label": label,
-                                "kind": "open5", "changePct": r[1], "spreadPct": None,
-                                "rose": None, "maxAt": None, "minAt": None,
-                                "price": r[2], "at": int(dt.replace(tzinfo=_KST).timestamp() * 1000),
-                            })
-                            break
+                    # ── open5 폐지(2026-08-14 사용자 확정) ─────────────────────
+                    # 09:05~09:08 첫 표본의 전일比 등락률을 **크기와 무관하게** 지수당
+                    # 1회 발화하던 갈래였다. 두 가지 이유로 뺀다:
+                    #   · 급등락이 아니다 — 실측 2026-08-14 나스닥 선물 +0.03% 가
+                    #     '급등락' 자리를 차지했다(임계값이 아예 없었다).
+                    #   · 중복이다 — iNAV 지수 줄이 이제 전일比 등락률을 상시 보여주므로
+                    #     09:05 스냅샷은 왼쪽에 이미 있는 값이다.
+                    # 이 줄의 '급등락'은 roll1h(60분 변동폭 ≥2%p) 하나로 정의된다.
 
                     # ── roll1h (60분 변동폭 크로싱, 히스테리시스) ──
                     # 발화 후 같은 스윙(비무장 구간)이 더 커지면 그 에피소드의 **피크

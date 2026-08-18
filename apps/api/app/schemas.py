@@ -83,7 +83,9 @@ class ImportCreateOut(BaseModel):
 class AiUsageMeterOut(BaseModel):
     label: str
     subtitle: str | None = None
-    pct: float
+    # None = 소진율 판정 불가. Genspark 는 월 할당량을 못 알아내면 %를 지어내지 않고
+    # null 로 보낸다(genspark_scrape 규칙) — 0% 로 그리면 조용히 틀린 값이 된다.
+    pct: float | None = None
     remaining_pct: float | None = None
 
 
@@ -97,6 +99,9 @@ class AiUsageAccountOut(BaseModel):
     # '사용 크레딧'(초과분 과금) 토글. False 면 플랜 한도에서 그대로 멈춘다.
     # None = 판정 불가(스크래퍼가 스위치를 못 찾음 / codex 는 이 개념이 없음).
     extra_usage_enabled: bool | None = None
+    # Genspark 전용 — 월 할당/잔여 크레딧. Claude/Codex 는 항상 None.
+    monthly_credits: int | None = None
+    credit_balance: int | None = None
     items: list[AiUsageMeterOut] = []
 
 
@@ -107,6 +112,7 @@ class AiUsageOut(BaseModel):
     fetched_at: str
     claude: list[AiUsageAccountOut] = []
     codex: list[AiUsageAccountOut] = []
+    genspark: list[AiUsageAccountOut] = []
 
 
 # ── LAN 대시보드 (lan-dashboard 이식) ────────────────────────────────────

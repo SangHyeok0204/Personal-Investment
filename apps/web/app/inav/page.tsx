@@ -20,7 +20,12 @@ import {
   Table2,
   X,
 } from "lucide-react";
-import { useIndexAlerts, type IndexAlert } from "@/components/index-alerts";
+import {
+  useIndexAlerts,
+  useIndexLive,
+  type IndexAlert,
+  type IndexLive,
+} from "@/components/index-alerts";
 import {
   ApiError,
   getInavComponents,
@@ -225,6 +230,7 @@ export default function InavPage() {
   const [showIndex, setShowIndex] = useState(true);
   // 지수 급등락 하루 알림 (서버측 계산) — AlertBar 3번째 줄에 지수별 최신 1건 표시.
   const { alerts: indexAlerts } = useIndexAlerts();
+  const { indices: indexLive } = useIndexLive();
 
   // localStorage는 hydration 후에만 읽는다 (SSR 불일치 방지).
   useEffect(() => {
@@ -419,6 +425,9 @@ export default function InavPage() {
         <AlertBar
           summaries={aceSummaries}
           indexAlerts={indexAlerts}
+          indexLive={indexLive}
+          // 스냅샷이 아직이면 빈 객체 — 환율 묶음만 빠지고 줄은 그대로 선다.
+          fx={data?.fx ?? {}}
           hogaReady={hogaReady}
           devReady={devReady}
           phase={phase}
@@ -471,8 +480,8 @@ export default function InavPage() {
                 visibleMetrics={metrics}
               />
             )}
-
-            <FxPanel fx={data.fx} />
+            {/* 환율은 2026-08-14 사용자 요청으로 맨 아래 카드(FxPanel)에서
+                상단 지수 줄로 올라갔다 — 여기엔 더 두지 않는다. */}
           </div>
         ) : (
           !collectorDown && (
@@ -811,9 +820,15 @@ function buildAceSummaries(
 
 // 심각도 → 색. ETF 약칭은 색을 바꾸지 않는다(navy 고정) — 값만 물들여야 눈이 값으로
 // 간다 (2026-07-30 사용자 지시: "ETF 명은 색깔 그대로 유지").
+// ★2026-08-14 호가 3밴드(10·20·40) 도입. notice(노랑)와 warn 이 나란히 서므로 warn 을
+// amber-600(#d97706, 금빛에 가깝다)에서 orange-600(#ea580c)으로 옮겨 두 단계가 눈에
+// 갈린다. 노랑은 yellow-600(#ca8a04) — yellow-500 계열은 흰 배경 대비가 2.2:1 로
+// 굵은 글씨여도 읽히지 않는다(큰 글씨 기준 3:1 미달).
+// 괴리 줄(devSeverity)은 notice 를 내지 않으므로 회색/주황/빨강 3단 그대로다.
 const SEVERITY_TEXT: Record<Severity, string> = {
   calm: "text-ink-faint",
-  warn: "text-amber-600",
+  notice: "text-yellow-600",
+  warn: "text-orange-600",
   crit: "text-status-failed",
 };
 
@@ -838,6 +853,8 @@ function isCritical(s: AceSummary): boolean {
 function AlertBar({
   summaries,
   indexAlerts,
+  indexLive,
+  fx,
   hogaReady,
   devReady,
   phase,
@@ -845,6 +862,8 @@ function AlertBar({
 }: {
   summaries: AceSummary[];
   indexAlerts: IndexAlert[];
+  indexLive: IndexLive[];
+  fx: Record<string, number>;
   hogaReady: boolean;
   devReady: boolean;
   phase: MarketPhase;
@@ -870,7 +889,7 @@ function AlertBar({
           (2026-07-30 사용자 요청). 복원은 Topbar '지수' 토글. */}
       {showIndex && (
         <>
-          <IndexAlertRow items={indexAlerts} />
+          <IndexAlertRow items={indexAlerts} indices={indexLive} fx={fx} />
           <div className="border-t border-hairline/70" />
         </>
       )}
@@ -914,12 +933,34 @@ function AlertBar({
   );
 }
 
-// 칩 정렬용 고정 지수 순서(그 외 코드는 뒤로).
-const INDEX_ORDER = ["KOSPI", "KOSDAQ", "NQ_FUT"];
+// 칩 정렬용 고정 지수 순서(그 외 코드는 뒤로). collector DEFAULT_CODES 와 짝.
+const INDEX_ORDER = ["KOSPI200", "KOSDAQ150", "NQ_FUT"];
 
-// 지수 급등락 — 지수별 '최신 1건'만 표시하는 줄(서버측 하루 로그). 호가/괴리 줄과
-// 동일 위상·크기. 방향으로 색을 나눈다(상승=빨강·하락=파랑).
-function IndexAlertRow({ items }: { items: IndexAlert[] }) {
+function byIndexOrder(a: string, b: string) {
+  const ia = INDEX_ORDER.indexOf(a);
+  const ib = INDEX_ORDER.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+}
+
+/**
+ * 지수 줄 — `지수 등락률 | 환율 |  (공백)  | 급등락` (2026-08-14 사용자 지정 배치).
+ *
+ * 종전에는 급등락만 있는 줄이라 발화가 없는 날은 "장중 급등락 없음"만 떠 자리를
+ * 낭비했다. 이제 **상시 값**(실시간 등락률·환율)이 왼쪽을 채우고, 급등락은 있을
+ * 때만 `ml-auto` 로 맨 오른쪽에 붙는다 — 없으면 아예 그리지 않는다.
+ *
+ * 환율은 원래 페이지 맨 아래 카드(FxPanel)였는데 사용자가 이 줄로 올렸다. 여기선
+ * 1열로 다닥다닥 붙여 참조값처럼 둔다(값 서식은 종전 그대로 = 키움 원값).
+ */
+function IndexAlertRow({
+  items,
+  indices,
+  fx,
+}: {
+  items: IndexAlert[];
+  indices: IndexLive[];
+  fx: Record<string, number>;
+}) {
   // items 는 최신 우선 → 코드별 첫 항목 = 그 지수의 최신 알림. 지수당 하나만 남긴다.
   const seen = new Set<string>();
   const latest: IndexAlert[] = [];
@@ -929,75 +970,147 @@ function IndexAlertRow({ items }: { items: IndexAlert[] }) {
       latest.push(a);
     }
   }
-  latest.sort((a, b) => {
-    const ia = INDEX_ORDER.indexOf(a.code);
-    const ib = INDEX_ORDER.indexOf(b.code);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-  });
-  const empty = latest.length === 0;
+  latest.sort((a, b) => byIndexOrder(a.code, b.code));
+
+  const live = indices
+    .filter((i) => i.latest_pct != null)
+    .sort((a, b) => byIndexOrder(a.code, b.code));
+
+  // 환율은 고정 순서 먼저, 스키마에 새 통화가 생기면 뒤에 붙인다(KRW 자신은 제외).
+  const fxEntries: Array<readonly [string, number]> = FX_ORDER.filter(
+    (c) => fx[c] != null,
+  ).map((c) => [c, fx[c]] as const);
+  for (const [c, v] of Object.entries(fx)) {
+    if (c !== "KRW" && !FX_ORDER.includes(c)) fxEntries.push([c, v] as const);
+  }
+
   const flash = useNewItemsFlash(latest.map((a) => a.id));
   return (
     <div
       key={flash}
       className={cn(
-        "-mx-6 flex min-h-[28px] flex-wrap items-center gap-x-6 gap-y-0 px-6",
+        // gap 과 글자 크기는 '한 줄'을 지키려고 조인 값이다. 쓸 수 있는 폭은 1,644px
+      // (-mx-6/px-6 이 상쇄돼 부모 content box 와 같다 — rect 의 1,692px 이 아니다).
+      // 2026-08-14 실측 합계 1,564px = 여유 80px. 늘릴 땐 이 예산부터 확인할 것.
+      "-mx-6 flex min-h-[28px] flex-wrap items-center gap-x-3 gap-y-0 px-6",
         flash > 0 && "inav-alert-flash",
       )}
     >
-      <span
-        className={cn(
-          "inline-flex w-[112px] shrink-0 items-center gap-1 text-[17px] font-extrabold leading-none tracking-tight",
-          empty ? "text-ink-faint" : "text-ge-point",
-        )}
-      >
-        <AlertTriangle className="h-[18px] w-[18px] shrink-0" strokeWidth={2.6} />
-        지수 급등락
-      </span>
-      {empty ? (
-        <span className="text-[17px] font-semibold leading-none text-ink-muted">
-          장중 급등락 없음
-        </span>
+      {/* ① 지수 실시간 등락률 — 상시 */}
+      {live.length > 0 ? (
+        <div className="flex shrink-0 items-baseline gap-x-2.5">
+          {live.map((i) => (
+            <IndexLiveChip key={i.code} i={i} />
+          ))}
+        </div>
       ) : (
-        latest.map((a) => <IndexChip key={a.code} a={a} />)
+        <span className="text-[15px] font-semibold leading-none text-ink-faint">
+          지수 대기 중
+        </span>
+      )}
+
+      {/* ② 환율 — 1열, 참조값 크기 */}
+      {fxEntries.length > 0 && (
+        <>
+          <RowDivider />
+          <div className="flex shrink-0 items-baseline gap-x-1">
+            {fxEntries.map(([code, rate]) => (
+              <span key={code} className="inline-flex items-baseline gap-0.5">
+                <span className="text-[9.5px] font-bold uppercase leading-none tracking-tight text-ink-muted">
+                  {code}
+                </span>
+                <span className="text-[11.5px] font-extrabold leading-none tabular-nums text-ge-navy">
+                  {formatRate(rate)}
+                </span>
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* ③ 급등락 — 있을 때만 맨 오른쪽(없으면 공백이 그대로 남는다) */}
+      {latest.length > 0 && (
+        <div className="ml-auto flex shrink-0 items-center gap-x-2.5">
+          <RowDivider />
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] font-extrabold leading-none tracking-tight text-ge-point">
+            <AlertTriangle
+              className="h-[14px] w-[14px] shrink-0"
+              strokeWidth={2.6}
+            />
+            급등락
+          </span>
+          {latest.map((a) => (
+            <IndexChip key={a.code} a={a} />
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
+function RowDivider() {
+  return <span className="h-[15px] w-px shrink-0 bg-hairline" />;
+}
+
+// 실시간 등락률 칩 — 전일 종가 대비(latest_pct). 급등락 칩과 같은 색 규칙
+// (상승=빨강·하락=파랑)을 쓰되, 구간이 아니라 '지금 값'이라 시각을 달지 않는다.
+function IndexLiveChip({ i }: { i: IndexLive }) {
+  const pct = i.latest_pct ?? 0;
+  const up = pct >= 0;
+  return (
+    <span
+      className="inline-flex shrink-0 items-baseline gap-1.5"
+      title={`${i.name} · ${i.latest_price != null ? i.latest_price.toLocaleString("ko-KR") : "—"} · 전일 종가 대비`}
+    >
+      <span className="text-[14px] font-bold leading-none text-ge-navy">
+        {i.name}
+      </span>
+      <span
+        className={cn(
+          "text-[17px] font-extrabold leading-none tabular-nums",
+          up ? "text-status-failed" : "text-status-running",
+        )}
+      >
+        {up ? "▲" : "▼"}
+        {up ? "+" : "−"}
+        {Math.abs(pct).toFixed(2)}%
+      </span>
+    </span>
+  );
+}
+
+// 급등락 칩 — 60분 변동폭(roll1h) 하나뿐이다. 값은 %p(변동폭)이고 시각은 그 스윙이
+// 일어난 구간(저점↔고점, 시간순)이다. 구 open5(발화 시각 1점) 분기는 2026-08-14
+// 알림 폐지와 함께 걷어냈다.
 function IndexChip({ a }: { a: IndexAlert }) {
-  const isRange = a.kind === "roll1h";
-  const up = isRange ? (a.rose ?? true) : a.changePct >= 0;
+  const up = a.rose ?? true;
   const dir = up ? "text-status-failed" : "text-status-running";
   const glyph = up ? "▲" : "▼";
   const sign = up ? "+" : "−";
-  const val = Math.abs(isRange ? (a.spreadPct ?? 0) : a.changePct);
-  const unit = isRange ? "%p" : "%";
+  const val = Math.abs(a.spreadPct ?? 0);
+  const unit = "%p";
   const hm = (s?: string | null) => (s ? s.slice(11, 16) : "--:--");
-  const firedTime = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(a.at));
-  // roll1h: 급등락이 일어난 구간(시간순, 저점↔고점) / open5: 발화 시각.
-  const timeText = isRange
-    ? `${up ? hm(a.minAt) : hm(a.maxAt)}→${up ? hm(a.maxAt) : hm(a.minAt)}`
-    : firedTime;
-  const tip = isRange
-    ? `${a.label} · 최근 1시간 · ${up ? `저점 ${hm(a.minAt)} → 고점 ${hm(a.maxAt)}` : `고점 ${hm(a.maxAt)} → 저점 ${hm(a.minAt)}`}`
-    : `${a.label} · 장 초반 · ${firedTime}`;
+  const timeText = `${up ? hm(a.minAt) : hm(a.maxAt)}→${up ? hm(a.maxAt) : hm(a.minAt)}`;
+  const tip = `${a.label} · 최근 1시간 · ${
+    up
+      ? `저점 ${hm(a.minAt)} → 고점 ${hm(a.maxAt)}`
+      : `고점 ${hm(a.maxAt)} → 저점 ${hm(a.minAt)}`
+  }`;
   return (
-    <span className="inline-flex shrink-0 items-baseline gap-1.5" title={tip}>
-      <span className="text-[18px] font-bold leading-none text-ge-navy">
+    // 급등락은 이제 이 줄의 **부가** 정보다(주역은 왼쪽 실시간 등락률) — 폰트를
+    // 한 단 낮춰 3건이 동시에 떠도 한 줄에 들어가게 한다. 2026-08-14 실측:
+    // 종전 크기로는 3건일 때 줄 폭 1,692px 를 477px 넘겨 두 줄로 접혔다.
+    <span className="inline-flex shrink-0 items-baseline gap-1" title={tip}>
+      <span className="text-[13px] font-bold leading-none text-ge-navy">
         [{a.label}]
       </span>
-      <span className={cn("text-[20px] font-extrabold leading-none", dir)}>
+      <span className={cn("text-[15px] font-extrabold leading-none", dir)}>
         {glyph}
         {sign}
         {val.toFixed(2)}
         {unit}
       </span>
-      <span className="text-[13px] font-semibold leading-none tabular-nums text-ink-muted">
+      <span className="text-[10.5px] font-semibold leading-none tabular-nums text-ink-muted">
         {timeText}
       </span>
     </span>
@@ -1120,8 +1233,8 @@ function SummaryRow({
   );
 }
 
-// 호가 값 — bp / 물량X / 판정불가. 색은 bp 밴드(20·40)로 고른다. 물량X 는 인정호가가
-// 아예 없다는 뜻이라 최상위 심각도(빨강)로 둔다.
+// 호가 값 — bp / 물량X / 판정불가. 색은 bp 밴드(10 노랑·20 주황·40 빨강)로 고른다.
+// 물량X 는 인정호가가 아예 없다는 뜻이라 최상위 심각도(빨강)로 둔다.
 function HogaValue({ cell }: { cell: HogaCell }) {
   if (cell.kind === "na") {
     return (
@@ -1977,41 +2090,6 @@ function EtfTable({
           )}
         </TableBody>
       </Table>
-    </section>
-  );
-}
-
-/* ── FX 패널 ─────────────────────────────────────────────────────────── */
-
-function FxPanel({ fx }: { fx: Record<string, number> }) {
-  const entries = FX_ORDER.filter((c) => fx[c] != null).map(
-    (c) => [c, fx[c]] as const,
-  );
-  // 스키마에 새 통화가 생기면 순서 밖 항목도 뒤에 붙인다.
-  for (const [c, v] of Object.entries(fx)) {
-    if (c !== "KRW" && !FX_ORDER.includes(c)) entries.push([c, v]);
-  }
-
-  return (
-    <section className="rounded-2xl border border-hairline bg-canvas p-5 shadow-[0_2px_10px_rgba(36,59,94,0.05)]">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="h-4 w-1.5 rounded-full bg-ge-point" />
-        <span className="text-[13px] font-extrabold text-ge-navy">
-          환율 (KRW 기준)
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 lg:grid-cols-7">
-        {entries.map(([code, rate]) => (
-          <div key={code} className="flex flex-col">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-ink-muted">
-              {code}
-            </span>
-            <span className="text-[15px] font-extrabold tabular-nums text-ge-navy">
-              {formatRate(rate)}
-            </span>
-          </div>
-        ))}
-      </div>
     </section>
   );
 }

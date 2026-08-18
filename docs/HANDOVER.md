@@ -1,6 +1,9 @@
 # 인수인계 문서 — 개인 투자 플랫폼 초기 골격
 
 > 2026-07-12 초기 구현 완료 시점 기준. 이 문서 하나로 "시스템이 어떻게 돌고, 다음 기능을 어디에 어떻게 붙이는지"를 파악할 수 있게 쓴다.
+> **갱신 메모(2026-08-13)**: 골격(job 파이프라인·n8n 패턴·개발 루틴)은 아래 설명 그대로 유효하다. 그 뒤에 붙은 것 두 가지만 머리에 얹고 읽으면 된다 —
+> ① `apps/collector`(§2.8) 가 S: 레거시 엔진을 재사용해 계산하는 별도 갈래로 생겼고, ② 화면이 3개에서 십여 개로 늘었다(§6.5).
+> 키움 연동은 **제거됐다**(§5).
 > 상세 스펙은 `init.md`, 전체 설계는 `personal_investment_dashboard_architecture.md`, 서비스 간 인터페이스 계약은 `docs/architecture/contract.md`, 실행 방법은 `README.md`.
 
 ---
@@ -88,7 +91,7 @@
 
 ### 2.6 `storage/` — 서류함
 
-- `raw/` 원본 그대로(수정 금지), `processed/` 가공 결과. api·worker 컨테이너에 `/app/storage`로 마운트, n8n에는 `/files`로 마운트.
+- `raw/` 원본 그대로(수정 금지), `processed/` 가공 결과, `trigger/` n8n ↔ 윈도우 워처 파일 드롭 다리. api·worker 컨테이너에 `/app/storage`로, collector 에 `/srv/storage`로, n8n에는 `/files`로 마운트.
 - 새 파일 종류가 생기면 하위 폴더를 늘린다(추후 설계 문서의 staging/curated/analytics 단계 참고).
 
 ### 2.7 인프라 — `docker-compose.yml`, `.env`, `Makefile`
@@ -96,6 +99,14 @@
 - 자주 쓰는 명령: `make up` `make down` `make logs` `make migrate` `make test` `make integration` `make ps`
 - 환경변수는 전부 `.env`(git 제외). 새 변수 추가 시 `.env.example`에도 반드시 추가.
 - 컨테이너끼리는 서비스 이름으로 통신: `http://api:8000`, `postgres:5432`. **컨테이너 안에서 localhost 금지.**
+
+### 2.8 `apps/collector` — 레거시 엔진 재사용 갈래 (2026-07 이후 추가)
+
+- **역할**: S: 공유 폴더의 기존 파이썬 엔진·산출물을 그대로 읽어 계산한다. iNAV·WRAP·LP평가·성과분석·13F·매크로·텔레그램 뉴스가 여기 붙어 있다.
+- **job 파이프라인을 안 쓴다**: 화면이 즉시 값을 봐야 하는 조회형이라 api 가 프록시해 동기 호출한다(`http://collector:8100/...`). 오래 걸리는 생성 작업만 예외적으로 자체 상태 엔드포인트를 둔다(`/perf-brief/generate/status`).
+- **기동**: `profiles: ["collector"]` 게이트 → 최초 1회 `docker compose --profile collector up -d collector`. 그 뒤엔 `restart: unless-stopped` 로 자동 복구된다.
+- **경계**: 마운트는 `:ro` 가 원칙이다. 쓰기가 열린 곳은 `output/` · `funds/` · `lp_eval/` · `/app/.cache` 넷뿐이고 입력 엑셀과 엔진 코드는 컨테이너가 못 건드린다.
+- **함정**: 엔진은 S: 가 정본이라 파이썬 모듈 캐시 때문에 **프로세스당 한 번만** 임포트된다. S: 쪽 엔진을 고쳤으면 `docker compose --profile collector restart collector` 를 해야 반영된다.
 
 ---
 
@@ -192,7 +203,7 @@ docker compose build worker && docker compose up -d worker
 ## 5. 다음 개발 로드맵 (설계 문서와의 연결)
 
 1. **Phase 4 — 첫 실제 도메인** (아키텍처 §21): 계좌·거래·보유자산 테이블(portfolio 스키마) + CSV를 실제 포트폴리오에 적재하는 handler + Portfolio 화면.
-2. **키움증권 연동** — ✅ 2라운드에서 구현 완료 (2026-07-12). REST API 기반 `SYNC_KIWOOM_PORTFOLIO` 작업 + 포트폴리오 화면 + `/internal` 키 인증까지 반영. 인터페이스 계약은 `docs/architecture/contract-kiwoom.md`, 키움 API 필드 근거는 `docs/architecture/kiwoom-api-reference.md`, 키 설정 방법은 README §15. 남은 것: 실키 입력 후 TO-VERIFY 상수(enum 값·숫자 스케일) 모의투자 확정, 미국주식은 공식 문서 확인 후 활성화(`us_supported=false` 게이트).
+2. **키움증권 연동** — ❌ **제거됨** (커밋 80fad01 "GE 하우스 스타일 리디자인 + 키움 포트폴리오 백엔드 전면 제거"). 2라운드에서 `SYNC_KIWOOM_PORTFOLIO` 작업 + `/portfolio` 화면까지 구현했지만 방향을 접었다. 계약 문서(`contract-kiwoom.md`)와 API 근거 문서(`kiwoom-api-reference.md`)도 함께 삭제됐으니 찾지 말 것. 남은 흔적은 마이그레이션 파일 두 개(`0002_kiwoom_portfolio.py`, `0003_asset_classification.py`)뿐이다 — 되돌리지 않고 두는 이력이다.
 3. **시장 데이터 수집**: §3.3 레시피 그대로. 데이터가 커지면 그때 Parquet + DuckDB 도입(아키텍처 §4.5).
 4. **뉴스·공시 수집** → research 스키마.
 5. 지금 넣지 않기로 한 것(init.md §18: Redis, Celery, AI, 백테스트, 자동매매 등)은 필요성이 명확해질 때까지 추가하지 않는다.
@@ -214,23 +225,24 @@ docker compose build worker && docker compose up -d worker
 
 ---
 
-## 6.5. UI 방향 전환 (2026-07-12, 사용자 결정)
+## 6.5. UI 변천 (2026-07-12 → 2026-08 현재)
 
-**`DESIGN.md`(노션 스타일)는 메인 대시보드에 한해 대체됨.** 새 방향은 `reference/index.png` — "Invest AI Intelligence": 다크 네이비 사이드바(그룹형 메뉴: My / Realtime / ??? / Study), 상단바, 슬레이트 배경(#f4f6f9), 3열 카드 대시보드(포트폴리오 현황 · 자산배분 도넛 · 보유종목 TOP3 · 위험지표 · 성과차트 · 주요이벤트 · 실시간뉴스 · 시스템상태).
+두 번 갈아엎었다. `DESIGN.md`(노션 스타일) → "Invest AI Intelligence"(2026-07-12) → **GE 하우스 스타일**(커밋 80fad01). 지금 정본은 `DESIGN.md` 이고, 그 안이 이미 GE 토큰(메인블루 #6390BF · 딥네이비 #243B5E · Pretendard)으로 갈려 있다. `reference/index.png` 는 지나간 시안이다.
 
-화면 구성:
+같은 커밋에서 키움 포트폴리오 백엔드가 통째로 빠지면서 `/portfolio` 화면과 `EXCLUDED_DASHBOARD_TICKERS` 표시 필터도 함께 사라졌다.
 
-| 라우트 | 내용 |
+화면 구성 (사이드바 그룹 기준):
+
+| 그룹 | 라우트 |
 |---|---|
-| `/` 메인 대시보드 | 새 디자인. 요약 지표 + 도넛 + TOP3 + 뉴스/이벤트/시스템상태. **대시보드 표시 필터 적용** (아래) |
-| `/portfolio` 포트폴리오 상세 | 계좌 전체(필터 없음). 동기화 버튼 · 요약/시장 카드 · 12종목 테이블(14컬럼) · 데이터 상태 |
-| `/data-operations` 데이터 작업 | 작업 목록·로그, CSV 업로드, 테스트 작업 |
-| `/settings` | 읽기 전용 시스템 정보 |
+| 시장 모니터링 | `/inav` iNAV 모니터 · `/wrap` WRAP · `/lp-eval` LP 평가 |
+| 뉴스 모니터링 | `/telegram-news` 텔레그램 |
+| Quant | `/macro` 매크로 |
+| 성과 분석 | `/track-record/torus-aicoretech` TORUS/AI테크 |
+| 기타 | `/ai-token-usage` · `/lan-dashboard` · `/stock-discussion` 종토방 · `/meeting` 회의 · `/settings` |
+| 골격 | `/` 메인 · `/data-operations` 작업·CSV |
 
-**대시보드 표시 필터** (`apps/web/app/page.tsx`의 `EXCLUDED_DASHBOARD_TICKERS`):
-메인 대시보드 집계에서만 일부 종목을 제외한다(현재: 000660, SKHYV, 388720, GLD). **표시 계층 전용 필터**이며 DB·동기화 결과·API 응답에는 영향이 없다 — 제외 종목도 `/portfolio`와 API에서 그대로 보인다. 종목을 넣고 빼려면 그 Set만 수정.
-
-미구현(플레이스홀더): 실시간 뉴스·주요 이벤트는 하드코딩, 위험지표·AI 코멘트·성과차트는 "연동 예정". 사이드바에서 href가 없는 메뉴는 아직 페이지가 없는 항목.
+사이드바에서 href 가 없는 메뉴(모멘텀·재무·기술적 분석·sentiment·FUND3·기사 등)는 아직 페이지가 없는 자리표시자다.
 
 ## 7. 문서 지도
 
@@ -241,5 +253,6 @@ docker compose build worker && docker compose up -d worker
 | `personal_investment_dashboard_architecture.md` | 전체 그림과 장기 로드맵 |
 | `DESIGN.md` | UI 디자인 시스템 (색·타이포·컴포넌트 규칙) |
 | `docs/architecture/contract.md` | 서비스 간 인터페이스 계약 (API 형태·DB DDL·작업 유형) — **기능 추가 시 여기부터 갱신** |
-| `docs/screenshots/` | 초기 완성 시점의 화면 |
+| `workflows/n8n/README.md` | n8n 워크플로 3종의 스케줄·게이트·파일 드롭 다리 |
+| `docs/screenshots/` | 초기 완성 시점의 화면 (지금 UI 와 다르다 — 기록용) |
 | 이 문서 | 개발을 이어가는 법 |

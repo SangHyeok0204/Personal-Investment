@@ -219,6 +219,18 @@ async def get_guru13f_turnover(
     return await _proxy_collector(path, if_none_match)
 
 
+@router.get("/guru-13f/flows")
+async def get_guru13f_flows(
+    view: str | None = None, if_none_match: str | None = Header(default=None)
+) -> Response:
+    """Proxy the collector's 거장 변동 분석(동시 리밸런싱·편입/방출·섹터).
+
+    view 생략 시 세 뷰를 한 번에 반환한다. 사전계산분이라 응답이 가볍다.
+    """
+    path = "/guru-13f/flows" + (f"?view={view}" if view else "")
+    return await _proxy_collector(path, if_none_match)
+
+
 # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────────────
 @router.get("/perf-brief")
 async def get_perf_brief(if_none_match: str | None = Header(default=None)) -> Response:
@@ -253,8 +265,15 @@ async def get_perf_brief_generate_status(
 # ── [성과보고 HTML] S: bat 산출물 뷰어 ───────────────────────────────────
 @router.get("/perf-report")
 async def get_perf_report(if_none_match: str | None = Header(default=None)) -> Response:
-    """Proxy 성과보고 HTML 목록 + 오늘치 판정(파일명=기준일 / mtime=작성일)."""
-    return await _proxy_collector("/perf-report", if_none_match)
+    """Proxy 성과보고 HTML 목록 + 오늘치 판정(파일명=기준일 / mtime=작성일).
+
+    목록도 원문과 같은 SMB 경로다 — 작성일 판정에 보고서 파일마다 stat 이 붙고
+    건당 ~40ms 라 보고서가 쌓일수록 2s 예산을 넘긴다(실측 29개 2.1s). 넘기는
+    순간 카드가 통째로 503 "collector unavailable" 이 되므로 느린 예산을 쓴다.
+    """
+    return await _proxy_collector(
+        "/perf-report", if_none_match, COLLECTOR_SLOW_TIMEOUT_S
+    )
 
 
 @router.get("/perf-report/file")
@@ -277,6 +296,12 @@ async def get_fund_series(if_none_match: str | None = Header(default=None)) -> R
 
 
 # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────────────
+@router.get("/telegram-news")
+async def get_telegram_news(if_none_match: str | None = Header(default=None)) -> Response:
+    """[뉴스 모니터링 · 텔레그램] 실시간 카드 피드. 사전계산분이라 응답은 가볍다."""
+    return await _proxy_collector("/telegram-news", if_none_match)
+
+
 @router.get("/meeting/list")
 async def get_meeting_list(
     path: str = "", if_none_match: str | None = Header(default=None)

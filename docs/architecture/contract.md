@@ -1,6 +1,9 @@
 # Initial Implementation Contract (BINDING)
 
-> Round 2 (Kiwoom REST API portfolio sync): see `contract-kiwoom.md` — extends this contract.
+> **Status (2026-08-13)**: sections 3–5 (DB schema, job lifecycle, endpoint shapes) still bind.
+> Section 1 has drifted — a `collector` service and three extra n8n env keys were added; the table below is updated.
+> Round 2 (Kiwoom REST API portfolio sync) was **reverted** in commit 80fad01; `contract-kiwoom.md` and
+> `kiwoom-api-reference.md` were deleted along with it. Do not go looking for them.
 
 This document pins every cross-service interface for the initial skeleton.
 Builders implement AGAINST this contract; do not renegotiate it unilaterally.
@@ -9,6 +12,7 @@ Full requirements: `init.md` (spec), `DESIGN.md` (UI system), `personal_investme
 ## 0. Scope decisions (deviations from init.md, already decided)
 
 - **Kiwoom API (init.md §2-11) is DEFERRED.** It conflicts with §18 (실제 증권사 API 금지) and Kiwoom OpenAPI+ is Windows-only COM (cannot run in Linux containers). Documented in README as next-phase work (Kiwoom REST API recommended).
+  - *Later*: Round 2 shipped it over REST anyway, then removed it entirely (80fad01). Only migrations `0002_kiwoom_portfolio.py` / `0003_asset_classification.py` remain, deliberately un-reverted.
 - **Added endpoint** `GET /api/v1/jobs/stats` — required by the Overview screen (§10 counts).
 - **alembic.ini lives at repo root**, migrations in `database/migrations/` (honors §5 folder layout; runnable from container WORKDIR /app and from repo root).
 - **Tailwind v3.4** (not v4), **no Radix**; shadcn-style components are hand-vendored.
@@ -23,13 +27,15 @@ Full requirements: `init.md` (spec), `DESIGN.md` (UI system), `personal_investme
 | worker   | build `apps/worker` (python:3.12-slim) | — | worker |
 | postgres | postgres:16-alpine | 5432 | postgres |
 | n8n      | n8nio/n8n:latest | 5678 | n8n |
+| collector | build `apps/collector` | — (internal 8100) | collector |
 
 - Containers talk via service DNS (`http://api:8000`, `postgres:5432`). NEVER `localhost` inside containers.
 - Volumes: `postgres_data:/var/lib/postgresql/data`, `n8n_data:/home/node/.n8n`.
 - Bind mounts: `./storage:/app/storage` on **api and worker**; `./workflows/n8n:/workflows:ro` and `./storage:/files` on **n8n**.
 - Healthchecks: postgres `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`; api via `python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/system/health', timeout=3).status==200 else 1)"`; web `wget -qO- http://127.0.0.1:3000` (busybox wget; NOT `localhost` — alpine resolves it to ::1 while the standalone server listens on IPv4 only).
 - depends_on: api→postgres(healthy), worker→postgres(healthy), web→api(started), n8n→api(started).
-- n8n env: `N8N_SECURE_COOKIE=false`, `N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}`, `GENERIC_TIMEZONE=Asia/Seoul`.
+- n8n env: `N8N_SECURE_COOKIE=false`, `N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}`, `GENERIC_TIMEZONE=Asia/Seoul`, `INTERNAL_API_KEY=${INTERNAL_API_KEY}`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` (lets nodes read `$env`), `N8N_RESTRICT_FILE_ACCESS_TO=/files` (**required** — the image default is `~/.n8n-files`, not empty, so every other path fails with `The file "..." is not writable`).
+- `collector` (added after the initial skeleton): `profiles: ["collector"]`, so a plain `docker compose up` does NOT start it — bring it up once with `--profile collector`, after which `restart: unless-stopped` keeps it alive. It mounts the S: share read-only except `output/`, `funds/`, `lp_eval/` and its own `/app/.cache`. It bypasses the job pipeline: api proxies synchronous calls to `http://collector:8100`.
 - web build arg: `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`) — baked at build time.
 
 ## 2. Environment (.env.example — exact keys)

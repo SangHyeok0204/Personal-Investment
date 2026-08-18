@@ -32,7 +32,7 @@ def _build_account(raw: dict, *, has_plan: bool) -> AiUsageAccountOut:
         AiUsageMeterOut(
             label=item["label"],
             subtitle=item.get("subtitle"),
-            pct=item["pct"],
+            pct=item.get("pct"),
             remaining_pct=item.get("remaining_pct"),
         )
         for item in raw.get("items", [])
@@ -46,6 +46,8 @@ def _build_account(raw: dict, *, has_plan: bool) -> AiUsageAccountOut:
         age_seconds=age_seconds,
         stale=stale,
         extra_usage_enabled=raw.get("extra_usage_enabled"),
+        monthly_credits=raw.get("monthly_credits"),
+        credit_balance=raw.get("credit_balance"),
         items=items,
     )
 
@@ -64,8 +66,11 @@ def get_ai_token_usage() -> AiUsageOut:
             claude_resp.raise_for_status()
             codex_resp = client.get(f"{base_url}/api/latest_codex")
             codex_resp.raise_for_status()
+            genspark_resp = client.get(f"{base_url}/api/latest_genspark")
+            genspark_resp.raise_for_status()
         claude_raw = claude_resp.json()
         codex_raw = codex_resp.json()
+        genspark_raw = genspark_resp.json()
     except (httpx.HTTPError, ValueError) as exc:
         return AiUsageOut(
             monitor_base_url=base_url,
@@ -74,6 +79,7 @@ def get_ai_token_usage() -> AiUsageOut:
             fetched_at=fetched_at,
             claude=[],
             codex=[],
+            genspark=[],
         )
 
     return AiUsageOut(
@@ -83,4 +89,5 @@ def get_ai_token_usage() -> AiUsageOut:
         fetched_at=fetched_at,
         claude=[_build_account(item, has_plan=True) for item in claude_raw],
         codex=[_build_account(item, has_plan=False) for item in codex_raw],
+        genspark=[_build_account(item, has_plan=True) for item in genspark_raw],
     )

@@ -63,7 +63,8 @@ export interface CsvImportResponse {
 export interface AiUsageMeter {
   label: string;
   subtitle: string | null;
-  pct: number;
+  // null = 소진율 판정 불가(Genspark 가 월 할당량을 못 알아낸 경우). 0% 로 그리지 않는다.
+  pct: number | null;
   remaining_pct: number | null;
 }
 
@@ -77,6 +78,9 @@ export interface AiUsageAccount {
   // '사용 크레딧'(초과분 과금) 토글 실측값. false = 플랜 한도에서 그대로 중단.
   // null = 판정 불가(스위치 미발견 / GPT 는 해당 개념 없음).
   extra_usage_enabled: boolean | null;
+  // Genspark 전용 — 월 할당/잔여 크레딧. Claude/GPT 는 항상 null.
+  monthly_credits: number | null;
+  credit_balance: number | null;
   items: AiUsageMeter[];
 }
 
@@ -87,6 +91,7 @@ export interface AiTokenUsageResponse {
   fetched_at: string;
   claude: AiUsageAccount[];
   codex: AiUsageAccount[];
+  genspark: AiUsageAccount[];
 }
 
 export interface InavEtf {
@@ -480,6 +485,286 @@ export function getGuru13fTurnover(): Promise<Guru13fTurnover> {
   return request<Guru13fTurnover>("/api/v1/inav/guru-13f/turnover");
 }
 
+// ── [GURU 13F] 변동 분석: 동시 리밸런싱 / 편입·방출 / 섹터 ──────────
+export interface Guru13fFlowGuru {
+  cik: string;
+  guru: string;
+  firm: string;
+}
+export interface Guru13fPeriodMeta {
+  period: string;
+  n_filed: number;
+  filed_pct: number;
+  usable: boolean; // 제출률이 낮아 비교에서 제외된 분기는 false
+}
+export interface Guru13fRebalanceRow {
+  cusip: string;
+  name: string;
+  ticker: string;
+  movers: number; // 비중을 min_bp 이상 조정한 거장 수
+  buyers: number;
+  sellers: number;
+  gross_bp: number; // Σ|Δwgt| 총 조정량 (방향 상쇄 없음)
+  net_bp: number; // ΣΔwgt 순방향
+  agreement: number; // |net|/gross · 1=전원 동일방향, 0=정확히 갈림
+  holders_prev: number;
+  holders_curr: number;
+  by_guru: (Guru13fFlowGuru & {
+    prev_bp: number;
+    curr_bp: number;
+    delta_bp: number;
+    action: "new" | "exited" | "increased" | "decreased";
+  })[];
+  // 평소 대비 이례성. 표본(movers_n_obs)이 부족하면 전부 null 이다.
+  movers_n_obs: number;
+  movers_baseline: number | null;
+  movers_pctile: number | null;
+  is_unusual: boolean | null;
+}
+export interface Guru13fEntryExitRow {
+  cusip: string;
+  name: string;
+  ticker: string;
+  n_gurus: number;
+  total_bp: number;
+  avg_bp: number;
+  gurus: (Guru13fFlowGuru & { bp: number })[];
+}
+export interface Guru13fSectorRow {
+  sector: string;
+  movers: number;
+  up: number;
+  down: number;
+  gross_bp: number;
+  net_bp: number;
+  agreement: number;
+  prev_wgt_bp: number; // 거장 평균 비중 (합산 아님)
+  curr_wgt_bp: number;
+  top_contributors: { cusip: string; name: string; ticker: string; delta_bp: number }[];
+}
+interface Guru13fFlowBase {
+  kind: string;
+  curr_period: string | null;
+  prev_period: string | null;
+  n_participants: number;
+  participants: Guru13fFlowGuru[];
+  excluded: string[];
+  period_meta: Guru13fPeriodMeta[];
+  insufficient_history?: boolean;
+}
+export interface Guru13fRebalance extends Guru13fFlowBase {
+  min_bp: number;
+  baseline: { quarters_used: number; min_obs: number };
+  rows: Guru13fRebalanceRow[];
+  total_rows: number;
+}
+export interface Guru13fEntriesExits extends Guru13fFlowBase {
+  entries: Guru13fEntryExitRow[];
+  exits: Guru13fEntryExitRow[];
+  total_entries: number;
+  total_exits: number;
+}
+export interface Guru13fSectorFlow extends Guru13fFlowBase {
+  coverage: number | null; // 최신분기 비중 기준 섹터 매핑률(%)
+  coverage_curr: number;
+  coverage_prev: number;
+  coverage_gap: number;
+  // 분기 간 매핑률 격차가 크면 '미분류' 행의 net 은 실제 이동이 아니라 결손 아티팩트다.
+  unclassified_unreliable: boolean;
+  mapped_cusips: number;
+  min_bp: number;
+  rows: Guru13fSectorRow[];
+}
+export interface Guru13fFlows {
+  generatedAt: string;
+  dbVersion: string;
+  rebalance: Guru13fRebalance;
+  entries_exits: Guru13fEntriesExits;
+  sector: Guru13fSectorFlow;
+}
+
+export function getGuru13fFlows(): Promise<Guru13fFlows> {
+  return request<Guru13fFlows>("/api/v1/inav/guru-13f/flows");
+}
+
+// ── [매크로] 물가·고용·유동성 패널 ───────────────────────────────────
+// 근거는 S: 매크로모니터가 구운 macro_panels.json(FRED/BLS/CME). 계산은 전부 S: 소관이라
+// 프론트는 그대로 그리기만 한다 — 여기서 YoY 를 다시 구하면 리포트와 갈라진다.
+export interface MacroPriceRow {
+  label: string;
+  date: string; // 관측 기간 시작일 YYYY-MM-DD
+  index: number;
+  yoy: number | null;
+  yoy_prev: number | null;
+  mom: number | null;
+  ann3: number | null;
+  ann6: number | null;
+  basis: "NSA" | "SA"; // YoY 산출 근거 — PCE 는 FRED 가 SA 만 준다
+  spark: number[];
+  series_id_sa: string;
+  series_id_nsa: string | null;
+}
+export interface MacroLaborRow {
+  label: string;
+  date: string;
+  value: number;
+  unit: string;
+  chg_1m: number | null;
+  chg_12m: number | null;
+  spark: number[];
+  series_id: string;
+}
+export interface MacroLiquidityRow {
+  label: string;
+  date: string;
+  value: number;
+  unit: string;
+  chg_short: number | null;
+  chg_long: number | null;
+  short_label: string; // "4주" | "1개월" — 주간·월간 시리즈가 섞여 있다
+  long_label: string;
+  spark: number[];
+  series_id: string;
+}
+export interface MacroFomcBucket {
+  lower: number;
+  upper: number;
+  prob: number; // 0~1
+}
+export interface MacroFomcBand {
+  lower: number;
+  upper: number;
+  label: string; // "350-375"
+}
+export interface MacroFomcCell {
+  prob: number | null; // 0~1
+  rank: number; // 1=회의 내 최고확률, 2=차순위, 0=그 외(0% 는 순위 제외)
+}
+export interface MacroFomcMeeting {
+  date: string;
+  cells: MacroFomcCell[]; // bands 와 같은 순서
+}
+export interface MacroFomc {
+  snapshot_date?: string;
+  fomc_date?: string;
+  bands?: MacroFomcBand[];
+  meetings?: MacroFomcMeeting[];
+  buckets?: MacroFomcBucket[]; // 리포트 페이지4(다음 회의 막대)가 쓰는 값
+}
+
+// 대시보드 선그래프용 — x=시간, y=%. 발표가 이산적이라 점이 듬성하지만 추세로 읽는다.
+export interface MacroSeriesPoint {
+  d: string; // 관측 기간 시작일
+  v: number; // %
+}
+export interface MacroSeries {
+  label: string;
+  series_id: string;
+  color: string;
+  unit: string;
+  basis?: "NSA" | "SA"; // 물가 YoY 산출 근거
+  mode?: string; // 고용·유동성: "수준" | "YoY"
+  // 스케일이 다른 계열을 한 그래프에 놓기 위한 축 지정.
+  // 실업률(3.5~4.5%)과 지급준비금 YoY(-13~+21%)를 한 축에 두면 실업률이 직선이 된다.
+  axis?: "left" | "right";
+  latest: number;
+  latest_date: string;
+  points: MacroSeriesPoint[];
+}
+// CPI 세부품목 — BLS flat file(cu.data.0.Current) JOIN 결과.
+// 가중치가 flat file 에 없어 기여도(bp)는 만들 수 없다 — 품목별 상승률까지다.
+export interface MacroCpiItemRow {
+  label: string;
+  item_code: string;
+  name_en: string; // BLS 품목 마스터 원명 — 한글 라벨이 무엇을 가리키는지 대조용
+  date: string;
+  yoy: number | null;
+  mom: number | null;
+  ann3: number | null;
+  basis: "SA" | "NSA"; // MoM·3M 산출 근거
+  spark: number[];
+}
+export interface MacroCpiDetail {
+  groups: MacroCpiItemRow[]; // 품목 그룹 8종
+  cuts: MacroCpiItemRow[]; // 에너지·주거비·서비스·근원상품
+  note: string;
+}
+// 최근 '처음 들어온' 관측치 = 새 발표. 표는 최신값만 보여줘서 무엇이 새로 반영됐는지
+// 알 수 없다. 월간 지표라 대부분의 날은 빈 배열이다.
+export interface MacroRelease {
+  series_id: string;
+  name_ko: string | null;
+  unit: string | null;
+  observation_date: string;
+  value: number | null;
+  first_seen_at: string;
+}
+// PPI 상품군(제조 투입원가) 15군. 그룹 총지수는 BLS flat file 에 NSA 만 있어 YoY 만 낸다
+// — NSA 로 MoM 을 내면 농산물·연료처럼 계절성 큰 군에서 거짓 신호가 된다.
+export interface MacroPpiGroupRow {
+  label: string;
+  group_code: string;
+  series_id: string;
+  name_en: string;
+  date: string;
+  index: number;
+  yoy: number | null;
+  yoy_prev: number | null;
+  spark: number[];
+}
+export interface MacroPpiGroups {
+  rows: MacroPpiGroupRow[];
+  note: string;
+}
+// 수집이 조용히 멈추는 것이 이 파이프라인의 실제 실패 모드다. blocked(자격증명 미설정)는
+// 고장이 아니라 대기라서 경고로 올리지 않는다 — 매일 뜨는 경고는 진짜 장애를 가린다.
+export interface MacroCollection {
+  last_ok_at: string | null;
+  age_hours: number | null;
+  stale: boolean;
+  failed: string[];
+  blocked: string[];
+  reason: string;
+}
+// investing.com 스크랩 값 ↔ 원천기관(BLS/FRED) 값 대조. 일치하면 화면에 안 뜬다 —
+// 참조 월이 다르거나 파싱이 안 되면 '불일치'가 아니라 비교 대상에서 빠진다(오탐 금지).
+export interface MacroCrosscheck {
+  event_id: number;
+  label: string;
+  series_id: string;
+  date: string;
+  ref_month: number;
+  theirs: number;
+  ours: number;
+  ours_rounded: number;
+  match: boolean;
+  unit: string;
+}
+export interface MacroPanels {
+  collection: MacroCollection;
+  crosscheck: MacroCrosscheck[];
+  releases: MacroRelease[];
+  ppi_groups: MacroPpiGroups;
+  price_series: MacroSeries[]; // 근원 CPI · 근원 PPI · 근원 PCE (YoY %)
+  // 물가 툴팁의 세부내역 — 선으로 그리지 않고 커서 시점 값만 쓴다(선 7개는 못 읽는다)
+  price_detail_series: { label: string; item_code: string; unit: string; points: MacroSeriesPoint[] }[];
+  labor_liq_series: MacroSeries[]; // 실업률(수준) · M2 · 지급준비금 (YoY %)
+  // 금리 커브 — 10Y-2Y 스프레드(좌축 %p) + 10년·2년 금리(우축 %). FRED 일간을 주간으로 솎은 값.
+  rate_series: MacroSeries[];
+  prices: MacroPriceRow[];
+  labor: MacroLaborRow[];
+  liquidity: MacroLiquidityRow[];
+  cpi_detail: MacroCpiDetail;
+  ppi_detail: MacroCpiItemRow[]; // PPI 최종수요 분해(상품/서비스 · 식품/에너지/근원)
+  fomc: MacroFomc;
+  asof: string;
+  generatedAt: string;
+}
+
+export function getMacroPanels(): Promise<MacroPanels> {
+  return request<MacroPanels>("/api/v1/macro/panels");
+}
+
 // ── [회의] 회의자료 파일 탐색기 (PoC) ────────────────────────────────
 export interface MeetingEntry {
   name: string;
@@ -509,6 +794,42 @@ export function getMeetingFile(path: string): Promise<MeetingFile> {
     `/api/v1/inav/meeting/file?path=${encodeURIComponent(path)}`,
     { cache: "no-store" },
   );
+}
+
+// ── [뉴스 모니터링 · 텔레그램] 카드 피드 ──────────────────────────────
+// 내용과 '언급 n건'은 전부 상류(S: Telegram_Bot)가 만든 집계 JSON 에서 온다 —
+// 일간 HTML 리포트와 같은 산정 방식(Opus 가 24h 토픽을 의미 단위로 묶음)이고,
+// 풀링은 08:00·13:00 KST. collector 는 읽어 넘기기만 한다.
+export interface TelegramNewsCard {
+  id: string;
+  title: string;
+  chips: string[]; // summary 를 '·' 로 끊은 수치·키워드
+  mentions: number | null; // 관련 토픽 수 (Opus 추정)
+  notable: boolean; // 단독·특이 (열당 2장, 리포트의 앰버 카드)
+}
+export interface TelegramNewsSection {
+  key: "macro" | "industry" | "stock";
+  label: string;
+  icon: string;
+  cards: TelegramNewsCard[]; // 상위 3 + 특이 2 = 5장
+}
+export interface TelegramNews {
+  generatedAt: string; // 상류가 집계한 시각
+  readAt: string; // collector 가 읽은 시각
+  available: boolean; // 집계 파일 존재 여부
+  stale: boolean; // 예정 풀링이 빠졌는가
+  expectedAt: string; // 직전에 돌았어야 할 풀링 시각
+  poolTimes: string[]; // ["08:00","13:00"]
+  windowHours: number;
+  windowStart: string;
+  windowEnd: string;
+  topics: number; // 집계에 들어간 토픽 수
+  rooms: number;
+  analysisPath: string;
+  categories: TelegramNewsSection[]; // 매크로 · 산업 · 종목
+}
+export function getTelegramNews(): Promise<TelegramNews> {
+  return request<TelegramNews>("/api/v1/inav/telegram-news");
 }
 
 // ── [성과보고 HTML] S: bat 산출물 뷰어 ────────────────────────────────
@@ -924,9 +1245,12 @@ export interface IndexAlertItem {
   id: string;
   code: string;
   label: string;
-  kind: "open5" | "roll1h";
+  // 2026-08-14 이후 roll1h 하나뿐(구 open5 = 09:05 전일比 스냅샷은 폐지 —
+  // 임계값이 없어 +0.03% 도 '급등락'으로 나갔고, 지수 줄이 전일比 등락률을
+  // 상시 표시하게 되면서 중복이 됐다).
+  kind: "roll1h";
   changePct: number;
-  spreadPct: number | null; // roll1h: 60분 변동폭(%p)
+  spreadPct: number | null; // 60분 변동폭(%p)
   rose: boolean | null;
   maxAt: string | null; // "YYYY-MM-DD HH:MM:SS" (KST)
   minAt: string | null;

@@ -117,6 +117,45 @@ def _hhmm(minute_of_day: int) -> str:
     return f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
 
 
+# ── 개장일 판정 (2026-08-10 신설) ──────────────────────────────────────────
+# 휴장일·주말에도 CHECK 가 마지막 스냅샷을 계속 밀어주면 hoga_last_received_age_s 는
+# 신선한 채로 남는다(수신이 끊긴 게 아니라 내용이 안 바뀌는 것) → HOGA_FRESH_MAX_S
+# 가드를 그대로 통과해 같은 값이 하루 종일 표본된다. 실측: 8/1·8/2·8/8·8/9 네 날의
+# bp 고유값이 각각 8개(= ETF 9종에 값 하나씩)뿐이었고 그게 통계·CSV 에 그대로 섞였다.
+# 그래서 '신선도'가 아니라 '개장일'로 막는다.
+_HOLIDAY_COUNTRY = "한국"
+_WEEKDAY_KO = "월화수목금토일"
+
+
+def trading_day_status(day=None) -> tuple[bool, str]:
+    """(개장 여부, 사유 한 줄). 사유는 자정 로그용.
+
+    주말은 코드로 확정한다 — 달력 파일이 없거나 깨져도 항상 옳다. 공휴일은 공유
+    캘린더(S:\\GE\\raw\\data\\_공유모듈\\Holidays\\Holidays_{YYYY}.xlsx, 컨테이너
+    /srv/legacy/holidays)의 '한국' 열을 본다. iNAV 엔진이 이미 정본으로 쓰는 파일이라
+    같은 프로세스 안에서 판정이 갈릴 일이 없다(main 이 기동 시 base_dir 재배선).
+
+    캘린더를 못 읽으면 개장으로 본다(fail-open) — 연 1회 수기 갱신이라 새해 첫 파일이
+    늦을 수 있는데, 그때 수집을 멈추면 진짜 거래일을 통째로 잃는다. 반대 방향의 손해
+    (휴장일 표본)는 주말 가드가 파일과 무관하게 계속 걸러 주므로 법정공휴일만 남는다.
+    """
+    day = day or datetime.now(_KST).date()
+    if day.weekday() >= 5:
+        return False, f"{day} 주말({_WEEKDAY_KO[day.weekday()]})"
+    try:
+        from etf_inav.data_sources import holiday_calendar
+
+        if holiday_calendar.is_market_closed(_HOLIDAY_COUNTRY, day):
+            return False, f"{day} 한국 증시 휴장일(공유 캘린더)"
+    except Exception as exc:  # noqa: BLE001 - 캘린더 사고가 수집을 막지 않는다
+        return True, f"{day} 개장 간주(휴장일 캘린더 조회 실패: {exc!r})"
+    return True, f"{day} 개장일"
+
+
+def is_trading_day(day=None) -> bool:
+    return trading_day_status(day)[0]
+
+
 def _tick_size(price: float) -> int:
     # KRX 국내 ETF 호가단위 — 2,000원 미만 1원, 이상 5원 (lib/hoga.ts tickSize).
     return 1 if price < 2000 else 5
@@ -268,6 +307,10 @@ def sample_once(hoga: dict | None, now: datetime | None = None,
     (=1표본)씩 누적한다. snapshot(iNAV 스냅샷)이 주어지면 같은 ts 로 종목별 괴리율
     (실제/장중)도 함께 기록한다. 누적한 (code×basis) 행 수를 반환(0=구간밖/스킵)."""
     now = now or datetime.now(_KST)
+    # 휴장일·주말은 한 줄도 안 쌓는다 — 표본이 들어오면 그게 그대로 하루치 통계가
+    # 되므로 사후 청소보다 입구에서 막는 게 맞다 (2026-08-10).
+    if not is_trading_day(now.date()):
+        return 0
     minute = now.hour * 60 + now.minute
     # 판정·계산은 두 구간이 완전히 같고, 다른 건 '어느 테이블에 넣느냐' 뿐이다.
     in_main = SESSION_START_MIN <= minute < SESSION_END_MIN
@@ -741,15 +784,29 @@ def build_lp_eval_ts(trade_date: str | None = None, names: dict | None = None,
 #   · lp_eval_ts_{date}.csv   — 그날 분단위 원시 시계열(호가 bp + 실제/장중 괴리 동행)
 #   · lp_eval_pre_{date}.csv  — 개장 직후 09:00~09:05(LP 의무 면제 구간) 같은 컬럼
 #   · lp_eval_history.csv     — 전 거래일 요약 마스터(일자×ETF×basis 한 행, 추세분석용)
-# 매 표본(60초)마다 덮어쓴다 → 15:20(의무 종료)에 자연히 그날 최종본이 된다.
+# 앞의 셋은 매 표본(60초)마다 갱신된다 → 15:20(의무 종료)에 자연히 그날 최종본이 된다.
+# 마스터 CSV 만 매일 16:30 KST 1회 이관이다(export_history_csv, 2026-08-10).
 
 # 마스터 CSV 컬럼 — 일자 추세용 요약(틱별 히스토그램 전체는 일별 JSON 에 있다).
 # mean_bp = 그 날 대표값(화면 카드와 같은 값), banded_min = 그 평균의 분모(분).
+#
+# 2026-08-10 확장 — 구간별 평균과 실제괴리를 여기에 같이 싣는다. 전에는 둘 다 일별
+# JSON 에만 있어서(그것도 windows 는 8/4, dev 는 8/5 파일부터) 날짜를 가로지르는
+# 추세를 보려면 JSON 을 하나씩 열어야 했다.
+#   · w1~w5_bp   = SPREAD_WINDOWS 구간별 평균 인정 스프레드(bp). w5=장 전체=mean_bp.
+#   · dev_*      = 실제괴리(%). basis(LP/총호가)와 무관한 값이라 lp·total 두 행에
+#                  같은 값이 들어간다(한 파일에서 바로 피벗하려고 일부러 복제).
+#   · dev_w1~w5  = 같은 구간 구분의 실제괴리 평균.
+# 표본 분수는 구간별로는 싣지 않는다(사용자 선택) — 전체 분모는 banded_min(스프레드)
+# 과 dev_min(괴리)으로 확인한다.
 _CSV_HEADER = [
     "trade_date", "code", "name", "basis",
     "total_min", "none_min", "ok_min", "alert_min",
     "mean_bp", "banded_min",
     "mean_tick", "mode_tick", "median_tick",
+    "w1_bp", "w2_bp", "w3_bp", "w4_bp", "w5_bp",
+    "dev_mean", "dev_abs_mean", "dev_min",
+    "dev_w1", "dev_w2", "dev_w3", "dev_w4", "dev_w5",
 ]
 
 # 분단위 시계열 CSV 컬럼 — 한 행 = (표본시각 × ETF). basis 2종을 옆으로 펼쳐 한 행에
@@ -881,63 +938,70 @@ def _all_buckets_by_key() -> dict:
     return data
 
 
-# 마스터 CSV 용 평균 bp 캐시 — trade_date -> {(code, basis): (평균bp, 표본분수)}.
-# 지난 거래일 값은 두 번 다시 안 변하는데 매 표본(60초)마다 lp_spread_ts 전체를
-# GROUP BY 하고 있었다(2026-08-05 실측 5만행·130ms, 매일 3,300행씩 증가). 오늘치만
-# 다시 세고 과거일은 프로세스 캐시에서 꺼낸다. 재기동하면 첫 1회만 전량 집계한다.
-_BP_STATS_CACHE: dict = {}
+# 마스터 CSV 용 일자별 통계 캐시 — trade_date -> {"bp": ..., "dev": ...}.
+# 지난 거래일 값은 두 번 다시 안 변하므로 한 번 센 건 다시 안 센다(오늘만 매번 갱신).
+_DAY_STATS_CACHE: dict = {}
+
+_WINDOW_KEYS = tuple(k for k, *_rest in SPREAD_WINDOWS)
 
 
-def _all_bp_stats(today: str) -> dict:
-    """(trade_date, code, basis) -> (평균bp, 표본분수) (read-only).
-    bp 가 NULL 인 표본(2026-07-30 이전)은 SQL 집계에서 자동으로 빠진다."""
-    if not DB_PATH.exists():
-        return {}
-    try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5.0)
-    except sqlite3.Error as exc:
-        _log(f"bp stats open failed: {exc!r}")
-        return {}
-    try:
-        dates = [r[0] for r in con.execute(
-            "SELECT DISTINCT trade_date FROM lp_spread_ts"
-        )]
-        # 오늘은 계속 쌓이는 중이라 항상 다시 센다. 나머지는 캐시에 없을 때만.
-        need = [d for d in dates if d == today or d not in _BP_STATS_CACHE]
-        if need:
-            marks = ",".join("?" * len(need))
-            fresh: dict = {d: {} for d in need}
-            for td, code, b, avg_bp, n in con.execute(
-                "SELECT trade_date, code, basis, AVG(bp), COUNT(bp) FROM lp_spread_ts "
-                f"WHERE bp IS NOT NULL AND trade_date IN ({marks}) "
-                "GROUP BY trade_date, code, basis", need,
-            ):
-                fresh[td][(code, b)] = (round(avg_bp, 1), n)
-            _BP_STATS_CACHE.update(fresh)
-    except sqlite3.Error as exc:
-        _log(f"bp stats query failed: {exc!r}")
-        con.close()
-        return {}
-    finally:
-        con.close()
-    return {
-        (d, code, b): v
-        for d, m in _BP_STATS_CACHE.items()
-        for (code, b), v in m.items()
-    }
+def _pad_windows(rows: list) -> list:
+    """windows 배열 → SPREAD_WINDOWS 순서의 평균 5개. 길이가 모자라면 빈칸으로 채운다
+    (구 스냅샷 호환 — 구간 정의가 늘어도 CSV 열 수가 흔들리지 않는다)."""
+    means = {r.get("key"): r.get("mean") for r in (rows or [])}
+    return [means.get(k) for k in _WINDOW_KEYS]
+
+
+def _day_stats(trade_date: str, today: str) -> dict:
+    """그 날의 대표값·구간 평균·실제괴리를 마스터 CSV 가 쓸 형태로.
+
+    값은 화면과 같은 build_lp_eval 에서 **그대로 꺼내 쓴다**. 여기서 SQL 로 다시
+    집계하면 라운딩 자리수(bp 1자리 / 괴리 2·3자리)와 DEV_MIRROR_TICKERS 규칙이 두
+    곳으로 갈라지고, 한쪽만 고치면 CSV 와 화면이 조용히 어긋난다 (2026-08-10).
+
+    return:: {"bp": {(code, basis): [mean_bp, banded_min, w1..w5]},
+              "dev": {code: [mean, abs_mean, minutes, w1..w5]}}
+    """
+    cached = _DAY_STATS_CACHE.get(trade_date)
+    if cached is not None and trade_date != today:
+        return cached
+    snap = build_lp_eval(trade_date)
+    bp: dict = {}
+    dev: dict = {}
+    for e in snap["etfs"]:
+        code = e["code"]
+        d = e.get("dev") or {}
+        dev[code] = [d.get("mean"), d.get("abs_mean"), d.get("minutes") or 0] \
+            + _pad_windows(d.get("windows"))
+        for b, v in (e.get("basis") or {}).items():
+            bp[(code, b)] = [v.get("mean_bp"), v.get("banded_min") or 0] \
+                + _pad_windows(v.get("windows"))
+    out = {"bp": bp, "dev": dev}
+    _DAY_STATS_CACHE[trade_date] = out
+    return out
+
+
+def _blank(v):
+    return "" if v is None else v
 
 
 def _write_master_csv(out_dir: Path, names: dict) -> None:
     """전 거래일 요약을 마스터 CSV 로 원자적 교체 저장. 정렬=일자↑·ACE순·lp먼저.
-    Excel 한글 대응 UTF-8 BOM. 부분쓰기 노출 방지로 .tmp → replace."""
+    Excel 한글 대응 UTF-8 BOM. 부분쓰기 노출 방지로 .tmp → replace.
+
+    전량 재작성이라 과거일 구간평균·실제괴리도 이 함수 한 번으로 소급 채워진다 —
+    일별 JSON 은 windows 가 2026-08-04, dev 가 08-05 파일부터라 소급이 안 되지만
+    원시 시계열(lp_spread_ts / lp_dev_ts)은 그 전부터 있어 재계산이 된다.
+    """
     data = _all_buckets_by_key()
-    bp_stats = _all_bp_stats(datetime.now(_KST).strftime("%Y-%m-%d"))
+    today = datetime.now(_KST).strftime("%Y-%m-%d")
     ace_rank = {c: i for i, c in enumerate(ACE_TICKERS)}
     basis_rank = {"lp": 0, "total": 1}
     keys = sorted(
         data.keys(),
         key=lambda k: (k[0], ace_rank.get(k[1], 99), basis_rank.get(k[2], 9)),
     )
+    stats: dict = {}
     tmp = out_dir / "lp_eval_history.csv.tmp"
     with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -945,16 +1009,23 @@ def _write_master_csv(out_dir: Path, names: dict) -> None:
         for (td, code, b) in keys:
             bc = data[(td, code, b)]
             st = _stats(bc)
-            mean_bp, banded_min = bp_stats.get((td, code, b), (None, 0))
+            ds = stats.get(td)
+            if ds is None:
+                ds = stats[td] = _day_stats(td, today)
+            mean_bp, banded_min, *win_bp = ds["bp"].get(
+                (code, b), [None, 0, None, None, None, None, None])
+            dev_mean, dev_abs, dev_min, *win_dev = ds["dev"].get(
+                code, [None, None, 0, None, None, None, None, None])
             w.writerow([
                 td, code,
                 names.get(code, "") or names.get(code.upper(), ""), b,
                 sum(bc.values()), bc.get(_NONE_TICK, 0), bc.get(_OK_TICK, 0),
                 st["alert_min"],
-                "" if mean_bp is None else mean_bp, banded_min,
-                "" if st["mean"] is None else st["mean"],
-                "" if st["mode"] is None else st["mode"],
-                "" if st["median"] is None else st["median"],
+                _blank(mean_bp), banded_min,
+                _blank(st["mean"]), _blank(st["mode"]), _blank(st["median"]),
+                *[_blank(v) for v in win_bp],
+                _blank(dev_mean), _blank(dev_abs), dev_min,
+                *[_blank(v) for v in win_dev],
             ])
     tmp.replace(out_dir / "lp_eval_history.csv")
 
@@ -1067,10 +1138,28 @@ def _write_pre_csv(out_dir: Path, names: dict, trade_date: str) -> None:
     _csv_append(path, _rows_to_csv(rows, names, trade_date))
 
 
+def export_history_csv(names: dict | None = None) -> bool:
+    """전 거래일 요약 마스터 CSV(lp_eval_history.csv) 이관 — 매일 16:30 KST 1회.
+
+    2026-08-10 이전에는 표본마다(60초) 전량 재작성했다. 장 마감 뒤 한 번이면 충분한
+    일자 추세 파일인데, 구간평균·실제괴리까지 실으면서 재계산 비용이 커져 분리했다.
+    장중 화면이 보는 파일(일별 JSON·분단위 CSV)은 그대로 매 표본 갱신된다.
+
+    폴더가 없으면(로컬·마운트 부재) False.
+    """
+    out_dir = LP_EVAL_OUT_DIR
+    if not out_dir.is_dir():
+        return False
+    _write_master_csv(out_dir, names or {})
+    return True
+
+
 def write_daily_snapshot(names: dict | None = None) -> bool:
-    """오늘치 JSON + 분단위 시계열 CSV + 개장직후 CSV + 전기간 마스터 CSV 를 S:
-    출력폴더에 덮어쓴다. 폴더가 없으면 조용히 skip(로컬·마운트 부재). 파일별로 예외를
-    삼켜 한쪽이 잠겨도(예: Excel 로 CSV 오픈 중) 다른 쪽 저장은 진행한다."""
+    """오늘치 JSON + 분단위 시계열 CSV + 개장직후 CSV 를 S: 출력폴더에 덮어쓴다.
+    폴더가 없으면 조용히 skip(로컬·마운트 부재). 파일별로 예외를 삼켜 한쪽이 잠겨도
+    (예: Excel 로 CSV 오픈 중) 다른 쪽 저장은 진행한다.
+
+    마스터 CSV 는 여기서 빠졌다 — export_history_csv 가 매일 16:30 에 따로 낸다."""
     out_dir = LP_EVAL_OUT_DIR
     if not out_dir.is_dir():
         return False
@@ -1099,10 +1188,5 @@ def write_daily_snapshot(names: dict | None = None) -> bool:
         _write_ts_csv(out_dir, names, today)
     except OSError as exc:
         _log(f"ts csv write failed: {exc!r}")
-        ok = False
-    try:
-        _write_master_csv(out_dir, names)
-    except OSError as exc:
-        _log(f"master csv write failed: {exc!r}")
         ok = False
     return ok

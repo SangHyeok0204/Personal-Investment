@@ -14,10 +14,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ApiErrorBanner } from "@/components/states";
 import { cn } from "@/lib/utils";
 
-type Provider = "Claude" | "GPT";
+type Provider = "Claude" | "GPT" | "Genspark";
 
-// GPT(Codex) 는 account1 만 구독 유지 — 2·3 은 해제됨(2026-07-21). Claude 4 + GPT 1 = 5장.
+// GPT(Codex) 는 account1 만 구독 유지 — 2·3 은 해제됨(2026-07-21).
+// Genspark 는 한 계정뿐(Claude account3 과 같은 구글 계정 = quant3).
+// Claude 4 + GPT 1 + Genspark 1 = 6장.
 const GPT_ACTIVE_ACCOUNT = 1;
+
+// 업스트림은 Genspark 를 account3 으로 보내지만(계정 자체가 quant3), 카드가 하나뿐이라
+// 1·2 없는 3번만 덩그러니 남는다 — 화면에서만 1 로 부른다(2026-08-10 사용자 지시).
+const GENSPARK_DISPLAY_ACCOUNT = 1;
 
 /* ── 미터 분류 ────────────────────────────────────────────────────────
    업스트림(192.168.199.120:8002)은 Claude/Codex 웹 UI 문구를 그대로 긁어와 라벨이
@@ -26,7 +32,10 @@ const GPT_ACTIVE_ACCOUNT = 1;
      session — Claude '현재 세션' / Codex '5시간 사용 한도'  → 카드 hero 링
      weekly  — Claude '모든 모델' / Codex '주간 사용 한도'   → '주간 사용량' 으로 통일
      extra   — Claude 'US$0.00 사용' (초과분 과금)          → '추가 사용량' + 금액
-     model   — 그 외(Fable, GPT-5.3-Codex-Spark) 는 라벨 그대로 */
+     model   — 그 외(Fable, GPT-5.3-Codex-Spark, Genspark '월간 크레딧') 는 라벨 그대로
+
+   Genspark 는 롤링 윈도가 아니라 결제 주기(월) 크레딧이라 미터가 '월간 크레딧' 하나뿐이다
+   — session/weekly 어디에도 안 걸리므로 pickHero 의 items[0] 폴백으로 hero 링이 된다. */
 type MeterKind = "session" | "weekly" | "model" | "extra";
 
 function meterKind(label: string): MeterKind {
@@ -77,7 +86,7 @@ function buildRows(
   const rows: MeterRowModel[] = [];
   for (const kind of ["weekly", "model", "extra"] as const) {
     for (const m of items.filter((it) => meterKind(it.label) === kind)) {
-      const pctText = `${Math.round(m.pct)}%`;
+      const pctText = m.pct != null ? `${Math.round(m.pct)}%` : "—";
       rows.push({
         key: `${kind}:${m.label}`,
         label: displayLabel(m.label),
@@ -121,6 +130,7 @@ function buildRows(
 const PROVIDER_STYLE: Record<Provider, { bar: string; chip: string }> = {
   Claude: { bar: "bg-ge-point", chip: "bg-ge-blue-bg text-ge-point" },
   GPT: { bar: "bg-slate-400", chip: "bg-slate-100 text-slate-500" },
+  Genspark: { bar: "bg-ge-navy", chip: "bg-ge-navy/10 text-ge-navy" },
 };
 
 // 잔여 여력이 아니라 소진율(pct) 기준 심각도 색. GE 게이지 팔레트.
@@ -145,6 +155,8 @@ function pickHero(items: AiUsageMeter[]): AiUsageMeter | null {
 interface CardModel {
   provider: Provider;
   account: AiUsageAccount;
+  /** 카드에 찍을 계정 번호. 업스트림 account_num 과 다를 수 있다(Genspark). */
+  displayNum: number;
 }
 
 export default function AiTokenUsagePage() {
@@ -156,22 +168,32 @@ export default function AiTokenUsagePage() {
 
   const data = usage.data;
 
-  // 한 줄 5장: Claude 전 계정(4) + GPT account1.
+  // 한 줄 7장: Claude 전 계정(5) + GPT account1 + Genspark.
   const cards: CardModel[] = [
     ...(data?.claude ?? []).map((account) => ({
       provider: "Claude" as const,
       account,
+      displayNum: account.account_num,
     })),
     ...(data?.codex ?? [])
       .filter((a) => a.account_num === GPT_ACTIVE_ACCOUNT)
-      .map((account) => ({ provider: "GPT" as const, account })),
+      .map((account) => ({
+        provider: "GPT" as const,
+        account,
+        displayNum: account.account_num,
+      })),
+    ...(data?.genspark ?? []).map((account) => ({
+      provider: "Genspark" as const,
+      account,
+      displayNum: GENSPARK_DISPLAY_ACCOUNT,
+    })),
   ];
 
   return (
     <>
       <Topbar
         title="AI Token Usage"
-        subtitle="기타 · Claude / GPT 계정별 사용량 한도"
+        subtitle="기타 · Claude / GPT / Genspark 계정별 사용량 한도"
         status={
           data ? (
             <span className="truncate text-[11px] text-slate-400">
@@ -195,8 +217,8 @@ export default function AiTokenUsagePage() {
         )}
 
         {usage.isLoading ? (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-5">
-            {Array.from({ length: 5 }).map((_, i) => (
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-7">
+            {Array.from({ length: 7 }).map((_, i) => (
               <Skeleton key={i} className="h-80 w-full rounded-2xl" />
             ))}
           </div>
@@ -207,12 +229,13 @@ export default function AiTokenUsagePage() {
         ) : cards.length === 0 ? (
           <p className="text-sm text-ink-muted">표시할 계정이 없습니다.</p>
         ) : (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-7">
             {cards.map((c) => (
               <UsageCard
                 key={`${c.provider}-${c.account.account_num}`}
                 provider={c.provider}
                 account={c.account}
+                displayNum={c.displayNum}
               />
             ))}
           </div>
@@ -234,9 +257,11 @@ function WarningBanner({ children }: { children: React.ReactNode }) {
 function UsageCard({
   provider,
   account,
+  displayNum,
 }: {
   provider: Provider;
   account: AiUsageAccount;
+  displayNum: number;
 }) {
   const style = PROVIDER_STYLE[provider];
   const hero = pickHero(account.items);
@@ -263,7 +288,7 @@ function UsageCard({
               {provider}
             </span>
             <div className="mt-1.5 text-[19px] font-extrabold leading-none tracking-tight text-ge-navy">
-              account {account.account_num}
+              account {displayNum}
             </div>
             <div className="mt-1 truncate text-[11.5px] font-medium text-ink-faint">
               {account.plan ? `${account.plan} · ` : ""}
@@ -277,10 +302,18 @@ function UsageCard({
         <SessionRing meter={hero} muted={account.stale} />
 
         {/* 나머지 한도 — 막대 + 초기화 시점 */}
-        {/* mt-auto 는 쓰지 않는다 — hero 블록 높이가 카드마다 같으므로 구분선이 5장
+        {/* mt-auto 는 쓰지 않는다 — hero 블록 높이가 카드마다 같으므로 구분선이 6장
             전부 같은 y 에 오고, 행 수가 적은 GPT 카드도 중간이 비지 않는다. */}
-        {rows.length > 0 && (
+        {(rows.length > 0 || account.monthly_credits != null) && (
           <div className="flex flex-col gap-3 border-t border-hairline pt-3.5">
+            {/* Genspark 는 미터가 hero 하나뿐이라 이 자리에 잔량 실수치를 놓는다 —
+                %만으로는 남은 크레딧이 얼마인지 알 수 없다. */}
+            {account.monthly_credits != null && (
+              <CreditsRow
+                balance={account.credit_balance}
+                quota={account.monthly_credits}
+              />
+            )}
             {rows.map((row) => (
               <MeterRow key={row.key} row={row} muted={account.stale} />
             ))}
@@ -298,7 +331,8 @@ function SessionRing({
   meter: AiUsageMeter | null;
   muted?: boolean;
 }) {
-  const pct = meter ? Math.min(100, Math.max(0, meter.pct)) : null;
+  const pct =
+    meter?.pct != null ? Math.min(100, Math.max(0, meter.pct)) : null;
   const r = 32;
   const circ = 2 * Math.PI * r;
   const dash = pct != null ? (circ * pct) / 100 : 0;
@@ -357,8 +391,8 @@ function SessionRing({
    (2026-07-30 사용자 요청). 세 줄 구조가 고정이라 카드끼리 행 높이가 맞는다. */
 function MeterRow({ row, muted }: { row: MeterRowModel; muted?: boolean }) {
   const { meter } = row;
-  const pct = meter ? Math.min(100, Math.max(0, meter.pct)) : 0;
-  const color = meter == null || muted ? "#B7C0CE" : severityColor(pct);
+  const pct = meter?.pct != null ? Math.min(100, Math.max(0, meter.pct)) : null;
+  const color = pct == null || muted ? "#B7C0CE" : severityColor(pct);
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2">
@@ -373,7 +407,7 @@ function MeterRow({ row, muted }: { row: MeterRowModel; muted?: boolean }) {
         </span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-ge-blue-bg">
-        {meter != null && (
+        {pct != null && (
           <div
             className="h-full rounded-full transition-[width] duration-500"
             style={{ width: `${pct}%`, background: color }}
@@ -382,6 +416,32 @@ function MeterRow({ row, muted }: { row: MeterRowModel; muted?: boolean }) {
       </div>
       <div className="truncate text-[10.5px] leading-tight text-ink-faint">
         {row.note ?? meter?.subtitle ?? "초기화 시점 미수집"}
+      </div>
+    </div>
+  );
+}
+
+/* Genspark 잔량 실수치 한 줄. 막대는 hero 링이 이미 같은 값을 그리므로 두지 않고,
+   MeterRow 와 같은 이름·값 두 줄 구조만 맞춘다. */
+function CreditsRow({
+  balance,
+  quota,
+}: {
+  balance: number | null;
+  quota: number;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="truncate text-[11.5px] font-semibold text-ink-muted">
+          잔여 크레딧
+        </span>
+        <span className="shrink-0 text-[11.5px] font-bold tabular-nums text-ge-navy">
+          {balance != null ? balance.toLocaleString() : "—"}
+        </span>
+      </div>
+      <div className="truncate text-[10.5px] leading-tight text-ink-faint">
+        월 {quota.toLocaleString()} 크레딧
       </div>
     </div>
   );

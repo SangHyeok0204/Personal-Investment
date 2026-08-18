@@ -4,7 +4,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ai_usage, imports, inav, internal, jobs, lan, stock_discussion, system
+from app.api import (
+    ai_usage,
+    imports,
+    inav,
+    internal,
+    jobs,
+    lan,
+    macro,
+    stock_discussion,
+    system,
+)
 from app.core.errors import register_exception_handlers
 
 
@@ -45,5 +55,6 @@ app.include_router(imports.router)
 app.include_router(internal.router)
 app.include_router(ai_usage.router)
 app.include_router(inav.router)
+app.include_router(macro.router)
 app.include_router(lan.router)
 app.include_router(stock_discussion.router)

@@ -86,12 +86,25 @@ services:
       GENERIC_TIMEZONE: Asia/Seoul
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # 파일 노드 허용 경로. ★ 이 버전의 기본값이 빈 값이 아니라 "~/.n8n-files" 라
+      #   그 밖의 경로는 전부 `The file "..." is not writable.` 로 막힌다(2026-08-12 실측).
+      #   9p 마운트 탓도, 파일 부재 탓도 아니었다 — SecurityConfig.restrictFileAccessTo 다.
+      N8N_RESTRICT_FILE_ACCESS_TO: /files
     ports:
       - "5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows/n8n:/workflows:ro
       - ./storage:/files
+      # 파일 드롭 다리(2026-08-11) — n8n 이 ./storage/trigger 에 {job}.request.json 을
+      # 떨어뜨리면 윈도우의 trigger_watch 가 실행하고 {job}.result.json 으로 답한다.
+      # SSH 를 놓으려다 그 PC 샌드박스 ACL(StrictModes)에 막혀 파일 드롭으로 선회했다.
+      # ★ 트리거 폴더가 S: 가 아니라 여기인 이유. 처음엔 S:\...\_trigger 였는데 n8n 이
+      #   "... is not writable" 로 거부했다. S: 마운트(9p/drvfs) 탓이라 짐작하고 ext4 인
+      #   ./storage 로 옮겼지만 **거기서도 같은 오류**가 났다 — 짐작은 틀렸다.
+      #   진짜 원인은 위 N8N_RESTRICT_FILE_ACCESS_TO 하나뿐이었다(2026-08-12 확정).
+      #   그럼에도 이 자리를 유지하는 건 ./storage 가 이미 /files 로 물려 있어 허용 경로와
+      #   그대로 맞아떨어지기 때문이다. 윈도우는 \\wsl.localhost 경로로 읽고 쓴다.
     depends_on:
       api:
         condition: service_started
@@ -108,6 +121,9 @@ services:
       TZ: Asia/Seoul
       # LP 평가 일별 산출물 출력 폴더(컨테이너 경로). 아래 :rw 마운트 대상.
       COLLECTOR_LP_EVAL_DIR: /srv/lp_eval
+      # [성과보고 · 환] snapshot_report.fx_daily 가 읽을 환율 parquet. S: 의 엔진은
+      # 기본값으로 raw\data\_공유모듈\... 을 잡는데 컨테이너엔 그 경로가 없어 갈아끼운다.
+      FX_PARQUET_PATH: /srv/legacy/quotes/exchange_rate.parquet
       # ── 자립(self-sufficiency) 플래그 ──
       # 구시스템(streaming.py)이 종료돼 이 collector 가 KIS 앱키를 단독 사용한다.
       # 아래 두 플래그를 0/0 으로 되돌리면 구시스템 병행운영 안전모드(piggyback-only,
@@ -158,6 +174,26 @@ services:
       - "/mnt/s/GE/raw/data/13F기관내부자/db:/srv/legacy/guru13f_db:ro"
       # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
       - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
+      # [뉴스 모니터링 · 텔레그램] 상류 Telegram_Bot(다른 PC 상주)이 굽는 집계 JSON.
+      # collector 가 실제로 읽는 파일은 output/dashboard_analysis.json **하나뿐**이다
+      # (120초마다 재판독). 같은 폴더의 input/raw·input/processed 와 output 의 일간
+      # HTML 은 안 본다.
+      # 상류 파이프라인: 30분마다 수집 → input/raw/{방}.csv, 07:30·12:30 토픽 생성
+      # → input/processed/, 2시간 슬롯마다 최근 24h 토픽을 Opus 1콜로 집계 → 그 JSON.
+      # ★계산이 왜 저쪽에 있나: 이 컨테이너에는 claude 가 없고 인증도 구독 OAuth 라
+      # 옮길 수 없다. 성과보고(perf_brief)·매크로와 같은 "S: 가 굽고 대시보드는 읽는다".
+      # ⚠️2026-08-12 이전엔 collector 가 raw CSV 를 증분 tail 로 읽어 문장 유사도로
+      # 직접 카드를 만들었다(그 방식은 폐기 — 서식이 같으면 남남을 묶었다).
+      - "/mnt/s/GE/raw/data/텔레그램모니터:/srv/legacy/telegram:ro"
+      # [매크로] 매크로모니터가 구운 output/macro_panels.json (FRED·BLS·CME 계산 결과).
+      # 같은 폴더의 db/macro.db 는 CPI/PPI 세부품목까지 담아 300MB 라 읽지 않는다 —
+      # 수치는 S: 쪽이 소유하고 collector 는 결과 JSON 만 본다(성과보고 JSON 과 같은 배선).
+      - "/mnt/s/GE/raw/data/매크로모니터:/srv/legacy/macro:ro"
+      # api 가 이미 쓰는 ./storage 공유(윈도우에서도 \\wsl.localhost 로 편집 가능).
+      # ⚠️구 telegram/keywords.json(속보·중요 배지 판정어)은 그 기능이 폐기되면서
+      # 읽는 코드가 없다 — 방 고정 머리글이 배지를 도배해 오탐이 났다(2026-08-12).
+      # 파일은 남아 있으나 참조 0건이니 이 마운트의 근거로 오해하지 말 것.
+      - ./storage:/srv/storage:rw
       # [성과보고] 정기미팅 폴더 — performance-brief 스킬이 만든 daily_*.json /
       # weekly_*.json 을 읽어 TORUS/AI테크 페이지에 네이티브 렌더. 소스 xlsx·HTML 도
       # 같은 폴더에 있지만 collector 는 JSON 만 본다.
@@ -166,9 +202,24 @@ services:
       # TORUS/AI테크 페이지에 iframe(srcDoc) 렌더. 계산·서사 전부 S: 쪽 소관이라
       # collector 는 파일명 규약으로 고르고 원문만 넘긴다. 루트와 output/ 만 스캔.
       - "/mnt/s/GE/raw/오퍼레이션/성과분석/운용 펀드 성과 분석 자동화:/srv/legacy/perf_analysis:ro"
-      # LP 평가 일별 산출물 — S: 로의 유일한 쓰기(:rw). collector 가 09:05~15:20 매
-      # 표본마다 그날치 JSON(lp_eval_{date}.json) + 전기간 마스터 CSV(lp_eval_history.csv)
-      # 를 덮어쓴다. etf_data(:ro)의 하위 폴더지만 별개 마운트라 쓰기 가능.
+      # [성과보고 생성] 위 :ro 의 하위 두 폴더만 :rw 로 겹쳐 건다(2026-08-11).
+      # perf_generate 가 아침 스케줄로 보고서를 만들면서 쓰는 곳이고, 그 둘뿐이다.
+      # 입력(input/)과 엔진(분석엔진/)은 :ro 로 남는다 — 소스와 로직은 운용역 소관이라
+      # 컨테이너가 건드릴 자리가 아니다. lp_eval 과 같은 중첩 마운트 패턴이다.
+      #   output/  보고서 HTML.  파일명이 대시보드와의 계약(perf_report._classify)
+      #   funds/   누적수익률 시계열 JSON. build_funds 가 .tmp 로 쓰고 replace 한다
+      - "/mnt/s/GE/raw/오퍼레이션/성과분석/운용 펀드 성과 분석 자동화/output:/srv/legacy/perf_analysis/output:rw"
+      - "/mnt/s/GE/raw/오퍼레이션/성과분석/운용 펀드 성과 분석 자동화/funds:/srv/legacy/perf_analysis/funds:rw"
+      # [성과보고 · 환] 사내 공유 시세 데이터(LSEG). 전기차 스냅샷은 종목수익률이 상장
+      # 거래소 통화 기준이라 원화로 올리려면 다통화 환율이 필요한데, 소스 엑셀엔 없다.
+      # snapshot_report.fx_daily 가 exchange_rate.parquet 만 읽는다(대 KRW 10페어).
+      # 같은 폴더의 prc_vol.parquet 은 285MB 지만 마운트일 뿐 읽지 않는다.
+      - "/mnt/s/GE/raw/data/_공유모듈/시세데이터:/srv/legacy/quotes:ro"
+      # LP 평가 일별 산출물(:rw). collector 가 09:05~15:20 매
+      # 표본마다 그날치 JSON(lp_eval_{date}.json)·분단위 CSV 를 갱신하고, 전기간 마스터
+      # CSV(lp_eval_history.csv)는 매일 16:30 KST 에 1회 이관한다(2026-08-10).
+      # 휴장일·주말에는 표본 자체가 없어 파일도 안 생긴다.
+      # etf_data(:ro)의 하위 폴더지만 별개 마운트라 쓰기 가능.
       - "/mnt/s/GE/raw/data/ETF_iNAV모니터/lp_eval:/srv/lp_eval:rw"
     # 24시간 상시가동: 재부팅·크래시 후 자동 복구 (2026-07-21).
     # 단 profiles:["collector"] 게이트라 최초 1회는 --profile collector 로 띄워야 하며,

@@ -17,15 +17,21 @@ export function tickSize(price: number): number {
    항상 띄우고, 아래 밴드로 옅은 회색 / 오렌지 / 빨강을 고른다.
    구 임계값(SPREAD_ALERT_MIN_BP=15bp 발화 하한, DEV_ABS_ALERT_PCT=1% 발화,
    SPREAD_MISSING_MAX_TICKS=20틱 초과 물량X)은 발화 개념과 함께 폐기됐다. */
-export type Severity = "calm" | "warn" | "crit";
+// notice 는 호가 스프레드에만 쓰인다(아래 3밴드). 괴리는 여전히 calm/warn/crit 3단.
+export type Severity = "calm" | "notice" | "warn" | "crit";
 
-// 호가 스프레드(bp) — 0~20 회색 · 20~40 오렌지 · 40↑ 빨강.
+// 호가 스프레드(bp) — 0~10 회색 · 10~20 노랑 · 20~40 주황 · 40↑ 빨강.
+// ★2026-08-14 사용자 지정으로 2밴드(20·40) → 3밴드(10·20·40). 종전에는 10bp대가
+// 20bp 미만이라 전부 회색이었는데, 그 구간이 실무에서 이미 '슬슬 벌어진다' 신호다.
+// 빨강(=줄 라벨 강조·깜빡임·카드 테두리) 기준은 40bp 그대로다 — 아래 isHogaCrit 참조.
+export const SPREAD_NOTICE_BP = 10;
 export const SPREAD_WARN_BP = 20;
 export const SPREAD_CRIT_BP = 40;
 
 export function spreadSeverity(bp: number): Severity {
   if (bp >= SPREAD_CRIT_BP) return "crit";
   if (bp >= SPREAD_WARN_BP) return "warn";
+  if (bp >= SPREAD_NOTICE_BP) return "notice";
   return "calm";
 }
 

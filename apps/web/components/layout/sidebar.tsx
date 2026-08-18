@@ -40,7 +40,7 @@ const navItems: NavItem[] = [
     icon: Newspaper,
     children: [
       { label: "기사" },
-      { label: "텔레그램" },
+      { label: "텔레그램", href: "/telegram-news" },
       { label: "placeholder" },
       { label: "placeholder" },
     ],
@@ -49,6 +49,7 @@ const navItems: NavItem[] = [
     label: "Quant",
     icon: Sigma,
     children: [
+      { label: "매크로", href: "/macro" },
       { label: "모멘텀" },
       { label: "재무" },
       { label: "기술적 분석" },
@@ -60,7 +61,6 @@ const navItems: NavItem[] = [
     icon: History,
     children: [
       { label: "TORUS/AI테크", href: "/track-record/torus-aicoretech" },
-      { label: "GURU[13F]", href: "/track-record/guru-13f" },
       { label: "FUND3" },
     ],
   },

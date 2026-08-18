@@ -23,7 +23,7 @@ import sqlite3
 import time
 from datetime import datetime
 
-from collector import guru_queries
+from collector import guru_flows, guru_queries
 
 # 소스 DB(:ro 마운트) 와 로컬 스냅샷 복사본 경로.
 SRC_DB = os.environ.get("GURU13F_SRC_DB", "/srv/legacy/guru13f_db/filings.db")
@@ -107,6 +107,7 @@ class Guru13F:
         self._roster: dict | None = None
         self._consensus: dict | None = None
         self._turnover: dict | None = None
+        self._flows: dict | None = None
         self._latest_period: str | None = None
 
     # ── 복사 게이트 (§3-B) ────────────────────────────────────────────
@@ -180,12 +181,14 @@ class Guru13F:
             roster = self._build_roster()
             consensus = self._build_consensus(roster)
             turnover = self._build_turnover(roster)
+            flows = self._build_flows(roster)
         except Exception as exc:              # noqa: BLE001 — last-good 유지
             _log(f"precompute failed: {exc!r} — keeping last-good")
             return
         self._roster = roster
         self._consensus = consensus
         self._turnover = turnover
+        self._flows = flows
         self._latest_period = roster.get("latest_period")
         self._snapshot_mtime = mtime
         self._dbver = str(int(mtime)) if mtime else "0"
@@ -227,15 +230,32 @@ class Guru13F:
             qs = sorted(periods)
             gurus.append({"cik": cik, "guru": gl["guru"], "firm": gl["firm"],
                           "latest": qs[-1], "quarters": qs})
-        latest_overall = max((g["latest"] for g in gurus), default=None)
-        # 초기 노출 = 최신분기 제출 거장 중 대표 화이트리스트(§8-1). 미설정 시 전체.
-        exposed = [g for g in gurus if g["latest"] == latest_overall]
+        # ★ 기준 분기는 "가장 늦은 period" 가 아니라 "제출률이 충분한 최신 period" 다.
+        #   13F 공시기한이 분기말+45일이라 마감 직전에는 최신 분기 제출자가 한 자릿수다.
+        #   실측 2026-08-11 기준 2026-06-30 을 낸 큐레이션 거장은 23명 중 1명이었고,
+        #   그 1명을 기준으로 잡으면 exposed 가 1명 → 화이트리스트 교집합 0명이 되어
+        #   roster/consensus/turnover 가 전부 비고, 웹은 선택 거장이 없어 상단 카드
+        #   쿼리조차 뜨지 않는다(페이지 전체 공백). 제출률 50% 미만 분기는 건너뛴다.
+        per_period: dict[str, int] = {}
+        for _cik, _periods in by_cik.items():
+            for _p in _periods:
+                per_period[_p] = per_period.get(_p, 0) + 1
+        _n = len(by_cik) or 1
+        _usable = sorted((p for p, k in per_period.items() if k / _n >= 0.5), reverse=True)
+        # 어느 분기도 기준을 못 넘으면(초기 수집 등) 종전 동작으로 되돌아간다.
+        latest_overall = _usable[0] if _usable else max(
+            (g["latest"] for g in gurus), default=None)
+        # 초기 노출 = 기준 분기를 제출한 거장 중 대표 화이트리스트(§8-1). 미설정 시 전체.
+        # `g["latest"] == latest_overall` 이 아니라 `in quarters` 로 본다. 한 발 앞서
+        # 다음 분기를 제출한 거장이 기준 분기 보유를 갖고도 빠지는 일을 막는다.
+        exposed = [g for g in gurus if latest_overall in g["quarters"]]
         if DEFAULT_ROSTER_CIKS:
             exposed = [g for g in exposed if g["cik"] in DEFAULT_ROSTER_CIKS]
         # AUM 내림차순 정렬 + 드롭다운 표시용 (background 이므로 per-guru 쿼리 허용)
         for g in exposed:
             try:
-                pc = guru_queries.position_changes(g["cik"], prev=g["latest"], curr=g["latest"])
+                pc = guru_queries.position_changes(
+                    g["cik"], prev=latest_overall, curr=latest_overall)
                 g["aum_usd"] = sum(r["value_curr"] for r in pc["rows"])
             except Exception:                 # noqa: BLE001
                 g["aum_usd"] = 0.0
@@ -324,6 +344,36 @@ class Guru13F:
         if period is not None and period != self._latest_period:
             return None
         return {"generatedAt": _now(), "dbVersion": self._dbver, **self._turnover}
+
+    # ── 변동 분석(guru_flows) — 리밸런싱 / 편입·방출 / 섹터 ──────────
+    def _build_flows(self, roster: dict) -> dict:
+        """세 뷰를 한 번에 사전계산한다.
+
+        요청 경로에서 돌리지 않는 이유는 consensus/turnover 와 같다. 두 분기 x
+        거장 전원의 보유행을 훑으므로 on-request 로 두면 동시 요청에 취약하다.
+        분기 선택은 guru_flows.pick_periods 가 제출률로 판단한다(최신 분기가
+        공시 러시 전이면 자동으로 한 분기 뒤로 물러난다).
+        """
+        # ★ roster["gurus"] 를 쓰지 않는다. _build_roster 는 "최신 분기 제출자"만
+        #   노출하는데(exposed), 13F 공시기한(분기말+45일) 직전에는 그 분기 제출자가
+        #   한 자릿수라 로스터가 비어버린다. 실측 2026-08-11 기준 2026-06-30 을
+        #   제출한 큐레이션 거장은 1명이었고 DEFAULT_ROSTER_CIKS 와 교집합하면 0명이었다.
+        #   변동 분석은 큐레이션 로스터 **전원**을 모집단으로 쓰고, 어느 분기를 비교할지는
+        #   guru_flows.pick_periods 가 제출률로 판단한다.
+        ciks = list(guru_queries.GURU_BY_CIK.keys())
+        return {
+            "rebalance": guru_flows.rebalance_intensity(ciks),
+            "entries_exits": guru_flows.entries_exits(ciks),
+            "sector": guru_flows.sector_flows(ciks),
+        }
+
+    def flows(self, view: str | None = None) -> dict | None:
+        if not self._ready or self._flows is None:
+            return None
+        base = {"generatedAt": _now(), "dbVersion": self._dbver}
+        if view in ("rebalance", "entries_exits", "sector"):
+            return {**base, **self._flows[view]}
+        return {**base, **self._flows}
 
     def portfolio(self, cik: str, period: str) -> dict | None:
         if not self._ready:

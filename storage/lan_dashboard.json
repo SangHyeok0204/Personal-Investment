@@ -2,15 +2,6 @@
   "checkIntervalMs": 30000,
   "servers": [
     {
-      "id": "taco",
-      "name": "TACO",
-      "host": "192.168.194.121",
-      "port": 8501,
-      "protocol": "http",
-      "description": "TACO",
-      "group": "Server-P"
-    },
-    {
       "id": "192_168_199_120-4000-1776907079564",
       "name": "LAN Server Monitor",
       "host": "192.168.199.120",

@@ -91,6 +91,17 @@ ROLLOVER_CHECK_S = 60.0
 # 바스켓으로 빌드된다 → 08:40 이후 오늘 basket 이 아직이면 재빌드해 오늘 PDF 를 태운다.
 MORNING_RELOAD_MIN = 8 * 60 + 40  # 08:40 KST
 LP_EVAL_SAMPLE_S = 60.0        # LP 평가 — 인정 스프레드 틱 체류시간 표본 주기(1분)
+# LP 평가 일일 스케줄 — 자정 개장일 판정 + 16:30 마스터 CSV 이관. 폴링(60초)으로 보는
+# 이유는 _rollover_loop 와 같다: 재기동이 그 시각을 지나 일어나도(예: 16:41 복구) 그
+# 날 이관이 통째로 빠지지 않고 다음 분에 따라잡는다.
+LP_EVAL_DAILY_CHECK_S = 60.0
+LP_EVAL_EXPORT_MIN = 16 * 60 + 30   # 16:30 KST
+
+# [뉴스 모니터링 · 텔레그램] 카드 재계산 주기. 상류 수집기가 30분마다 raw CSV 에
+# append 하므로 이보다 잦게 돌 이유는 '시간 감쇠로 카드 순위가 밀리는 것'뿐이다.
+# 상류 집계는 하루 2회(08:00·13:00)뿐이라 판독은 드물어도 된다. 다만 stale 판정이
+# 풀링 시각을 지나는 순간 서야 해서, 파일이 그대로여도 이 주기로 다시 판정한다.
+TELEGRAM_NEWS_REFRESH_S = 120.0
 
 # KIS realtime WebSocket lane.
 WS_ROTATION_S = 30.0          # legacy --rotation-seconds default (when >40 targets)
@@ -1083,6 +1094,63 @@ class Collector:
             except Exception as exc:  # noqa: BLE001 - 표본 실패는 그 분만 건너뜀
                 _log(f"lp-eval sample failed: {exc!r}")
 
+    async def _lp_eval_daily_loop(self) -> None:
+        """LP 평가 일일 스케줄 (2026-08-10 신설).
+
+        (1) 자정(KST 날짜가 바뀔 때) 오늘이 한국 증시 개장일인지 판정해 로그로 남긴다.
+            실제 차단은 lp_eval.sample_once 가 표본마다 다시 확인하므로, 이 로그는
+            '오늘 왜 안 쌓이는지'를 사람이 바로 알 수 있게 하는 용도다(재기동에도
+            판정이 유실되지 않는 게 이 이중 구조의 요점).
+        (2) 16:30 KST 에 전 거래일 요약을 마스터 CSV 로 이관한다.
+        """
+        from collector import lp_eval as _lpe
+
+        judged_date = ""
+        exported_date = ""
+        while not self.stop_event.is_set():
+            current = legacy_inputs.kst_today()
+            if current != judged_date:
+                judged_date = current
+                try:
+                    is_open, reason = _lpe.trading_day_status()
+                    _log(f"lp-eval {reason} → 표본 {'수집' if is_open else '중지'}")
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"lp-eval trading-day check failed: {exc!r}")
+            if _kst_minutes_now() >= LP_EVAL_EXPORT_MIN and exported_date != current:
+                try:
+                    if _lpe.export_history_csv(self.etf_names):
+                        exported_date = current
+                        _log(f"lp-eval history CSV 이관 완료 ({current})")
+                    else:
+                        # 마운트 부재(로컬 개발) — 매분 재시도하지 않도록 오늘은 종료.
+                        exported_date = current
+                        _log("lp-eval history CSV skip: 출력 폴더 없음")
+                except Exception as exc:  # noqa: BLE001 - 다음 분에 재시도
+                    _log(f"lp-eval history export failed: {exc!r}")
+            if await self._sleep_or_stop(LP_EVAL_DAILY_CHECK_S):
+                return
+
+    async def _telegram_news_loop(self) -> None:
+        """[뉴스 모니터링 · 텔레그램] 상류 집계 JSON(2시간 간격 풀링) 판독.
+
+        SMB 왕복이라 executor 로 내보내 이벤트 루프를 막지 않는다. 기동 직후 1회를
+        먼저 돌려 화면이 첫 폴링에서 바로 채워지게 한다.
+        """
+        from collector import telegram_news as _tn
+
+        news = _tn.instance()
+        if not news.available():
+            _log(f"telegram-news: {_tn.ANALYSIS_PATH} 마운트 없음 — 루프 미가동")
+            return
+        loop = asyncio.get_running_loop()
+        while not self.stop_event.is_set():
+            try:
+                await loop.run_in_executor(None, news.refresh)
+            except Exception as exc:  # noqa: BLE001 - 한 사이클 실패는 직전 카드 유지
+                _log(f"telegram-news refresh failed: {exc!r}")
+            if await self._sleep_or_stop(TELEGRAM_NEWS_REFRESH_S):
+                return
+
     # ── FastAPI / uvicorn ──────────────────────────────────────────────
     def _build_app(self) -> FastAPI:
         app = FastAPI(title="ETF iNAV collector", docs_url=None, redoc_url=None)
@@ -1233,9 +1301,29 @@ class Collector:
         def guru_consensus_ep(request: Request, period: str | None = None):
             return _guru_serve(request, lambda: guru.consensus(period), "consensus", period or "latest")
 
+        # ── 변동 분석: 동시 리밸런싱 / 편입·방출 / 섹터 ────────────────
+        # view 생략 시 세 뷰를 한 번에. 사전계산분이라 응답은 가볍다.
+        @app.get("/guru-13f/flows")
+        def guru_flows_ep(request: Request, view: str | None = None):
+            return _guru_serve(request, lambda: guru.flows(view), "flows", view or "all")
+
         @app.get("/guru-13f/turnover")
         def guru_turnover_ep(request: Request, period: str | None = None):
             return _guru_serve(request, lambda: guru.turnover(period), "turnover", period or "latest")
+
+        # ── [매크로] 물가·고용·유동성 패널 ──────────────────────────────
+        # S: 매크로모니터가 macro.db 에서 계산해 구운 macro_panels.json 만 읽는다
+        # (DB 자체는 세부품목까지 담아 300MB 라 컨테이너로 복사하지 않는다).
+        @app.get("/macro/panels")
+        def macro_panels_ep(request: Request):
+            from collector import macro_monitor as _mm
+            payload = _mm.panels()
+            if not payload:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            tag = _mm.etag()
+            if request.headers.get("if-none-match") == tag:
+                return Response(status_code=304, headers={"ETag": tag})
+            return JSONResponse(payload, headers={"ETag": tag})
 
         # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────
         # S:\GE\_Team\07_회의자료 (:ro 마운트) 를 루트로 폴더 탐색 + HTML 원문 반환.
@@ -1262,6 +1350,21 @@ class Collector:
             if html is None:
                 return JSONResponse({"detail": "not found"}, status_code=404)
             return JSONResponse({"path": path, "html": html})
+
+        # ── [뉴스 모니터링 · 텔레그램] 실시간 카드 피드 ─────────────────
+        # 방별 raw CSV(:ro) 를 증분 tail 로 읽어 만든 매크로/산업/종목 × 5장.
+        # 백그라운드 루프(_telegram_news_loop)가 만들어 둔 것만 내준다 — 요청
+        # 경로에 SMB 왕복이 끼면 폴링 화면이 통째로 느려진다.
+        @app.get("/telegram-news")
+        def telegram_news(request: Request):
+            from collector import telegram_news as _tn
+
+            payload, etag = _tn.instance().serve()
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers={"ETag": etag})
+            return JSONResponse(payload, headers={"ETag": etag})
 
         # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────
         # S:\GE\Wonjae\07_회의자료\정기미팅 (:ro) 의 성과보고 JSON 을 요일 규칙
@@ -1345,6 +1448,22 @@ class Collector:
                 return JSONResponse({"detail": "not found"}, status_code=404)
             return JSONResponse({"path": path, "html": html})
 
+        # [성과보고 생성] 사람이 돌리던 bat 을 대신한다. n8n 이 아침에 여러 번 부르고,
+        # 실행 여부는 시각이 아니라 Price 시트가 늘었는지로 정한다(perf_generate 참조).
+        # 멱등이라 몇 번을 불러도 기준일당 한 번만 만든다. force=1 은 수동 재생성용.
+        # SMB + openpyxl 이라 수십 초가 걸린다. 호출부 타임아웃을 넉넉히 잡을 것.
+        @app.post("/perf-report/generate")
+        def perf_report_generate(scope: str = "일간", force: bool = False):
+            from collector import perf_generate as _pg
+            try:
+                return JSONResponse(_pg.generate(scope=scope, force=force))
+            except ValueError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"perf-report/generate failed: {exc!r}")
+                return JSONResponse({"detail": "perf-report generate error"},
+                                    status_code=503)
+
         # [누적 수익률 비교] S: 의 build_funds.py 가 만든 표준 시계열 JSON. 펀드가 몇 개로
         # 늘어나든 이 엔드포인트는 그대로다 — 엑셀 레이아웃 편차는 전부 S: 에서 흡수한다.
         @app.get("/fund-series")
@@ -1409,6 +1528,8 @@ class Collector:
             asyncio.create_task(self._ws_loop()),
             asyncio.create_task(self._rollover_loop()),
             asyncio.create_task(self._lp_eval_loop()),
+            asyncio.create_task(self._lp_eval_daily_loop()),
+            asyncio.create_task(self._telegram_news_loop()),
             asyncio.create_task(self._serve_api()),
         ]
         _log(f"loops started (api on {API_HOST}:{API_PORT})")

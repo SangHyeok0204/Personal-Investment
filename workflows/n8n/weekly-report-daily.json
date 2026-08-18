@@ -1,0 +1,393 @@
+{
+  "id": "daily-reports",
+  "name": "주간가격 · 매크로 리포트 일간 생성",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 30,40,50 8 * * 1-5"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 0,10,20,30,40,50 9 * * 1-5"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 0,10,20,30 10 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trg-drop",
+      "name": "평일 08:30~10:30 · 10분",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 요청 본문. job 이름은 파일명이 이미 쥐고 있어 date 만 실어 보내면 된다.\n// 게이트는 윈도우 쪽(pipeline/gate.py)이 판단하므로 여기서 '만들지 말지'를 정하지 않는다.\nconst kst = new Date(Date.now() + 9 * 3600 * 1000);\nreturn [{ json: { job: 'weekly-report', date: kst.toISOString().slice(0, 10) } }];"
+      },
+      "id": "code-req",
+      "name": "요청 만들기",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "/files/trigger/weekly-report.request.json",
+        "options": {}
+      },
+      "id": "write-req",
+      "name": "트리거 파일 떨어뜨리기",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 35 10 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trg-check",
+      "name": "평일 10:35 · 결과 점검",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -220,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "/files/trigger/weekly-report.result.json",
+        "options": {}
+      },
+      "id": "read-res",
+      "name": "결과 읽기",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        0,
+        240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "options": {}
+      },
+      "id": "parse-res",
+      "name": "결과 파싱",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        220,
+        240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 알림을 보낼지 판정한다.\n// ★ 결과 파일은 어제 것이 남아 있을 수 있다 - finishedAt 이 오늘이 아니면\n//   '오늘 아무것도 안 돌았다'로 본다. 낡은 성공 기록에 속아 침묵하는 것을 막는다.\nconst kstDay = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);\nconst it = $input.first()?.json ?? {};\nconst res = it.result ?? {};\nconst finishedToday = (it.finishedAt ?? '').slice(0, 10) === kstDay;\n\nlet alert = false, msg = '';\nif (!finishedToday) {\n  alert = true;\n  msg = `오늘(${kstDay}) 실행 기록이 없습니다. 트리거 워처가 꺼져 있을 수 있습니다 (run_trigger_watch.bat).`;\n} else if (res.status === 'error') {\n  alert = true;\n  msg = `리포트 생성 실패: ${res.reason ?? '사유 미상'}`;\n} else if (res.stale === true) {\n  alert = true;\n  msg = `10:35 인데 아직 소스 미갱신입니다. price_monitor.xlsx 를 새로고침·저장해 주세요 (시트 ${res.asOf ?? '?'}).`;\n} else {\n  msg = `정상 (${res.status}) - ${res.reason ?? ''}`;\n}\nreturn [{ json: { alert, msg, kstDay, result: res, finishedAt: it.finishedAt ?? null } }];"
+      },
+      "id": "judge",
+      "name": "판정",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-alert",
+      "name": "알림 필요?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        240
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "noop-alert",
+      "name": "알림 (채널 연결 자리)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        160
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "noop-ok",
+      "name": "정상",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 50 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trg-macro",
+      "name": "평일 07:50 · 매크로",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -220,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 매크로는 게이트가 없다 - 사용자 지정으로 정해진 시각(07:50)에 무조건 돈다.\n// 소스가 investing.com 크롤이라 '갱신을 기다릴' 신호 자체가 없기 때문이다.\nconst kst = new Date(Date.now() + 9 * 3600 * 1000);\nreturn [{ json: { job: 'macro-daily', date: kst.toISOString().slice(0, 10) } }];"
+      },
+      "id": "code-macro",
+      "name": "매크로 요청 만들기",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "/files/trigger/macro-daily.request.json",
+        "options": {}
+      },
+      "id": "write-macro",
+      "name": "매크로 트리거 떨어뜨리기",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "conv-weekly-report",
+      "name": "JSON 파일로",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "conv-macro-daily",
+      "name": "JSON 파일로 (매크로)",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "평일 08:30~10:30 · 10분": {
+      "main": [
+        [
+          {
+            "node": "요청 만들기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "요청 만들기": {
+      "main": [
+        [
+          {
+            "node": "JSON 파일로",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "평일 10:35 · 결과 점검": {
+      "main": [
+        [
+          {
+            "node": "결과 읽기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "결과 읽기": {
+      "main": [
+        [
+          {
+            "node": "결과 파싱",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "결과 파싱": {
+      "main": [
+        [
+          {
+            "node": "판정",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "판정": {
+      "main": [
+        [
+          {
+            "node": "알림 필요?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "알림 필요?": {
+      "main": [
+        [
+          {
+            "node": "알림 (채널 연결 자리)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "정상",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "평일 07:50 · 매크로": {
+      "main": [
+        [
+          {
+            "node": "매크로 요청 만들기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매크로 요청 만들기": {
+      "main": [
+        [
+          {
+            "node": "JSON 파일로 (매크로)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON 파일로": {
+      "main": [
+        [
+          {
+            "node": "트리거 파일 떨어뜨리기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON 파일로 (매크로)": {
+      "main": [
+        [
+          {
+            "node": "매크로 트리거 떨어뜨리기",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Asia/Seoul",
+    "executionOrder": "v1"
+  }
+}

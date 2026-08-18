@@ -1,7 +1,8 @@
 ﻿# 개인 투자 플랫폼 (Personal Investment Platform)
 
-Windows + WSL2 + Docker Desktop 환경에서 실행되는 로컬 개인 투자 플랫폼의 초기 골격이다.
-이 단계의 목표는 투자 분석 기능이 아니라, 다음 수직 흐름이 처음부터 끝까지 동작하게 만드는 것이다.
+Windows + WSL2 + Docker Desktop 환경에서 실행되는 로컬 개인 투자 플랫폼이다.
+2026-07 에 작업(job) 파이프라인 골격으로 시작해, 지금은 사내 리포트·모니터링 화면 십여 개를
+얹은 대시보드로 쓰고 있다. 골격은 그대로다 — 백그라운드 일은 전부 작업 하나로 수렴한다.
 
 ```text
 Next.js 화면에서 작업 실행
@@ -12,29 +13,39 @@ Next.js 화면에서 작업 실행
   -> Next.js에서 진행 결과 확인
 ```
 
-n8n에서도 같은 FastAPI 내부 작업 생성 API(`POST /internal/jobs`)를 호출할 수 있다.
+여기에 두 갈래가 더 붙어 있다.
+
+- **collector** — S: 공유 폴더의 레거시 엔진·데이터를 그대로 임포트해 계산하는 별도 서비스
+  (ETF iNAV · WRAP · LP평가 · 성과분석 · 13F · 매크로 · 텔레그램 뉴스). job 파이프라인을 거치지
+  않고 api 가 프록시해 부른다. `profiles: ["collector"]` 게이트라 최초 1회는 프로필을 켜서 띄운다.
+- **n8n** — 스케줄 자동화. `POST /internal/jobs` 로 작업을 만들기도 하고, collector 를 직접
+  부르기도 하고(`/perf-report/generate`), 윈도우 PC 에 파일 드롭으로 일을 넘기기도 한다
+  (`storage/trigger`). 자세한 건 `workflows/n8n/README.md`.
 
 ## 1. 목적
 
-- 로컬에서 도는 작업 처리 파이프라인의 골격 구축 (job 생성 → worker 처리 → 상태 조회).
-- 첫 실제 작업으로 CSV 업로드 및 검증을 구현한다 (실제 포트폴리오 적재는 다음 단계).
-- 투자 지표, 뉴스 크롤링, 퀀트 분석, 백테스트, AI 기능은 이 단계에서 구현하지 않는다.
+- 로컬에서 도는 작업 처리 파이프라인 (job 생성 → worker 처리 → 상태 조회).
+- 사내 리포트·모니터링을 한 화면에 모으기 (iNAV · WRAP · 성과분석 · 매크로 · 텔레그램 뉴스 등).
+- 손으로 돌리던 리포트 생성을 스케줄로 대체하기 (성과분석 · 주간가격모니터 · 매크로모니터).
 
 ## 2. 전체 구조
 
 ```text
 personal-investment-platform/
 ├── apps/
-│   ├── web/         # Next.js 15 대시보드 (Overview / Data Operations / Settings)
+│   ├── web/         # Next.js 15 대시보드
 │   ├── api/         # FastAPI + SQLAlchemy + Alembic
-│   └── worker/      # PostgreSQL polling worker
+│   ├── worker/      # PostgreSQL polling worker
+│   └── collector/   # 레거시 엔진 재사용 계산 서비스 (S: 마운트 · profile 게이트)
 ├── database/
 │   ├── migrations/  # Alembic 마이그레이션
 │   └── seeds/
-├── workflows/n8n/   # n8n 워크플로 (Create Test Job)
+├── workflows/n8n/   # n8n 워크플로 JSON + 운영 메모(README)
 ├── storage/
 │   ├── raw/         # 업로드된 원본 CSV
-│   └── processed/   # 검증·정규화된 CSV
+│   ├── processed/   # 검증·정규화된 CSV
+│   └── trigger/     # n8n ↔ 윈도우 워처 파일 드롭 다리
+├── tools/           # 윈도우 사이드카 (perf-brief-runner 등)
 ├── scripts/         # 샘플 CSV, 통합 테스트 스크립트
 ├── docs/architecture/
 ├── docker-compose.yml
@@ -52,8 +63,19 @@ personal-investment-platform/
 | worker | 작업 처리 프로세스 | (없음) |
 | postgres | PostgreSQL 16 | 5432 |
 | n8n | 워크플로 자동화 | 5678 |
+| collector | 레거시 엔진 계산 서비스 | (없음 · 내부 8100) |
 
-컨테이너 내부 통신은 서비스 이름으로 한다 (`http://api:8000`, `postgres:5432`). `localhost`는 쓰지 않는다.
+`collector` 는 `profiles: ["collector"]` 게이트라 기본 `make up` 으로는 안 뜬다. 최초 1회만 아래로
+띄우면 그 뒤부터는 Docker 재시작 때 자동 기동된다(`restart: unless-stopped`).
+
+```bash
+docker compose --profile collector up -d collector
+```
+
+S: 공유 폴더를 여러 갈래로 마운트하는데 **입력과 엔진은 전부 `:ro`** 다. 쓰기가 열린 곳은
+`output/` · `funds/` · `lp_eval/` · `.cache` 뿐이다(compose 주석 참조).
+
+컨테이너 내부 통신은 서비스 이름으로 한다 (`http://api:8000`, `http://collector:8100`, `postgres:5432`). `localhost`는 쓰지 않는다.
 
 ## 3. 사전 설치 프로그램
 
@@ -105,6 +127,19 @@ make migrate   # docker compose exec api alembic upgrade head
 
 http://localhost:3000
 
+화면은 사이드바 그룹으로 묶여 있다.
+
+| 그룹 | 화면 |
+|---|---|
+| 시장 모니터링 | `/inav` iNAV 모니터 · `/wrap` WRAP · `/lp-eval` LP 평가 |
+| 뉴스 모니터링 | `/telegram-news` 텔레그램 |
+| Quant | `/macro` 매크로 |
+| 성과 분석 | `/track-record/torus-aicoretech` TORUS/AI테크 |
+| 기타 | `/ai-token-usage` · `/lan-dashboard` · `/stock-discussion` 종토방 · `/meeting` 회의 · `/settings` |
+| 골격 | `/` 메인 · `/data-operations` 작업·CSV |
+
+사이드바에 href 가 없는 항목(모멘텀·재무·sentiment·FUND3 등)은 아직 페이지가 없는 자리다.
+
 ## 9. FastAPI 문서 주소
 
 http://localhost:8000/docs (Swagger UI)
@@ -113,18 +148,30 @@ http://localhost:8000/docs (Swagger UI)
 
 http://localhost:5678
 
+### 등록된 워크플로
+
+| 파일 | 워크플로 | 스케줄 |
+|---|---|---|
+| `create-test-job.json` | Create Test Job (연동 검증용) | 수동 |
+| `perf-report-daily.json` | 성과분석 보고서 생성 | 평일 08:30~10:30 10분 간격(13회) · 월요일엔 주간도 |
+| `weekly-report-daily.json` | 주간가격 · 매크로 리포트 생성 (id `daily-reports`) | 주간가격 평일 08:30~10:30 13회 + 10:35 점검 / 매크로 평일 07:50 1회 |
+
+블룸버그 BDH 워크북을 **사람이 저장해야** 새 종가가 들어오는데 그 시각이 07:5x~09:4x 로 흔들려서,
+한 번이 아니라 도착할 때까지 두드리는 구조다. 중복 생성은 서버·윈도우 쪽 게이트가 막는다.
+설계 근거와 함정은 `workflows/n8n/README.md` 에 정리돼 있다.
+
 ### n8n 워크플로 import
 
-`Create Test Job` 워크플로(`workflows/n8n/create-test-job.json`)를 n8n에 등록하는 방법은 두 가지다.
-
-- **UI**: http://localhost:5678 접속 → 우측 상단 메뉴 → **Import from File** → `workflows/n8n/create-test-job.json` 선택.
+- **UI**: http://localhost:5678 접속 → 우측 상단 메뉴 → **Import from File** → JSON 선택.
 - **CLI** (`./workflows/n8n`가 컨테이너의 `/workflows`로 마운트되어 있다):
 
   ```bash
   docker compose exec n8n n8n import:workflow --input=/workflows/create-test-job.json
+  docker compose exec n8n n8n list:workflow          # 무엇이 등록·활성인지 확인
   ```
 
-import 후 워크플로를 열고 **Execute Workflow**를 누르면 `POST /internal/jobs`로 테스트 작업이 생성된다. 자세한 내용은 `workflows/n8n/README.md` 참고.
+`import:workflow` 는 워크플로를 **비활성 상태로** 넣는다(이미 활성이던 것도 재import 하면 꺼진다).
+스케줄이 실제로 돌게 하려면 `publish:workflow --id=...` 후 `docker compose restart n8n` 이 필요하다.
 
 ## 11. CSV 테스트 방법
 
