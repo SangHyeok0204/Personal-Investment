@@ -71,6 +71,7 @@ from collector.legacy_inputs import CACHE_DIR, DB_DEST, MASTER_CACHE_DIR
 from collector.state import SnapshotState, json_safe, now_kst_string
 from collector.wrap import WrapCollector
 from collector.guru13f import Guru13F
+from collector.stock_monitor import StockMonitor
 
 FX_SYMBOLS = ("USD", "CNY", "HKD", "JPY", "EUR", "CAD", "TWD")
 
@@ -235,6 +236,8 @@ class Collector:
         self.stop_event = asyncio.Event()
         # GURU[13F] 서비스 (KIS 비의존, 독립 refresh 루프 + 로컬 .cache 스냅샷).
         self.guru13f = Guru13F()
+        # [종목 모니터] KOSPI200 분봉 급등락·이상탐지 (독립 .cache 스냅샷, KIS 비의존).
+        self.stock_monitor = StockMonitor()
 
         self.engine: InavEngine | None = None
         self.instruments: list[dict] = []
@@ -1239,6 +1242,30 @@ class Collector:
             except Exception as exc:  # noqa: BLE001
                 _log(f"lp-eval-ts failed: {exc!r}")
                 return JSONResponse({"detail": "lp-eval-ts error"}, status_code=503)
+
+        @app.get("/index-strip")
+        def index_strip():
+            # [종목 모니터] 상단 지수 스트립 — INDEX_MONITOR.db 판독.
+            #   대상 5종은 index_window.STRIP_CODES (알림용 DEFAULT_CODES 와 별개).
+            from collector import index_window as _iw
+
+            try:
+                return JSONResponse(_iw.build_index_strip())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"index-strip failed: {exc!r}")
+                return JSONResponse({"detail": "index-strip error"}, status_code=503)
+
+        @app.get("/stock-monitor")
+        def stock_monitor(day: str | None = None, sort: str = "value",
+                          limit: int = 30):
+            # [종목 모니터] KOSPI200 분봉 기반 급등락·이상현상. Toss_분봉_모니터 DB 판독.
+            #   sort: value(거래대금) | change(등락률) | sigma(자기 변동성 대비)
+            try:
+                return JSONResponse(
+                    self.stock_monitor.build(day=day, sort=sort, limit=limit))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"stock-monitor failed: {exc!r}")
+                return JSONResponse({"detail": "stock-monitor error"}, status_code=503)
 
         @app.get("/wrap-performance")
         def wrap_performance():

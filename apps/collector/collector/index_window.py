@@ -334,3 +334,82 @@ def build_index_alerts(codes=DEFAULT_CODES) -> dict:
     _alerts_cache = alerts
     _alerts_ts = time.time()
     return {"generatedAt": gen, "alerts": alerts}
+
+
+# ── [종목 모니터] 상단 지수 스트립 ─────────────────────────────────────────────
+# ★STRIP_CODES 는 DEFAULT_CODES 와 **일부러** 갈라 둔다. 위쪽 튜플은 실시간 등락률과
+#   급등락 알림이 공유하는 것이라(화면에서 두 값이 같은 지수를 가리켜야 한다) 여기에
+#   SPX·NDX 를 더하면 알림 팝업 대상까지 바뀐다. 스트립은 보여주기만 하므로 분리한다.
+# 사용자 지정 5종(2026-08-21): 나스닥 선물 · KOSPI200 · KOSDAQ150 · S&P500 · NASDAQ100
+# +SOX 필라델피아 반도체(2026-08-24 추가) — CHECK 에이전트가 SPX·NDX 와 같은 미국
+#   현물 lane 으로 적재한다(check_code NULL, trade_date 는 **미국 세션 일자**).
+#   미국 장외 시간(KST 주간)엔 전일 종가가 반복되는 것이 정상이다.
+STRIP_CODES = ("NQ_FUT", "KOSPI200", "KOSDAQ150", "SPX", "NDX", "SOX")
+STRIP_DISPLAY = {
+    "NQ_FUT": "나스닥 선물",
+    "KOSPI200": "KOSPI200",
+    "KOSDAQ150": "KOSDAQ150",
+    "SPX": "S&P 500",
+    "NDX": "나스닥 100",
+    "SOX": "필라델피아 반도체",
+}
+SPARK_POINTS = 60          # 스파크라인 점 개수 — 990틱을 그대로 보내면 payload 만 커진다
+SPARK_MIN = 240            # 스파크라인이 훑는 시간(분). 장 흐름이 보일 만큼.
+
+
+def build_index_strip(codes=STRIP_CODES, spark_min: int = SPARK_MIN) -> dict:
+    """지수 스트립 한 줄. 지수마다 현재값·변화·변화율 + 스파크라인 점.
+
+    반환::
+
+        {"generated_at": "...", "indices": [
+            {"code","name","price","change","change_pct","at","spark":[float,...]}, ...]}
+
+    ★`change` 는 DB 가 주는 절대 변화 컬럼이다 — price 와 change_pct 로 역산하지 않는다
+      (역산하면 반올림 때문에 화면 숫자가 토스와 미세하게 어긋난다).
+    ★조회 실패는 그 지수만 빠진다. 스트립이 통째로 사라지지 않게 한다.
+    """
+    _maybe_refresh_async()
+
+    now = datetime.now(_KST)
+    out = {"generated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "indices": []}
+    if not DEST_DB.exists():
+        return out
+    frm = (now - timedelta(minutes=spark_min)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        con = sqlite3.connect(f"file:{DEST_DB}?mode=ro", uri=True, timeout=2.0)
+    except sqlite3.Error as exc:
+        _log(f"strip open failed: {exc!r}")
+        return out
+    try:
+        cur = con.cursor()
+        for code in codes:
+            try:
+                rows = cur.execute(
+                    "SELECT observed_at, price, change, change_pct FROM index_ticks "
+                    "WHERE index_code=? AND observed_at>=? ORDER BY observed_at",
+                    (code, frm),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                _log(f"strip query {code} failed: {exc!r}")
+                continue
+            if not rows:
+                continue
+            at, price, change, pct = rows[-1]
+            # 균등 간격으로 솎는다 — 앞뒤를 자르지 않아야 추세가 안 왜곡된다.
+            pts = [r[1] for r in rows if r[1] is not None]
+            if len(pts) > SPARK_POINTS:
+                step = len(pts) / SPARK_POINTS
+                pts = [pts[min(len(pts) - 1, int(i * step))] for i in range(SPARK_POINTS)]
+            out["indices"].append({
+                "code": code,
+                "name": STRIP_DISPLAY.get(code, code),
+                "price": price,
+                "change": change,
+                "change_pct": pct,
+                "at": at,
+                "spark": pts,
+            })
+    finally:
+        con.close()
+    return out

@@ -1464,3 +1464,63 @@ export function addLanGroup(name: string): Promise<{ name: string }> {
     body: JSON.stringify({ name }),
   });
 }
+
+// ── [종목 모니터] KOSPI200 분봉 급등락·이상현상 ──────────────────────────────
+// 원천은 Toss_분봉_모니터가 쌓는 분봉 DB. 계산(등락률·σ·거래대금)은 전부 collector 쪽이다.
+// ★market_cap·industry·issue 는 원천이 없어 항상 null 이다 — 화면에 컬럼 자리는 두되
+//   값은 비워 둔다(사용자 확정 2026-08-21). 소스가 생기면 collector 만 고치면 된다.
+export interface StockMonitorRow {
+  rank: number;
+  symbol: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  value: number | null;          // 분봉 Σ(volume×close) — 토스 '토스증권 거래대금'과 다름
+  volume: number | null;
+  market_cap: number | null;     // 원천 없음
+  industry: string | null;       // 원천 없음
+  issue: string | null;          // [실시간 이슈] — 원천 없음
+  cap_rank: number | null;
+  change_sigma: number | null;   // 등락률 / 그 종목의 sigma_daily
+  volume_z: number | null;       // (당일누적 − vol_mu) / vol_sigma
+}
+export interface StockMonitor {
+  asof: string | null;
+  day?: string;
+  sort?: string;
+  universe?: number;
+  value_basis?: string;
+  note?: string;
+  rows: StockMonitorRow[];
+}
+
+export function getStockMonitor(
+  sort: "value" | "change" | "sigma" = "value",
+  limit = 30,
+  day?: string,
+): Promise<StockMonitor> {
+  const qs = new URLSearchParams({ sort, limit: String(limit) });
+  if (day) qs.set("day", day);
+  return request<StockMonitor>(`/api/v1/stock-monitor?${qs.toString()}`);
+}
+
+// ── [종목 모니터] 상단 지수 스트립 ───────────────────────────────────────────
+// 원천은 CHECK 에이전트가 분단위로 쌓는 INDEX_MONITOR.db. spark 는 최근 4시간을
+// 60점으로 솎은 가격 배열이다(원본 990틱을 그대로 나르지 않는다).
+export interface IndexStripItem {
+  code: string;
+  name: string;
+  price: number | null;
+  change: number | null;      // 절대 변화 — DB 컬럼 그대로(역산하지 않음)
+  change_pct: number | null;
+  at: string;
+  spark: number[];
+}
+export interface IndexStrip {
+  generated_at: string;
+  indices: IndexStripItem[];
+}
+
+export function getIndexStrip(): Promise<IndexStrip> {
+  return request<IndexStrip>("/api/v1/stock-monitor/index-strip");
+}

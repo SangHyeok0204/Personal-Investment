@@ -33,6 +33,7 @@ const navItems: NavItem[] = [
       { label: "iNAV 모니터", href: "/inav" },
       { label: "WRAP", href: "/wrap" },
       { label: "LP 평가", href: "/lp-eval" },
+      { label: "종목 모니터", href: "/stock-monitor" },
     ],
   },
   {

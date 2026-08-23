@@ -13,6 +13,7 @@ from app.api import (
     lan,
     macro,
     stock_discussion,
+    stock_monitor,
     system,
 )
 from app.core.errors import register_exception_handlers
@@ -58,3 +59,4 @@ app.include_router(inav.router)
 app.include_router(macro.router)
 app.include_router(lan.router)
 app.include_router(stock_discussion.router)
+app.include_router(stock_monitor.router)

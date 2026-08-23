@@ -172,6 +172,11 @@ services:
       - "/mnt/s/GE/raw/data/_공유모듈/Holidays:/srv/legacy/holidays:ro"
       # GURU[13F]: 13F 거장 공시 DB(filings.db, WAL). 컨테이너는 sidecar-게이트로 /app/.cache 로 복사해 읽음.
       - "/mnt/s/GE/raw/data/13F기관내부자/db:/srv/legacy/guru13f_db:ro"
+      # [종목 모니터] Toss_분봉_모니터가 쌓는 KOSPI200 분봉 — minute_bars_YYYYMM.db +
+      # state.db(universe: prev_close·cap_rank·sigma_daily·vol_mu·vol_sigma).
+      # 수집기가 1분마다 쓰는 **라이브 WAL** 이라 guru13f 와 같은 sidecar-게이트로
+      # /app/.cache 에 복사해 읽는다(WAL-over-SMB 는 SQLite 미지원).
+      - "/mnt/s/GE/raw/data/Toss_분봉_모니터/output:/srv/legacy/toss_minute:ro"
       # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
       - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
       # [뉴스 모니터링 · 텔레그램] 상류 Telegram_Bot(다른 PC 상주)이 굽는 집계 JSON.
