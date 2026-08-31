@@ -1336,6 +1336,19 @@ class Collector:
                 _log(f"ai-token-usage failed: {exc!r}")
                 return JSONResponse({"detail": "ai-token-usage error"}, status_code=503)
 
+        @app.get("/tool-calling")
+        def tool_calling():
+            # [AI Key Data] OpenRouter tool-calling 토큰 - tool_calling_long.csv 판독.
+            #   ★비중은 차트로 내보내지 않는다(598일 내내 99.3~99.4%, 사실상 상수).
+            #   움직이는 건 배수(tool/non-tool, 137~185x)와 non-tool 절대량이다.
+            from collector import tool_calling as _tc
+
+            try:
+                return JSONResponse(_tc.build_tool_calling())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"tool-calling failed: {exc!r}")
+                return JSONResponse({"detail": "tool-calling error"}, status_code=503)
+
         @app.get("/npm-downloads")
         def npm_downloads():
             # [AI Key Data] 코딩 에이전트 CLI 의 npm 일별 다운로드 — npm_downloads_long.csv.

@@ -104,3 +104,16 @@ async def get_epoch_datacenters(
       KPI 로 쓰면 차트 끝점과 28% 어긋난다.
     """
     return await _proxy_collector("/epoch-datacenters", if_none_match)
+
+@router.get("/tool-calling")
+async def get_tool_calling(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """[AI 사용량] OpenRouter tool-calling 토큰 - 배수(tool/non-tool)와 non-tool 절대량.
+
+    ★★**비중(tool/total)은 화면에 그리지 않는다.** 598일 내내 99.28~99.46% 라 사실상
+      상수다 - OpenRouter 의 `modality=tool_calling` 은 "툴콜을 쓴 요청"이 아니라 "툴콜을
+      지원하는 모델" 에 가깝기 때문이다. payload 의 `series` 는 그래서 배수와 non-tool
+      둘뿐이고, 비중은 `stats.share_pct` 에 숫자 한 개로만 실린다.
+    """
+    return await _proxy_collector("/tool-calling", if_none_match)

@@ -26,11 +26,20 @@ const GRID = "#EDF0F5";
 const AXIS_TEXT = "#8a94a6";
 const CROSS = "#B7C0CE";
 const ANOMALY = "#e11d48"; // rose — 소급 정정 표시. 색 규약: rose=조치 필요(주목)
+const INK_LEGEND = "#3a4150";
+// ★2026-08-31 글자를 11px 로 키우면서 같이 넓혔다(판 폭·줄간격·잘림 기준).
+//   줄간격을 그대로 12 로 두면 11px 글자가 위아래로 붙어 읽히지 않는다.
+const LEGEND_W = 170;    // 범례 판 한 열의 폭(px)
+const LEGEND_CHARS = 18; // 이름 잘림 기준
+const LEGEND_ROWS = 7;   // 한 열에 넣을 최대 항목 수(넘으면 2열)
+const LEGEND_LH = 15;    // 줄간격(px)
 
-const PAD_L = 46; // y 라벨 — 토큰 수치(T/B)가 rate-chart-card 보다 길어 6px 더 준다
+// ★2026-08-31 글자 상향(9~9.5 -> 11~11.5px)에 맞춰 축 여백도 넓혔다 —
+//   안 넓히면 y 라벨이 잘리고 x 날짜가 서로 겹친다.
+const PAD_L = 56; // y 라벨 — 토큰 수치(T/B)가 rate-chart-card 보다 길어 6px 더 준다
 const PAD_R = 8;
 const PAD_T = 4;
-const XAXIS_H = 14;
+const XAXIS_H = 18;
 
 const day = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
 
@@ -95,12 +104,17 @@ export function TimeSeriesChart({
   h,
   fmt,
   colors,
+  legend = false,
 }: {
   series: AiSeries[];
   w: number;
   h: number;
   fmt: (v: number) => string;
   colors: string[];
+  // ★차트 **안쪽**에 범례를 그린다(2026-08-31 사용자 지시). 계열이 10개쯤 되면 카드
+  //   헤더의 가로 범례로는 이름이 다 안 들어가고 차트 높이만 먹는다.
+  //   기본값 false — 기존 카드들은 헤더 범례를 그대로 쓴다(건드리지 않는다).
+  legend?: boolean;
 }) {
   const [hoverX, setHoverX] = useState<string | null>(null);
 
@@ -191,7 +205,7 @@ export function TimeSeriesChart({
               <text
                 x={PAD_L - 5}
                 y={y + 3}
-                fontSize={9.5}
+                fontSize={11.5}
                 fill={AXIS_TEXT}
                 textAnchor="end"
                 style={{ fontVariantNumeric: "tabular-nums" }}
@@ -246,7 +260,7 @@ export function TimeSeriesChart({
             key={d}
             x={X(d)}
             y={h - 4}
-            fontSize={9}
+            fontSize={11}
             fill={AXIS_TEXT}
             textAnchor="middle"
             style={{ fontVariantNumeric: "tabular-nums" }}
@@ -274,6 +288,38 @@ export function TimeSeriesChart({
             })}
           </g>
         ) : null}
+      
+        {/* 차트 안 범례 — 좌상단. 계열이 많을 때(모델별 10개) 헤더 가로 범례로는
+            이름이 다 안 들어간다. 반투명 흰 판을 깔아 격자 위에서도 읽히게 한다.
+            ★마지막 값 기준 내림차순이라 선의 위아래 순서와 범례 순서가 대체로 맞는다. */}
+        {legend && series.length > 0 ? (
+          <g>
+            {/* ★계열이 많으면(벤더 15개) 세로 한 줄로는 차트 높이를 다 먹는다 —
+                LEGEND_ROWS 를 넘기면 2열로 접는다. */}
+            <rect
+              x={PAD_L + 4}
+              y={PAD_T + 2}
+              width={series.length > LEGEND_ROWS ? LEGEND_W * 2 : LEGEND_W}
+              height={Math.min(series.length, LEGEND_ROWS) * LEGEND_LH + 7}
+              rx={3}
+              fill="#ffffff"
+              fillOpacity={0.82}
+            />
+            {series.map((s2, i2) => (
+              <g
+                key={s2.key}
+                transform={`translate(${PAD_L + 9 + Math.floor(i2 / LEGEND_ROWS) * LEGEND_W}, ${
+                  PAD_T + 14 + (i2 % LEGEND_ROWS) * LEGEND_LH
+                })`}
+              >
+                <rect x={0} y={-7} width={8} height={8} rx={1.5} fill={colors[i2 % colors.length]} />
+                <text x={12} y={0} fontSize={11} fill={INK_LEGEND}>
+                  {s2.label.length > LEGEND_CHARS ? s2.label.slice(0, LEGEND_CHARS) + "…" : s2.label}
+                </text>
+              </g>
+            ))}
+          </g>
+        ) : null}
       </svg>
 
       {hoverX ? (
@@ -284,11 +330,11 @@ export function TimeSeriesChart({
             transform: hx > w / 2 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
           }}
         >
-          <div className="mb-0.5 text-[10px] tabular-nums text-ink-muted">{hoverX}</div>
+          <div className="mb-0.5 text-[12px] tabular-nums text-ink-muted">{hoverX}</div>
           {series.map((s, i) => {
             const v = lookup[i].get(hoverX);
             return (
-              <div key={s.key} className="flex items-center gap-1.5 text-[11px] leading-tight">
+              <div key={s.key} className="flex items-center gap-1.5 text-[13px] leading-tight">
                 <span
                   className="inline-block h-2 w-2 shrink-0 rounded-sm"
                   style={{ background: colors[i % colors.length] }}

@@ -79,28 +79,29 @@ def test_buildout_curve_is_asof_per_quarter():
 
 
 @pytest.mark.skipif(
-    not os.path.exists(ed.SRC_DC_ZIP), reason="data_centers.zip 마운트 없음"
+    not os.path.exists(ed.member_path(ed.M_DC_TIMELINES)),
+    reason="epoch CSV 마운트 없음",
 )
-def test_real_zip_pins_measured_power_totals():
-    """★2026-08-28 스냅샷 실측 핀.
+def test_real_csv_pins_measured_power_totals():
+    """★2026-08-31 스냅샷 실측 핀.
 
-    Epoch zip 이 갱신되면 이 숫자는 바뀐다. 바뀌면 새 값으로 갱신하되 **두 값의 비(2.7배)가
+    Epoch 스냅샷이 갱신되면 이 숫자는 바뀐다. 바뀌면 새 값으로 갱신하되 **두 값의 비(2.7배)가
     유지되는지 먼저 확인해라** — 비가 1에 가까워졌다면 미래행 필터가 죽은 것이다.
     """
-    t = _io.read_zip_tables(ed.SRC_DC_ZIP, (ed.M_DATA_CENTERS, ed.M_DC_TIMELINES))
-    tl, dc = t[ed.M_DC_TIMELINES], t[ed.M_DATA_CENTERS]
+    tl = _io.read_flat_csv_dicts(ed.member_path(ed.M_DC_TIMELINES))
+    dc = _io.read_flat_csv_dicts(ed.member_path(ed.M_DATA_CENTERS))
 
     out = ed.build_datacenters_payload(dc, tl, asof=date(2026, 8, 28))
-    assert out["totals"]["it_power_mw"] == pytest.approx(13085.12971, rel=1e-9)
-    assert out["totals"]["planned_it_power_mw"] == pytest.approx(35379.12971, rel=1e-9)
+    assert out["totals"]["it_power_mw"] == pytest.approx(13257.12971, rel=1e-9)
+    assert out["totals"]["planned_it_power_mw"] == pytest.approx(35676.12971, rel=1e-9)
 
-    # 마스터의 'Current power (MW)' 합과 과거 asof 합이 일치한다(85/85). 이 항등이
+    # 마스터의 'Current power (MW)' 합과 과거 asof 합이 일치한다(86/86). 이 항등이
     # 깨지면 KPI 와 차트 끝점이 갈라진 것이다.
     master = sum(_io.to_num(r["Current power (MW)"]) or 0 for r in dc.rows)
     assert out["totals"]["it_power_mw"] == pytest.approx(master, rel=1e-9)
 
     raw = ed.build_datacenters_payload(dc, tl, asof=None)
-    assert raw["totals"]["it_power_mw"] == pytest.approx(35379.12971, rel=1e-9)
+    assert raw["totals"]["it_power_mw"] == pytest.approx(35676.12971, rel=1e-9)
 
 
 # ── 2. 토큰 사용량 ──────────────────────────────────────────────────────────

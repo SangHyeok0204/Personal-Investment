@@ -3,6 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { getRateTopics, type RateTopics } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { POLL_MS } from "@/components/ai-key-data/poll";
+import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
 
 // [하이퍼스케일러 채권 발행] — 금리_2.xlsx 금리(1) 시트.
 // AI 인프라 자본지출이 부채 조달로 넘어간 정도를 재는 카드다: 연 $19B(2024) →
@@ -15,7 +17,6 @@ import { cn } from "@/lib/utils";
 //   USD 가 $400B 로 대부분이지만 EUR·CAD·GBP·CHF·AUD·JPY 가 섞여 있다 — 부제에 적어
 //   숫자만 보고 순수 달러로 읽지 않게 한다.
 
-const POLL_MS = 600_000;
 const BAR = "#4a7ab5";
 const BAR_SOFT = "#c9d9ec";
 // 제목 띠 강조색은 tailwind 토큰 `ge-header`(#483629) — 2026-08-28 카드 6장이
@@ -23,7 +24,14 @@ const BAR_SOFT = "#c9d9ec";
 
 const fmtB = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 1 })}B`;
 
-export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
+export function BondIssuanceCard({
+  tabs,
+  colSpan = 2,
+}: {
+  tabs?: React.ReactNode;
+  colSpan?: 1 | 2 | 3;
+}) {
+  const { zoomed, toggle, zoomCls } = useCardZoom();
   const { data, isLoading, isError } = useQuery<RateTopics>({
     queryKey: ["rate-topics"],
     queryFn: getRateTopics,
@@ -35,22 +43,30 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
   const thisYear = years.length ? years[years.length - 1] : null;
 
   return (
-    <section className="lg:col-span-2 flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas">
+    <section
+      className={cn(
+        zoomCls,
+        "flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas",
+        // 정적 클래스로 적어야 tailwind 가 스캔한다(형제 카드들과 같은 이유).
+        colSpan === 1 ? "lg:col-span-1" : colSpan === 3 ? "lg:col-span-3" : "lg:col-span-2",
+      )}
+    >
       {/* 강조 띠 — 배경이 어두우므로 글자를 흰색 계열로 뒤집는다. */}
       <header className="flex items-center gap-2 rounded-t-xl bg-ge-header px-3 py-1.5">
         {tabs ?? (
-          <h2 className="shrink-0 text-[13px] font-extrabold text-white">
+          <h2 className="shrink-0 text-[15px] font-extrabold text-white">
             하이퍼스케일러 채권 발행
           </h2>
         )}
-        <span className="min-w-0 truncate text-[11px] text-white/70">
+        <span className="min-w-0 truncate text-[13px] text-white/70">
           발행 통화 액면 합산 · AI 자본지출의 부채 조달
         </span>
         {b?.asof ? (
-          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-white/60">
+          <span className="ml-auto shrink-0 text-[13px] tabular-nums text-white/60">
             {b.asof} 기준
           </span>
         ) : null}
+      <ZoomButton zoomed={zoomed} onToggle={toggle} />
       </header>
 
       {isLoading ? (
@@ -69,7 +85,7 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
             <span className="text-[24px] font-extrabold leading-none tabular-nums text-ink">
               {thisYear ? fmtB(thisYear[1]) : "—"}
             </span>
-            <span className="text-[11px] text-ink-muted">
+            <span className="text-[13px] text-ink-muted">
               {thisYear ? `${thisYear[0]}년 누계` : ""} · 총 {fmtB(b.total_b)} · {b.n}건
             </span>
           </div>
@@ -79,7 +95,7 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
             {years.map(([y, v]) => (
               <div key={y} className="flex min-h-[15px] flex-1 items-center gap-2">
-                <span className="w-[34px] shrink-0 text-right text-[11px] tabular-nums text-ink-muted">
+                <span className="w-[34px] shrink-0 text-right text-[13px] tabular-nums text-ink-muted">
                   {y}
                 </span>
                 <div className="h-full min-w-0 flex-1 rounded-sm bg-canvas-soft">
@@ -91,7 +107,7 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
                     }}
                   />
                 </div>
-                <span className="w-[56px] shrink-0 text-right text-[11px] font-bold tabular-nums text-ink">
+                <span className="w-[56px] shrink-0 text-right text-[13px] font-bold tabular-nums text-ink">
                   {fmtB(v)}
                 </span>
               </div>
@@ -99,7 +115,7 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
           </div>
 
           {/* 발행사별 — "누가 얼마나"가 이 데이터의 두 번째 질문이다. */}
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 border-t border-hairline pt-1.5 text-[11px]">
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 border-t border-hairline pt-1.5 text-[13px]">
             {b.by_issuer
               .filter((g) => g.amt_b >= 0.1)
               .map((g) => (
@@ -121,7 +137,7 @@ export function BondIssuanceCard({ tabs }: { tabs?: React.ReactNode }) {
 function Center({ msg, tone }: { msg: string; tone?: string }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-      <span className={cn("text-[12px] font-semibold leading-relaxed text-ink-muted", tone)}>
+      <span className={cn("text-[13.5px] font-semibold leading-relaxed text-ink-muted", tone)}>
         {msg}
       </span>
     </div>

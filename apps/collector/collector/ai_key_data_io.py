@@ -308,6 +308,35 @@ def read_flat_csv(path: str) -> Table:
     return tbl
 
 
+def read_flat_csv_dicts(path: str) -> Table:
+    """평문 CSV 한 장 — `rows` 가 **dict** 다.
+
+    ★`read_flat_csv` 와 일부러 갈라 둔다. 저쪽은 토큰 CSV(3만 행 x 3열)를 겨눠 행을
+      리스트로 두고 위치 인덱스로 훑는다(실측 2.2배). 반면 Epoch 판독부는 열 **이름**으로
+      접근하도록 쓰여 있어(`row["Current power (MW)"]`) dict 가 필요하다 —
+      `read_zip_tables` 가 `csv.DictReader` 를 쓴 것과 같은 계약이고, 원천이 zip 에서
+      평문 CSV 로 바뀌어도 판독부가 한 줄도 안 바뀌게 하려면 여기서 모양을 맞춰야 한다.
+      Epoch 은 가장 큰 파일이 495행이라 dict 물화 비용이 문제가 되지 않는다.
+    """
+    ent = _CACHE.get(path)
+    sig = _sig(path)          # FileNotFoundError 는 호출부(_load)가 note 로 접는다
+    if ent and ent.get("sig") == sig and "dicts" in ent:
+        return ent["dicts"]
+
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            rd = csv.DictReader(f)
+            rows = list(rd)
+            tbl = Table([c.strip() for c in (rd.fieldnames or [])], rows)
+    except OSError:
+        if ent and "dicts" in ent:
+            return ent["dicts"]
+        raise
+
+    _CACHE[path] = {"sig": sig, "dicts": tbl}
+    return tbl
+
+
 def require(table: Table, member: str, required: tuple[str, ...]) -> None:
     """필수 컬럼이 하나라도 없으면 크게 실패. 모르는 컬럼이 늘어난 건 신경 쓰지 않는다.
 

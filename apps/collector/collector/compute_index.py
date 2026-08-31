@@ -43,6 +43,13 @@ INDICES: list[dict] = [
     #   기초 파일에 `SDA100RT Index` 블록이 들어오면 자동으로 세 번째 패널이 된다
     #   (블록 탐색이 `Security` 라벨 기준이라 열 위치는 상관없다).
     {"key": "a100", "ticker": "SDA100RT Index", "name": "SDA100RT", "chip": "A100"},
+    # ★2026-08-31 사용자 지시로 추가. 앞의 셋과 **성격이 다르다** — GPU 시간당 렌탈 단가가
+    #   아니라 LLM 토큰 지수다(워크북 AE 블록, 2025-12-01~, 값이 1.0 언저리).
+    #   그래서 `unit` 을 따로 준다. 같은 `$/GPU-hr` 로 적으면 1.05 를 "시간당 1달러"로
+    #   읽게 되는데 그건 사실이 아니다 — 워크북이 주는 건 Currency=USD 뿐이고 분모가
+    #   무엇인지(토큰 100만개? 지수 기준값?)는 원천에 적혀 있지 않다. 지어내지 않는다.
+    {"key": "llmtk", "ticker": "SDLLMTK Index", "name": "SDLLMTK", "chip": "LLM 토큰",
+     "unit": "index (USD)"},
 ]
 UNIT = "$/GPU-hr"
 
@@ -91,7 +98,8 @@ def build_payload(blocks: dict[str, list[tuple[date, float]]]) -> dict:
             "key": spec["key"],
             "name": spec["name"],
             "label": spec["chip"],
-            "unit": UNIT,
+            # 지수마다 단위가 다를 수 있다(GPU 렌탈 = $/GPU-hr, LLM 토큰 = 지수).
+            "unit": spec.get("unit", UNIT),
             "kind": "price",
             "points": [[d.isoformat(), v] for d, v in pts],
             "stats": _stats(pts),

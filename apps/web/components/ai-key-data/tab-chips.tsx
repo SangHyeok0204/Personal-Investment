@@ -28,7 +28,7 @@ export function TabChips<T extends string>({
           type="button"
           onClick={() => onChange(t.key)}
           className={cn(
-            "rounded px-1.5 py-0.5 text-[10.5px] font-bold transition-colors",
+            "rounded px-1.5 py-0.5 text-[12px] font-bold transition-colors",
             value === t.key
               ? "bg-white text-ge-header"
               : "bg-white/15 text-white/75 hover:bg-white/30",

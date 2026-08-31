@@ -19,7 +19,7 @@ export function StaleBadge({ source }: { source: AiKeyDataSource | null | undefi
   return (
     <span
       className={cn(
-        "shrink-0 text-[10.5px] font-bold tabular-nums",
+        "shrink-0 text-[12px] font-bold tabular-nums",
         rose ? "text-rose-300" : "text-amber-300",
       )}
     >

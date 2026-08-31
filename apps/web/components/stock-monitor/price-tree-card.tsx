@@ -20,6 +20,12 @@ import { cn } from "@/lib/utils";
 //   없어 지수가 최상단에 온다 — 트리는 payload 모양을 그대로 따라 그린다.
 // ★기본 펼침은 **layer1 까지**. 42개를 다 펼치면 1칸 폭에서 스크롤만 길어진다.
 //
+// ★글자 크기는 2026-08-31 사용자 지시로 한 단계씩 키웠다(지수 11→13.5px, DtD 10→12.5px,
+//   탭 10.5→12.5px, 제목 12.5→15px). **한 군데만 키우면 위계가 깨지므로 같이 움직인다** —
+//   묶음(node)과 지수(leaf)는 같은 크기에 굵기로만 갈리고, 오른쪽 DtD 는 이름보다
+//   한 단계 작아야 이름이 먼저 읽힌다. 들여쓰기(9→11px)도 같이 키워야 계층이 안 뭉갠다.
+//   행이 22→30px 로 높아져 전부 펼치면 스크롤이 생기는데, 목록은 이미 스크롤 컨테이너다.
+//
 // ★★2026-08-28 사용자 지시: **묶음도 클릭 대상**이다. 미국·유럽처럼 자식이 전부
 //   지수인 노드를 누르면 펼쳐지는 동시에 오른쪽 차트가 그 묶음 전체를 겹쳐 그린다.
 //   자식이 또 노드인 DM·EM 은 펼치기만 한다 — 25개를 한 차트에 겹치면 스파게티다.
@@ -61,21 +67,21 @@ function Leaf({
       onClick={() => onSelect({ kind: "leaf", key: node.key })}
       title={`${node.label}${node.sub ? ` · ${node.sub}` : ""} — ${node.price.toLocaleString("en-US")} (${node.asof})`}
       className={cn(
-        "flex w-full items-baseline gap-1 rounded py-[3px] pr-1 text-left transition-colors",
+        "flex w-full items-baseline gap-1.5 rounded py-[5px] pr-1.5 text-left transition-colors",
         active ? "bg-ge-blue-bg" : "hover:bg-canvas-soft",
       )}
-      style={{ paddingLeft: 6 + depth * 9 }}
+      style={{ paddingLeft: 7 + depth * 11 }}
     >
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-[11px]",
+          "min-w-0 flex-1 truncate text-[13.5px]",
           active ? "font-extrabold text-ge-point" : "font-semibold text-ink",
         )}
       >
         {node.label}
       </span>
       {/* 목록에는 DtD 하나만 — 나머지 셋은 오른쪽 차트가 시계열로 보여준다. */}
-      <span className={cn("shrink-0 text-[10px] font-bold tabular-nums", tone(node.dtd))}>
+      <span className={cn("shrink-0 text-[12.5px] font-bold tabular-nums", tone(node.dtd))}>
         {fmtChg(node.dtd, isYield)}
       </span>
     </button>
@@ -134,26 +140,26 @@ function Node({
         }}
         title={leafOnly ? `${node.label} ${node.children.length}개 시장 한눈에 비교` : undefined}
         className={cn(
-          "flex w-full items-center gap-0.5 rounded py-[3px] pr-1 text-left transition-colors",
+          "flex w-full items-center gap-1 rounded py-[5px] pr-1.5 text-left transition-colors",
           active ? "bg-ge-blue-bg" : "hover:bg-canvas-soft",
         )}
-        style={{ paddingLeft: 2 + depth * 9 }}
+        style={{ paddingLeft: 3 + depth * 11 }}
       >
         <ChevronRight
           className={cn(
-            "h-3 w-3 shrink-0 text-ink-muted transition-transform",
+            "h-3.5 w-3.5 shrink-0 text-ink-muted transition-transform",
             isOpen && "rotate-90",
           )}
         />
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-[11px] font-extrabold",
+            "min-w-0 flex-1 truncate text-[13.5px] font-extrabold",
             active ? "text-ge-point" : "text-ge-navy",
           )}
         >
           {node.label}
         </span>
-        <span className="shrink-0 text-[9.5px] tabular-nums text-slate-400">
+        <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
           {node.children.length}
         </span>
       </button>
@@ -231,9 +237,9 @@ export function PriceTreeCard({
       {/* 제목 띠 — 강조색(ge-header). 배경이 어두우니 글자·탭을 흰색 계열로 뒤집는다. */}
       <header className="flex shrink-0 flex-col gap-1 bg-ge-header px-2 py-1.5">
         <div className="flex items-baseline gap-1.5">
-          <h2 className="shrink-0 text-[12.5px] font-extrabold text-white">지표 리스트</h2>
+          <h2 className="shrink-0 text-[15px] font-extrabold text-white">지표 리스트</h2>
           {data?.asof ? (
-            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-white/60">
+            <span className="ml-auto shrink-0 text-[11.5px] tabular-nums text-white/60">
               {data.asof.slice(5)}
             </span>
           ) : null}
@@ -245,7 +251,7 @@ export function PriceTreeCard({
               type="button"
               onClick={() => onCat(c.key)}
               className={cn(
-                "rounded px-1.5 py-0.5 text-[10.5px] font-bold transition-colors",
+                "rounded px-2 py-[3px] text-[12.5px] font-bold transition-colors",
                 cat === c.key
                   ? "bg-white text-ge-header"
                   : "bg-white/15 text-white/75 hover:bg-white/30",
@@ -295,7 +301,7 @@ export function PriceTreeCard({
         </div>
       )}
 
-      <div className="shrink-0 border-t border-hairline px-2 py-0.5 text-[9.5px] text-slate-400">
+      <div className="shrink-0 border-t border-hairline px-2 py-1 text-[10.5px] leading-snug text-slate-400">
         옆 숫자 = DtD ({isYield ? "bp" : "%"}) · 지수 클릭 = 단일 · 묶음 클릭 = 전체 비교
       </div>
     </section>
@@ -305,7 +311,7 @@ export function PriceTreeCard({
 function Center({ msg, tone }: { msg: string; tone?: string }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center">
-      <span className={cn("text-[11px] font-semibold leading-relaxed text-ink-muted", tone)}>
+      <span className={cn("text-[12.5px] font-semibold leading-relaxed text-ink-muted", tone)}>
         {msg}
       </span>
     </div>

@@ -1,8 +1,13 @@
-"""[AI Key Data] Epoch AI 3종 데이터셋 판독 (2026-08-28).
+r"""[AI Key Data] Epoch AI 3종 데이터셋 판독 (2026-08-28).
 
-zip 세 장 = 카드 세 장. `/epoch-companies`(AI Lab ARR) · `/epoch-chips`(분기 칩 출하) ·
-`/epoch-datacenters`(데이터센터 빌드아웃). zip 은 **풀지 않고 안에서 바로 읽는다**
-(`ai_key_data_io.read_zip_tables`) — 마운트가 `:ro` 라 애초에 풀 수도 없다.
+데이터셋 세 벌 = 카드 세 장. `/epoch-companies`(AI Lab ARR) · `/epoch-chips`(분기 칩 출하) ·
+`/epoch-datacenters`(데이터센터 빌드아웃).
+
+★2026-08-31 원천 전환. 예전에는 `input\raw\*.zip` 을 풀지 않고 안에서 직독했다
+  (`ai_key_data_io.read_zip_tables`). 이제는 **수집기가 zip 을 메모리에서 풀어 소비 대상
+  CSV 6장만 `input\raw\epoch\` 에 놓고 zip 은 디스크에 남기지 않는다** — 여기서는 그
+  평문 CSV 를 읽는다(`read_flat_csv`). 판독 위층(`build_*_payload`)은 `Table` 만 받으므로
+  한 줄도 바뀌지 않았다. `read_zip_tables` 는 io 층에 그대로 남아 있다(다른 소비자 없음).
 
 ⚠️Epoch 3종은 **일별 시계열이 아니다.** ARR 은 3년에 수십 행짜리 뉴스 이벤트이고 칩 출하는
   분기, 데이터센터는 불규칙 시점 관측이다. 연속선으로 이으면 **없는 정밀도를 만든다** —
@@ -41,15 +46,12 @@ from datetime import date
 
 from collector import ai_key_data_io as _io
 
-SRC_COMPANIES_ZIP = os.environ.get(
-    "EPOCH_COMPANIES_ZIP", os.path.join(_io.RAW_DIR, "ai_companies.zip")
-)
-SRC_CHIPS_ZIP = os.environ.get(
-    "EPOCH_CHIPS_ZIP", os.path.join(_io.RAW_DIR, "ai_chip_sales.zip")
-)
-SRC_DC_ZIP = os.environ.get(
-    "EPOCH_DATACENTERS_ZIP", os.path.join(_io.RAW_DIR, "data_centers.zip")
-)
+# 수집기 `agentetchers\epoch.py` 의 OUT_SUBDIR 과 같은 값이어야 한다.
+SRC_EPOCH_DIR = os.environ.get("EPOCH_CSV_DIR", os.path.join(_io.RAW_DIR, "epoch"))
+
+
+def member_path(name: str) -> str:
+    return os.path.join(SRC_EPOCH_DIR, name)
 
 M_REVENUE = "ai_companies_revenue_reports.csv"
 M_FUNDING = "ai_companies_funding_rounds.csv"
@@ -258,7 +260,8 @@ def build_chips_payload(
     out = _common(source)
     out.update({
         "unit": "H100e", "kind": "bar",
-        "quarters": [], "incomplete_quarters": [], "designers": [],
+        "quarters": [], "incomplete_quarters": [], "last_complete_quarter": None,
+        "designers": [],
         "chips_quarter": None, "chips": [],
         "totals": {"cum_h100e": None, "quarter": None},
     })
@@ -316,6 +319,15 @@ def build_chips_payload(
     incomplete = sorted({r[0] for r in rows if r[7]})
     out["quarters"] = [q.isoformat() for q in quarters]
     out["incomplete_quarters"] = [q.isoformat() for q in incomplete]
+    # ★2026-08-31 사용자 지시로 신설. **끝난 분기 중 마지막** — 분기말이 asof 를 넘지 않은 것.
+    #   `분기 신규(flow)` 차트가 여기까지만 그린다. 진행 중 분기는 제조사 한 곳만 보고돼
+    #   있기 십상이라(2026Q3 실측: Nvidia 만 1.18M, Google·AMD 0) 그대로 그리면 직전 분기
+    #   4.54M 대비 74% 급감으로 읽힌다 — 실제로 줄어든 게 아니라 아직 안 들어온 것이다.
+    # ⚠️**누적(cum)에서는 자르지 않는다.** 진행 중 분기도 "부분 관측"이라 누적에는 유효한
+    #   정보이고, 잘라내면 Nvidia 누적이 22.2M -> 21.0M 로 실측 대비 5% 과소계상된다
+    #   (위 `asof` 주석의 근거와 같은 사례). 그래서 quarters 자체는 그대로 두고 이 경계만 싣는다.
+    _complete = [q for q in quarters if asof is None or q <= asof]
+    out["last_complete_quarter"] = _complete[-1].isoformat() if _complete else None
     out["asof"] = quarters[-1].isoformat()
 
     qi = {q: i for i, q in enumerate(quarters)}
@@ -534,27 +546,27 @@ def build_datacenters_payload(
 # ★결측·손상·스키마 변경은 전부 **200 + 빈 payload + note** 다. 503 은 collector 장애
 #   전용으로 남긴다(main.py 의 except Exception). 2026-08-27 에 결측을 503 으로 냈다가
 #   화면이 "collector 에 못 닿았습니다"를 띄워 엉뚱한 층을 의심하게 만든 전례가 있다.
-#   zip 은 xlsx 보다 더 위험하다 — 사람이 epoch.ai 에서 받아 넣는 수동 스냅샷이다.
+#   Epoch 은 수집기가 주 1회 받아 놓는 스냅샷이라 결측/구버전이 정상 경로로 존재한다.
 
-def _load(path: str, members: tuple[str, ...]) -> tuple[dict | None, str | None]:
-    import zipfile  # 지연 import — BadZipFile 을 잡으려면 필요하다
-
-    try:
-        return _io.read_zip_tables(path, members), None
-    except FileNotFoundError:
-        return None, f"원천 zip 이 없습니다 — {path}"
-    except zipfile.BadZipFile:
-        return None, f"zip 을 열 수 없습니다(받다 만 파일이거나 손상) — {path}"
-    except KeyError as exc:
-        return None, f"zip 안에 {exc.args[0]} 가 없습니다 — Epoch 내보내기 구성이 바뀌었습니다"
-    except OSError as exc:
-        return None, f"zip 을 읽지 못했습니다({exc.__class__.__name__}) — {path}"
+def _load(members: tuple[str, ...]) -> tuple[dict | None, str | None]:
+    """멤버 CSV 들을 한 번에. 하나라도 없으면 그 카드 전체를 빈 payload + note 로 낸다."""
+    tables: dict[str, _io.Table] = {}
+    for m in members:
+        p = member_path(m)
+        try:
+            tables[m] = _io.read_flat_csv_dicts(p)
+        except FileNotFoundError:
+            return None, (f"원천 CSV 가 없습니다 - {p} "
+                          f"(수집기 `ai_key_data.bat` 을 한 번 돌리면 생깁니다)")
+        except OSError as exc:
+            return None, f"CSV 를 읽지 못했습니다({exc.__class__.__name__}) - {p}"
+    return tables, None
 
 
 def build_epoch_companies(asof: date | None = None) -> dict:
     asof = asof or _io.today_kst()
-    src = _io.source_block("ai_companies", SRC_COMPANIES_ZIP, "epoch", asof)
-    tables, note = _load(SRC_COMPANIES_ZIP, (M_REVENUE, M_FUNDING))
+    src = _io.source_block("ai_companies", member_path(M_REVENUE), "epoch", asof)
+    tables, note = _load((M_REVENUE, M_FUNDING))
     if tables is None:
         out = build_companies_payload(None, None, asof, src)
         out["note"] = note
@@ -566,8 +578,8 @@ def build_epoch_companies(asof: date | None = None) -> dict:
 
 def build_epoch_chips(asof: date | None = None) -> dict:
     asof = asof or _io.today_kst()
-    src = _io.source_block("ai_chip_sales", SRC_CHIPS_ZIP, "epoch", asof)
-    tables, note = _load(SRC_CHIPS_ZIP, (M_TIMELINES_BY_CHIP, M_CHIP_TYPES))
+    src = _io.source_block("ai_chip_sales", member_path(M_TIMELINES_BY_CHIP), "epoch", asof)
+    tables, note = _load((M_TIMELINES_BY_CHIP, M_CHIP_TYPES))
     if tables is None:
         out = build_chips_payload(None, None, asof, src)
         out["note"] = note
@@ -581,8 +593,8 @@ def build_epoch_datacenters(asof: date | None = None) -> dict:
     """★`asof` 기본값은 오늘(KST)이다. **None 을 넘기면 미래 행이 섞인다** — 계산부가
     그 판단을 하지 않도록 일부러 인자로 뺐고, 테스트가 두 값을 핀으로 박고 있다."""
     asof = asof or _io.today_kst()
-    src = _io.source_block("data_centers", SRC_DC_ZIP, "epoch", asof)
-    tables, note = _load(SRC_DC_ZIP, (M_DATA_CENTERS, M_DC_TIMELINES))
+    src = _io.source_block("data_centers", member_path(M_DC_TIMELINES), "epoch", asof)
+    tables, note = _load((M_DATA_CENTERS, M_DC_TIMELINES))
     if tables is None:
         out = build_datacenters_payload(None, None, asof, src)
         out["note"] = note

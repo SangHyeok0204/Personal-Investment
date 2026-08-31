@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getRateTopics, type RateSeries, type RateTopics } from "@/lib/api";
 import { EMDASH } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
+import { POLL_MS } from "@/components/ai-key-data/poll";
+import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
 
 // [금리 주제 차트] — 금리_2.xlsx 의 시계열 주제(인플레·WTI·ADP·FOMC확률)를 그리는
 // 공용 카드. 네 카드가 모양이 같아서 하나로 묶었다(이 레포는 차트를 파일마다 복붙하는
@@ -16,8 +18,6 @@ import { cn } from "@/lib/utils";
 //   로 헤더 숫자만 띄운다. 같이 그리면 바닥에 눌려 안 읽힌다.
 //
 // 렌더 관례는 컴퓨팅 지수 카드와 같다(ResizeObserver + viewBox 를 px 와 1:1).
-
-const POLL_MS = 600_000; // 원천이 수기 복사본이라 자주 물을 이유가 없다
 
 // 하우스 팔레트 4슬롯 — 흰 캔버스 기준 CVD·명도 검증 통과.
 // 주황은 대비 2.65:1 이라 색만으로 두지 않고 범례에 이름+현재값을 같이 띄운다.
@@ -39,10 +39,12 @@ function niceTicks(lo: number, hi: number, count: number): number[] {
   return out;
 }
 
-const PAD_L = 40; // y 라벨
+// ★2026-08-31 글자 상향(9~9.5 -> 11~11.5px)에 맞춰 축 여백도 넓혔다 —
+//   안 넓히면 y 라벨이 잘리고 x 날짜가 서로 겹친다.
+const PAD_L = 50; // y 라벨
 const PAD_R = 6;
 const PAD_T = 4;
-const XAXIS_H = 14;
+const XAXIS_H = 18;
 
 // 제목 띠 강조색은 tailwind 토큰 `ge-header`(#483629) — 2026-08-28 카드 6장이
 // 같이 쓰게 되면서 raw hex 를 토큰으로 승격했다.
@@ -137,7 +139,7 @@ function Chart({
               <text
                 x={PAD_L - 5}
                 y={y + 3}
-                fontSize={9.5}
+                fontSize={11.5}
                 fill={AXIS_TEXT}
                 textAnchor="end"
                 style={{ fontVariantNumeric: "tabular-nums" }}
@@ -167,7 +169,7 @@ function Chart({
             key={d}
             x={X(day(d))}
             y={h - 4}
-            fontSize={9.5}
+            fontSize={11.5}
             fill={AXIS_TEXT}
             textAnchor="middle"
             style={{ fontVariantNumeric: "tabular-nums" }}
@@ -205,11 +207,11 @@ function Chart({
             transform: hx > w / 2 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
           }}
         >
-          <div className="mb-0.5 text-[10px] tabular-nums text-ink-muted">{hoverX}</div>
+          <div className="mb-0.5 text-[12px] tabular-nums text-ink-muted">{hoverX}</div>
           {series.map((s, i) => {
             const v = lookup[i].get(hoverX);
             return (
-              <div key={s.key} className="flex items-center gap-1.5 text-[11px] leading-tight">
+              <div key={s.key} className="flex items-center gap-1.5 text-[13px] leading-tight">
                 <span
                   className="inline-block h-2 w-2 shrink-0 rounded-sm"
                   style={{ background: PALETTE[i % PALETTE.length] }}
@@ -249,6 +251,7 @@ export function RateChartCard({
   /** 탭 묶음에 들어갈 때 제목 자리에 끼우는 칩(page.tsx 가 상태를 든다). */
   tabs?: React.ReactNode;
 }) {
+  const { zoomed, toggle, zoomCls } = useCardZoom();
   const { data, isLoading, isError } = useQuery<RateTopics>({
     queryKey: ["rate-topics"], // 네 카드가 같은 키 → fetch 는 한 번
     queryFn: getRateTopics,
@@ -281,6 +284,7 @@ export function RateChartCard({
   return (
     <section
       className={cn(
+        zoomCls,
         "flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas",
         // 정적 클래스로 적어야 tailwind 가 스캔한다(`lg:col-span-${n}` 은 안 나온다).
         colSpan === 3 ? "lg:col-span-3" : colSpan === 1 ? "lg:col-span-1" : "lg:col-span-2",
@@ -290,19 +294,24 @@ export function RateChartCard({
           ★2026-08-28 사용자 지시로 페이지의 카드가 전부 이 색이 되면서 accent 조건분기를
           걷어냈다(켜고 끄는 카드가 더는 없다). 탭 묶음에선 제목 자리를 칩이 대신한다. */}
       <header className="flex items-center gap-2 rounded-t-xl bg-ge-header px-3 py-1.5">
-        {tabs ?? <h2 className="shrink-0 text-[13px] font-extrabold text-white">{title}</h2>}
-        <span className="min-w-0 truncate text-[11px] text-white/70">{sub}</span>
+        {tabs ?? <h2 className="shrink-0 text-[15px] font-extrabold text-white">{title}</h2>}
+        <span className="min-w-0 truncate text-[13px] text-white/70">{sub}</span>
         {group?.asof ? (
-          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-white/60">
+          <span className="ml-auto shrink-0 text-[13px] tabular-nums text-white/60">
             {group.asof} 기준
           </span>
         ) : null}
+      <ZoomButton zoomed={zoomed} onToggle={toggle} />
       </header>
 
       {/* 범례 = 이름 + 현재값. 색만으로 계열을 가르지 않게 하는 장치이자
           (주황 대비 2.65:1 보완) 카드에서 제일 먼저 읽히는 숫자다. */}
-      {plotted.length > 0 ? (
-        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0 px-3 pt-1 text-[11px]">
+      {/* ★확대했을 때만(2026-08-31 사용자 지시 — 같은 클래스의 범례 줄 전부 해당).
+          ⚠️이 카드는 계열이 1~4개라 한 줄로 끝나지만, 지시대로 같은 규칙을 적용한다.
+            대신 축소 상태에서는 현재값 숫자가 안 보이게 되므로, 필요하면 여기만
+            되돌리면 된다(조건에서 `zoomed &&` 만 빼면 원상복구). */}
+      {zoomed && plotted.length > 0 ? (
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0 px-3 pt-1 text-[13px]">
           {plotted.map((s, i) => (
             <span key={s.key} className="flex items-baseline gap-1">
               <span
@@ -345,7 +354,7 @@ export function RateChartCard({
 function Center({ msg, tone }: { msg: string; tone?: string }) {
   return (
     <div className="flex h-full items-center justify-center px-6 text-center">
-      <span className={cn("text-[12px] font-semibold leading-relaxed text-ink-muted", tone)}>
+      <span className={cn("text-[13.5px] font-semibold leading-relaxed text-ink-muted", tone)}>
         {msg}
       </span>
     </div>

@@ -1807,7 +1807,33 @@ export interface OpenRouterTokenUsage {
     yoy_x: number | null;
   };
   vendors: OpenRouterVendor[]; // 스냅샷 — 차트 아님, 뱃지 전용
+  // ★모델별 **시계열**. 서버가 최근 창(30일) 기준 상위 10개를 골라 실어 준다.
+  //   ⚠️`points` 의 값이 `null` 이면 "그날 top-50 밖"이지 0이 아니다 — 선을 끊는다.
+  //   ⚠️총합(`totals.daily`, 605일)과 **구간이 다르다**(모델별은 30일). 같은 축에 겹치지 않는다.
+  models: OpenRouterModel[];
+  // ★★화면이 그리는 건 이쪽이다(2026-08-31 사용자 지시) — **모델 버전이 아니라 벤더**.
+  //   `deepseek/deepseek-v4-flash-20260731` 같은 버전 단위는 모델이 갈릴 때마다 선이 끊겨
+  //   추세가 안 읽힌다. 벤더로 접으면 "누가 밀고 있나"가 보인다.
+  //   ⚠️전 구간(605일)이다. `models` 는 30일 창이라 구간이 다르다.
+  //   ⚠️`other(top-50 밖)` 는 벤더가 아니라 OpenRouter 자신의 **잔차 버킷**이고,
+  //     `기타 벤더` 는 상위 N 밖 벤더를 접은 것이다 — 뜻이 달라 이름을 갈라 놨다.
+  vendor_series: OpenRouterVendorSeries[];
+  active_models_30d: number;
   other_share_pct: number;
+}
+export interface OpenRouterVendorSeries {
+  key: string;
+  name: string;
+  tokens: number;
+  share_pct: number | null;
+  points: [string, number | null][]; // null = 그날 그 벤더 모델이 top-50 밖(0 아님)
+}
+export interface OpenRouterModel {
+  slug: string;
+  vendor: string;
+  tokens: number;
+  share_pct: number | null;
+  points: [string, number | null][];
 }
 export function getOpenRouterTokenUsage(): Promise<OpenRouterTokenUsage> {
   return request<OpenRouterTokenUsage>("/api/v1/ai-key-data/ai-token-usage");
@@ -1843,9 +1869,27 @@ export interface NpmDownloads {
   totals: {
     daily: [string, number][];
     daily_ma7: [string, number | null][];
+    // ★화면이 그리는 **유일한 선**. `daily_ma7` 에서 이상치에 오염된 구간만 선형보간으로
+    //   갈아 끼운 것이다. 보정 계열을 따로 그어 두 줄로 만들지 않는다(2026-08-31 사용자 지시).
+    daily_ma7_interp: [string, number | null][];
   };
   packages: NpmPackage[];
   n_packages: number;
+  // 패키지별 이상치 판정 전량(숨기지 않는다). 총합 차트에 다 찍으면 잡음이라
+  // 화면은 아래 `totals_anomaly_dates` 만 빨갛게 표시한다.
+  anomalies: NpmAnomaly[];
+  // 총합 곡선이 실제로 튄 날(비율 20%↑ **그리고** 최댓값의 1%↑ = 차트에서 보이는 것).
+  totals_anomaly_dates: string[];
+  // `daily_ma7_interp` 에서 실제로 보간된 날짜 — 화면이 이 구간만 빨간 선으로 덧그린다.
+  // ⚠️이상치 날짜보다 넓다(ma7 이 7일 창이라 이상치 하루가 평균 7점을 오염시킨다).
+  ma7_interp_dates: string[];
+}
+export interface NpmAnomaly {
+  date: string;
+  package: string;
+  value: number;
+  expected: number; // 좌우 창 중앙값의 작은 쪽
+  ratio: number;
 }
 export function getNpmDownloads(): Promise<NpmDownloads> {
   return request<NpmDownloads>("/api/v1/ai-key-data/npm-downloads");
@@ -1871,13 +1915,9 @@ export interface VscodeSnapshot {
   utc: string;
   n_extensions: number;
 }
-export interface VscodeGap {
-  // ⚠️필드 이름 추정 — 현재 라이브 데이터가 빈 배열이라 실측 불가(§주석 위 참조).
-  from?: string;
-  to?: string;
-  date?: string;
-  days?: number;
-}
+// ★2026-08-31 실측으로 정정. 결측 **날짜 문자열 배열**이다(객체가 아니다).
+//   콜렉터 `vscode_installs.py:117` 이 첫 스냅샷~마지막 사이의 빠진 날을 그대로 나열한다.
+export type VscodeGap = string;
 export interface VscodeExtensionStats {
   last: number;
   last_date: string;
@@ -1887,15 +1927,19 @@ export interface VscodeExtensionStats {
   negative_days: number;
   stale_days: number;
 }
-export interface VscodeDeltaPoint {
-  date: string;
-  value: number;
-  span_days: number; // ★1보다 크면 데몬 공백을 낀 누적분 — "하루 증분"으로 읽으면 안 된다
-}
+// ★★2026-08-31 실측으로 전면 정정. 아래 두 타입은 설계 문서 기준 **추정치**였고 실물과
+//   달랐다 — 그 탓에 화면이 `lastDelta.value`(undefined)를 포맷하다 TypeError 로 죽었다.
+//   어제까지는 스냅샷이 1개라 delta 가 빈 배열이어서 그 분기가 아예 안 돌았고, 오늘 처음
+//   2개가 되면서 터졌다. 정본은 콜렉터 `vscode_installs.py:143-144`.
+//
+// delta 는 객체가 아니라 **[날짜, 증분] 튜플**이다.
+export type VscodeDeltaPoint = [string, number];
+// marks 는 delta 와 **인덱스 1:1**이고 자기 날짜를 갖지 않는다 — 날짜는 delta[i][0] 에 있다.
+// ★`span_days` 가 1보다 크면 데몬 공백을 낀 누적분이다("하루 증분"으로 읽으면 안 된다).
 export interface VscodeDeltaMark {
-  date: string;
   negative: boolean; // true = 그 시점 값이 직전보다 줄었다(MS 소급 정정)
-  note?: string | null;
+  span_days: number;
+  from: string;      // 차분의 시작 스냅샷 날짜
 }
 export interface VscodeExtension {
   key: string;
@@ -2017,6 +2061,10 @@ export interface EpochChips {
   unit: string; // "H100e"
   quarters: string[]; // designers[].flow/cum/units 와 같은 인덱스를 공유하는 x축(분기말)
   incomplete_quarters: string[];
+  // ★끝난 분기 중 마지막(분기말 <= asof). **분기 신규(flow) 차트는 여기까지만 그린다** —
+  //   진행 중 분기는 제조사 한 곳만 보고돼 있어 그대로 그리면 '출하 급감'으로 읽힌다.
+  //   ⚠️누적(cum)에는 적용하지 않는다(부분 관측도 누적엔 유효, 자르면 5% 과소계상).
+  last_complete_quarter: string | null;
   designers: EpochChipDesigner[];
 }
 export function getEpochChips(): Promise<EpochChips> {
@@ -2042,6 +2090,48 @@ export interface EpochDatacenters {
 }
 export function getEpochDatacenters(): Promise<EpochDatacenters> {
   return request<EpochDatacenters>("/api/v1/ai-key-data/epoch-datacenters");
+}
+
+// ── AI 사용량 탭 카드 ④ OpenRouter tool-calling (2026-08-31 신설) ────────────
+// 원천 `tool_calling_long.csv`(date,total_tokens,tool_calling_tokens) — 수집기가 같은
+// rankings-daily 를 필터 없이 1회 + `modality=tool_calling` 1회 쳐서 굽는다.
+//
+// ★★**비중(tool/total)을 그리지 않는다.** 598일 내내 99.28~99.46% 라 사실상 상수다
+//   (원본 xlsx·재수집 양쪽 실측). OpenRouter 의 `tool_calling` 은 "툴콜을 실제로 쓴
+//   요청"이 아니라 "툴콜을 지원하는 모델" 쪽에 가까워서, 비중을 그리면 평평한 99%
+//   직선이 나오고 아무 정보가 없다. 그래서 서버가 `series` 로 주는 건 둘뿐이다:
+//     · ratio    = tool / non-tool  — 실측 72~185배 구간에서 실제로 움직인다
+//     · non_tool = total - tool     — 71B~120B 구간에서 움직인다
+//   비중은 `stats.share_pct` 에 숫자 한 개로만 온다(맥락용, 차트 금지).
+// ⚠️non_tool 이 0 인 날은 ratio 계열에서 **점이 빠진다**(0/inf 로 채우지 않는다).
+//   그래서 두 계열의 길이가 다를 수 있다 — 화면은 각 계열의 자기 points 만 본다.
+export interface ToolCallingSeries {
+  key: "ratio" | "non_tool";
+  label: string;
+  unit: string;
+  points: [string, number][];
+}
+export interface ToolCallingStats {
+  last_date: string;
+  total: number;
+  tool: number;
+  non_tool: number;
+  ratio: number | null;
+  share_pct: number | null; // ★차트 금지 — 사실상 상수
+  n: number;
+}
+export interface ToolCalling {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  unit: string;
+  kind: "line";
+  series: ToolCallingSeries[];
+  stats: ToolCallingStats | null;
+}
+export function getToolCalling(): Promise<ToolCalling> {
+  return request<ToolCalling>("/api/v1/ai-key-data/tool-calling");
 }
 
 // ── [종목 모니터] 가격 모니터 (주간가격모니터 84개 시장) ──────────────────────
@@ -2104,27 +2194,21 @@ export function getPriceBoard(cat: PriceCatKey): Promise<PriceBoard> {
 // ── 차트 계열 ────────────────────────────────────────────────────────────────
 // ★★2026-08-31 계약 교체. DtD·WtD·MtD·YtD **시계열**은 없어졌다 — 달력 앵커라
 //   월초·연초마다 0 으로 리셋되는 톱니여서 추세를 읽을 수 없고, 그 숫자는 요약
-//   표(PriceBoardRow)가 이미 준다. 차트는 3모드다:
-//     · cum (누적수익률)    — **프론트가** 보는 구간 첫 점 기준으로 price 를 리베이스
-//     · rs  (벤치마크 대비) — **프론트가** price 를 benchmark 로 나눈 상대곡선
-//     · r3m (롤링 3M)       — 서버가 계산해 준 그대로
+//   표(PriceBoardRow)가 이미 준다. 차트는 2모드다:
+//     · cum (누적수익률) — **프론트가** 보는 구간 첫 점 기준으로 price 를 리베이스
+//     · r3m (롤링 3M)    — 서버가 계산해 준 그대로
 //   그래서 계열마다 price·r3m 을 **둘 다** 싣는다 — 모드를 바꿔도 재요청이 없다.
-// ★cum·rs 를 서버가 못 만드는 이유: 리베이스 기준점이 사용자가 좁힌 구간의 첫 점이라
+// ★cum 을 서버가 못 만드는 이유: 리베이스 기준점이 사용자가 좁힌 구간의 첫 점이라
 //   서버가 모른다. 고정 시작점으로 계산하면 구간을 좁혀도 0% 가 안 따라온다.
-export type PriceChartMode = "cum" | "rs" | "r3m";
+// ★'벤치마크 대비'(상대곡선) 모드는 만들었다가 같은 날 제거했다(사용자 지시) —
+//   payload 에 벤치마크 계열이 없는 이유다.
+export type PriceChartMode = "cum" | "r3m";
 export interface PriceChartSeries {
   key: string;   // 티커
   label: string;
   sub: string;
-  price: [string, number][]; // 가격 원본(주간) — cum·rs 의 재료
+  price: [string, number][]; // 가격 원본(주간) — cum 의 재료
   r3m: [string, number][];   // 롤링 91일 지표(주간). 앞 91일이 없어 price 보다 짧다
-}
-// 상대곡선의 분모. 채권·환은 null 이다(금리를 금리로 나눌 수 없고, 환은 그 자체가
-// 이미 상대가격이다) — 그때는 화면이 '벤치마크 대비' 토글을 비활성으로 둔다.
-export interface PriceBenchmark {
-  key: string;
-  label: string;
-  points: [string, number][];
 }
 interface PriceChartCommon {
   generated_at: string;
@@ -2132,7 +2216,6 @@ interface PriceChartCommon {
   is_yield: boolean;
   modes: { key: PriceChartMode; label: string }[];
   series: PriceChartSeries[];
-  benchmark: PriceBenchmark | null;
   note?: string | null;
 }
 export interface PriceMetricPayload extends PriceChartCommon {

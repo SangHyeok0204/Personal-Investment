@@ -46,6 +46,16 @@ OTHER_KEY = "other"       # top-50 밖 전부를 뭉친 버킷. **모델이 아�
                           # "점유율"의 분모로 쓰면 안 된다.
 WINDOW_DAYS = 30          # 벤더·모델 순위를 매기는 창
 TOP_MODELS = 10           # payload 에 계열을 실을 모델 수 (창 기준 상위 N)
+# ★2026-08-31 사용자 지시 — 화면은 **모델 버전이 아니라 벤더(대분류)** 로 묶어 본다.
+#   `deepseek/deepseek-v4-flash-20260731` 같은 버전 단위는 모델이 갈릴 때마다 선이
+#   끊겨 추세가 안 읽힌다. 벤더로 접으면 deepseek·openai·anthropic·stealth·tencent·
+#   xiaomi 처럼 "누가 밀고 있나"가 보인다.
+TOP_VENDORS_RECENT = 6    # 최근 창 상위 몇 개를 합집합에 더할지(신규 진입자 확보용)
+TOP_VENDORS = 12          # 계열로 실을 벤더 수. 나머지는 `기타 벤더` 한 줄로 접는다.
+#   ★8 로 두면 사용자가 지목한 `stealth` 가 잘리고 `기타 벤더` 가 20% 로 최대가 된다.
+#   12 면 잔차가 한 자릿수로 내려가고 지목된 벤더가 전부 자기 이름으로 선다.
+OTHER_VENDOR = "기타 벤더"        # top-N 밖 벤더를 접은 것
+OTHER_RESIDUAL = "other(top-50 밖)"  # OpenRouter 자신의 잔차 버킷 — 벤더가 아니다
 MA_WINDOW = 7             # 요일 효과 평활. 앞 6일은 창이 안 차 null 이다
 WEEKDAY_WINDOW = 90       # 요일 지수를 재는 창
 YOY_WINDOW = 28           # "1년 전의 몇 배" 를 재는 창
@@ -98,6 +108,7 @@ def build_payload(
         "missing_dates": [],
         "stats": {},
         "vendors": [],
+        "vendor_series": [],
         "models": [],
         "active_models_30d": 0,
         "other_share_pct": None,
@@ -193,6 +204,12 @@ def build_payload(
         for m, v in by_date_model[d].items():
             model_tot[m] = model_tot.get(m, 0) + v
 
+    # 최근 창 기준 벤더 합계 — 아래 `vendors`(스냅샷)와 벤더 랭킹(합집합) 양쪽이 쓴다.
+    model_tot_by_vendor: dict[str, int] = {}
+    for m, v in model_tot.items():
+        _vk = m.split("/")[0] if "/" in m else m
+        model_tot_by_vendor[_vk] = model_tot_by_vendor.get(_vk, 0) + v
+
     vendors: dict[str, dict] = {}
     for m, v in model_tot.items():
         # ⚠️`/` 가 없는 값은 실측상 `other` 하나뿐이다.
@@ -220,6 +237,65 @@ def build_payload(
             "share_pct": round(model_tot[m] / wtot * 100, 2) if wtot else None,
             "points": [[d.isoformat(), by_date_model[d].get(m)] for d in wdays],
         })
+
+    # ── 벤더별 **시계열** (2026-08-31 신설) ────────────────────────────────
+    # ⚠️모델 계열(위)과 달리 **전 구간**을 싣는다. 벤더는 10여 개뿐이라 무겁지 않고,
+    #   30일만 보면 "언제부터 밀기 시작했나"가 안 보인다(모델 계열은 50개 x 605일이라
+    #   창을 잘랐던 것이고, 벤더는 그 제약이 없다).
+    # ⚠️그날 그 벤더의 모델이 top-50 에 하나도 없으면 **null** 이다(0 아님) — 0으로 채우면
+    #   "그날 안 썼다"가 되는데 실제로는 "관측 창 밖"이다. 모델 계열과 같은 규약.
+    # ★랭킹은 **전 구간 합계** 기준이다. 최근 30일 창(`out["vendors"]`)으로 고르면
+    #   그때 잠깐 밀린 벤더가 올라오고 `anthropic` 처럼 꾸준한 벤더가 `기타` 에 묻힌다(실측).
+    all_daily: dict[str, dict[date, int]] = {}
+    for d in days:
+        for m, v in by_date_model[d].items():
+            vk = m.split("/")[0] if "/" in m else m
+            all_daily.setdefault(vk, {})[d] = all_daily.setdefault(vk, {}).get(d, 0) + v
+    all_total = {n: sum(mm.values()) for n, mm in all_daily.items()}
+
+    # ⚠️OpenRouter 의 `other`(= 그날 top-50 밖 모델 전부)는 벤더가 아니라 **잔차 버킷**이다.
+    #   내가 접는 `기타 벤더`(top-N 밖 벤더)와 뜻이 달라 이름을 갈라 둔다. 합치면
+    #   "커버리지 밖"과 "작은 벤더"가 한 줄이 되어 둘 다 못 읽는다.
+    # ★★랭킹을 하나로만 잡으면 한쪽을 반드시 놓친다:
+    #   · 전 구간 합계만 보면 → 최근 진입자가 묻힌다(`stealth` 는 관측 6일이라 전 구간 하위).
+    #   · 최근 창만 보면     → 꾸준한 벤더가 묻힌다(`anthropic` 12% 가 `기타` 로 갔다. 실측).
+    #   그래서 **전 구간 상위 N ∪ 최근 창 상위 M** 의 합집합을 쓴다. 둘 다 이유가 있어서
+    #   올라온 벤더이고, 겹치는 게 대부분이라 계열 수가 크게 늘지 않는다.
+    ranked = [n for n in sorted(all_total, key=lambda n: -all_total[n]) if n != OTHER_KEY]
+    recent = [
+        n for n in sorted(model_tot_by_vendor, key=lambda n: -model_tot_by_vendor[n])
+        if n != OTHER_KEY
+    ]
+    keep = ranked[:TOP_VENDORS]
+    for n in recent[:TOP_VENDORS_RECENT]:
+        if n not in keep:
+            keep.append(n)
+    keep_set = set(keep)
+
+    vend_daily: dict[str, dict[date, int]] = {n: all_daily[n] for n in keep}
+    if OTHER_KEY in all_daily:
+        vend_daily[OTHER_RESIDUAL] = all_daily[OTHER_KEY]
+    rest = [n for n in ranked[TOP_VENDORS:]]
+    if rest:
+        acc: dict[date, int] = {}
+        for n in rest:
+            for d, v in all_daily[n].items():
+                acc[d] = acc.get(d, 0) + v
+        vend_daily[OTHER_VENDOR] = acc
+
+    vend_total = {n: sum(mm.values()) for n, mm in vend_daily.items()}
+    grand = sum(vend_total.values())
+    out["vendor_series"] = [
+        {
+            "key": _io.slug(n),
+            "name": n,
+            "tokens": vend_total[n],
+            "share_pct": round(vend_total[n] / grand * 100, 2) if grand else None,
+            "points": [[d.isoformat(), vend_daily[n].get(d)] for d in days],
+        }
+        for n in sorted(vend_daily, key=lambda n: -vend_total[n])
+        if vend_total[n] > 0
+    ]
 
     out["active_models_30d"] = sum(1 for m in model_tot if m != OTHER_KEY)
     oth = [

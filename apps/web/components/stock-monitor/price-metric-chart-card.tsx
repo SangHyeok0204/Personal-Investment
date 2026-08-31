@@ -18,20 +18,21 @@ import { cn } from "@/lib/utils";
 //
 // ★★2026-08-31 전면 개편(사용자 지시). DtD·WtD·MtD·YtD **시계열을 전부 뺐다** —
 //   달력 앵커라 월초·연초마다 0 으로 리셋되는 톱니여서 추세가 안 읽히고, 그 숫자는
-//   우하단 요약 표(price-summary-card)가 이미 보여준다. 대신 3모드:
-//     · 누적수익률    — 보는 구간 시작 = 0% 로 리베이스. 레벨이 다른 지수를 한 축에
-//                       얹는 유일한 방법이다(SPX 7,700 vs KOSPI200 400).
-//     · 벤치마크 대비 — 상대곡선. **우상향 = 아웃퍼폼**. 시장이 다 오를 때 절대
-//                       수익률로는 못 가르는 것을 이게 가른다(섹터 고르기의 핵심).
-//     · 롤링 3M       — 0선 교차 = 추세 전환. 서버가 계산해 준 그대로 그린다.
+//   우하단 요약 표(price-summary-card)가 이미 보여준다. 대신 2모드:
+//     · 누적수익률 — 보는 구간 시작 = **100** 으로 리베이스(사용자 지시 8/31).
+//                    레벨이 다른 지수를 한 축에 얹는 유일한 방법이다
+//                    (SPX 7,700 vs KOSPI200 400). 채권만 0 기준 누적 bp.
+//     · 롤링 3M    — 0선 교차 = 추세 전환. 서버가 계산해 준 그대로 그린다.
 //   ★이평선은 넣지 않는다(사용자 확정): **가격 축**을 요구해서 레벨이 다른 지수를
 //     겹칠 수 없다 — 이 화면의 주력인 묶음 비교와 원리적으로 안 맞는다.
+//   ★'벤치마크 대비'(상대곡선) 모드도 같은 날 만들었다가 **제거**했다(사용자 지시).
+//     되살릴 거면 서버 payload 에 벤치마크 계열부터 다시 실어야 한다.
 //
-// ★★앞의 둘은 **여기서** 계산한다. 리베이스 기준점이 사용자가 헤더 날짜 칸으로 좁힌
-//   구간의 첫 점이라 서버는 그걸 모른다. 서버는 가격 원본(price)만 실어 준다.
+// ★★누적수익률은 **여기서** 계산한다. 리베이스 기준점이 사용자가 헤더 날짜 칸으로
+//   좁힌 구간의 첫 점이라 서버는 그걸 모른다. 서버는 가격 원본(price)만 실어 준다.
 //   그래서 모드를 바꿔도 재요청이 없다 — 칩이 즉각 반응한다.
 //
-// ★두 모드가 **같은 차트**를 쓴다: 지수 하나(leaf) = 계열 1개, 묶음(group) = 계열 N개.
+// ★두 선택이 **같은 차트**를 쓴다: 지수 하나(leaf) = 계열 1개, 묶음(group) = 계열 N개.
 //   payload 모양이 같아서 차트는 계열 배열 하나만 받는다.
 // ★묶음 모드의 범례는 계열 켜기/끄기다 — 유럽 11개처럼 많을 때 솎아 보라고 둔다.
 
@@ -41,7 +42,6 @@ const POLL_MS = 600_000;
 // 묶음 모드는 계열마다 PALETTE 를 쓰므로 이 값을 안 본다.
 const MODE_COLOR: Record<PriceChartMode, string> = {
   cum: "#4a7ab5",
-  rs: "#7b5ea7",
   r3m: "#2aa876",
 };
 
@@ -93,15 +93,24 @@ function niceTicks(lo: number, hi: number, count: number): number[] {
   return out;
 }
 
+// 값 표기 — 지수(100 기준)는 부호도 단위도 붙이지 않고, 변화율·bp 는 둘 다 붙인다.
+function fmtVal(v: number, suffix: string, signed: boolean): string {
+  return `${signed && v > 0 ? "+" : ""}${v.toFixed(1)}${suffix}`;
+}
+
 function Chart({
   lines,
   suffix,
+  signed,
+  baseline,
   title,
   w,
   h,
 }: {
   lines: Line[];
   suffix: string;
+  signed: boolean;
+  baseline: number; // 기준선 — 지수 모드 100, 변화율·bp 모드 0
   title: string;
   w: number;
   h: number;
@@ -115,8 +124,10 @@ function Chart({
   const { x0, x1, yLo, yHi, dates, lookup } = useMemo(() => {
     const ds = lines.flatMap((s) => s.points.map((p) => day(p[0])));
     const vs = lines.flatMap((s) => s.points.map((p) => p[1]));
-    const lo = Math.min(...vs, 0); // 0 을 항상 포함 — 이 차트의 기준선이다
-    const hi = Math.max(...vs, 0);
+    // ★기준선을 y 범위에 **항상 포함**시킨다. 안 그러면 전 계열이 100 위에만 있을 때
+    //   기준선이 화면 밖으로 밀려 "무엇 대비인지"가 사라진다.
+    const lo = Math.min(...vs, baseline);
+    const hi = Math.max(...vs, baseline);
     const pad = (hi - lo) * 0.06 || 1;
     const uniq = [...new Set(lines.flatMap((s) => s.points.map((p) => p[0])))].sort();
     return {
@@ -127,7 +138,7 @@ function Chart({
       dates: uniq,
       lookup: lines.map((s) => new Map(s.points)),
     };
-  }, [lines]);
+  }, [lines, baseline]);
 
   const X = (d: number) => PAD_L + ((d - x0) / (x1 - x0 || 1)) * plotW;
   const Y = (v: number) => py1 - ((v - yLo) / (yHi - yLo)) * plotH;
@@ -183,7 +194,7 @@ function Chart({
   };
 
   const hx = hoverX ? X(day(hoverX)) : 0;
-  const fmt = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}${suffix}`;
+  const fmt = (v: number) => fmtVal(v, suffix, signed);
 
   // 툴팁은 그 시점 값이 큰 순서로 — 계열이 11개면 순위 자체가 읽을 거리다.
   const hovered = hoverX
@@ -208,7 +219,7 @@ function Chart({
         {niceTicks(yLo, yHi, 4).map((v) => {
           const y = Y(v);
           if (y < PAD_T - 0.5 || y > py1 + 0.5) return null;
-          const isZero = Math.abs(v) < 1e-9;
+          const isZero = Math.abs(v - baseline) < 1e-9;
           return (
             <g key={v}>
               <line
@@ -232,6 +243,17 @@ function Chart({
             </g>
           );
         })}
+
+        {/* 기준선 — 눈금이 우연히 이 값을 비껴가도 항상 그린다. 지수 모드에서 100 은
+            "구간 시작"이라 이 선이 없으면 위/아래를 판단할 기준 자체가 사라진다. */}
+        <line
+          x1={PAD_L}
+          y1={Y(baseline)}
+          x2={PAD_L + plotW}
+          y2={Y(baseline)}
+          stroke={ZERO}
+          strokeWidth={1.4}
+        />
 
         {lines.map((s) => (
           <path
@@ -307,7 +329,6 @@ function Chart({
 
 const MODES: { key: PriceChartMode; label: string }[] = [
   { key: "cum", label: "누적수익률" },
-  { key: "rs", label: "벤치마크 대비" },
   { key: "r3m", label: "롤링 3M" },
 ];
 
@@ -354,18 +375,15 @@ export function PriceMetricChartCard({
   const q = isGroup ? groupQ : leafQ;
   const data = q.data;
 
-  // 벤치마크가 없는 자산군(채권·환)에서는 상대곡선 자체가 성립하지 않는다 —
-  // 칩을 비활성으로 두고, 그 모드를 고른 채 탭을 옮겨 왔으면 누적수익률로 되돌린다.
-  const bench = data?.benchmark ?? null;
-  const rsOff = data != null && bench == null;
-  useEffect(() => {
-    if (rsOff && mode === "rs") setMode("cum");
-  }, [rsOff, mode]);
-  const effMode: PriceChartMode = mode === "rs" && rsOff ? "cum" : mode;
-
-  // 단위 — 누적수익률만 금리에서 bp(누적 변화폭)가 된다. 상대곡선은 채권에서 아예
-  // 못 쓰고(위), 롤링 3M 은 서버가 이미 bp 로 계산해 보낸다.
-  const suffix = data?.is_yield && effMode !== "rs" ? "bp" : "%";
+  // ★★누적수익률은 **구간 시작 = 100 인 지수**로 그린다(사용자 지시 2026-08-31).
+  //   0 기준 %가 아니라 100 기준이라 부호(+)도 단위(%)도 붙이지 않는다 — "134.2" 는
+  //   구간 시작 대비 1.342배라는 뜻이다.
+  // ★단, **금리는 지수화하지 않는다.** 금리를 금리로 나눈 비율은 의미가 없어(4%→5%
+  //   를 125 라 부를 수 없다) 채권 탭의 누적수익률은 0 기준 **누적 bp 변화**로 남는다.
+  //   롤링 3M 도 변화량이라 언제나 0 기준이다.
+  const indexed = mode === "cum" && !data?.is_yield;
+  const suffix = indexed ? "" : data?.is_yield ? "bp" : "%";
+  const baseline = indexed ? 100 : 0;
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -389,12 +407,12 @@ export function PriceMetricChartCard({
       .map((s, i) => ({
         key: s.key,
         label: s.label,
-        color: isGroup ? PALETTE[i % PALETTE.length] : MODE_COLOR[effMode],
+        color: isGroup ? PALETTE[i % PALETTE.length] : MODE_COLOR[mode],
         dash: isGroup && i >= PALETTE.length ? DASH : undefined,
-        points: effMode === "r3m" ? s.r3m : s.price,
+        points: mode === "r3m" ? s.r3m : s.price,
       }))
       .filter((s) => !hidden.has(s.key) && s.points.length > 0);
-  }, [data, isGroup, effMode, hidden]);
+  }, [data, isGroup, mode, hidden]);
 
   // 데이터가 가진 날짜 폭 — 기본 창의 기준점이자 날짜 칸의 min/max.
   const extent = useMemo(() => {
@@ -423,51 +441,31 @@ export function PriceMetricChartCard({
   const lines: Line[] = useMemo(() => {
     if (!view) return raw;
     const isYield = !!data?.is_yield;
-    // 상대곡선의 분모 — 날짜로 찍어 쓴다. 벤치마크에 없는 주는 그 점을 버린다.
-    const bmap = bench ? new Map(bench.points) : null;
 
     const out: Line[] = [];
     for (const s of raw) {
       const win = s.points.filter(([d]) => d >= view.from && d <= view.to);
       if (win.length === 0) continue;
 
-      if (effMode === "r3m") {
+      // 롤링 3M 은 구간과 무관한 값이라 자르기만 하면 된다.
+      if (mode === "r3m") {
         out.push({ ...s, points: win });
         continue;
       }
 
-      if (effMode === "cum") {
-        const base = win[0][1];
-        // 금리는 비율이 아니라 **누적 bp 변화**다 — 4%→5% 를 +25% 라 하면 안 된다.
-        if (!isYield && base === 0) continue;
-        out.push({
-          ...s,
-          points: win.map(([d, v]) => [
-            d,
-            isYield ? (v - base) * 100 : (v / base - 1) * 100,
-          ]) as [string, number][],
-        });
-        continue;
-      }
-
-      // rs — (지수/지수0) ÷ (벤치마크/벤치마크0) − 1. 우상향이면 아웃퍼폼이다.
-      if (!bmap) continue;
-      const paired = win
-        .map(([d, v]) => [d, v, bmap.get(d)] as [string, number, number | undefined])
-        .filter((p) => p[2] != null && p[2] !== 0) as [string, number, number][];
-      if (paired.length === 0) continue;
-      const [, p0, b0] = paired[0];
-      if (p0 === 0 || b0 === 0) continue;
+      const base = win[0][1];
+      // 금리는 비율이 아니라 **누적 bp 변화**다 — 4%→5% 를 125 라 하면 안 된다.
+      if (!isYield && base === 0) continue;
       out.push({
         ...s,
-        points: paired.map(([d, p, b]) => [d, (p / p0 / (b / b0) - 1) * 100]) as [
-          string,
-          number,
-        ][],
+        points: win.map(([d, v]) => [
+          d,
+          isYield ? (v - base) * 100 : (v / base) * 100,
+        ]) as [string, number][],
       });
     }
     return out;
-  }, [raw, view, effMode, bench, data?.is_yield]);
+  }, [raw, view, mode, data?.is_yield]);
 
   // 범례 숫자는 **그린 선의** 마지막 값이어야 한다 — 리베이스된 값과 다른 숫자를
   // 띄우면 범례가 차트를 배신한다. 그래서 원본이 아니라 lines 에서 찾는다.
@@ -488,14 +486,14 @@ export function PriceMetricChartCard({
       return next;
     });
 
-  const modeLabel = MODES.find((m) => m.key === effMode)?.label ?? "";
+  const modeLabel = MODES.find((m) => m.key === mode)?.label ?? "";
   const modeNote =
-    effMode === "rs" && bench
-      ? ` (${bench.label} 대비, ${suffix})`
-      : effMode === "cum"
-        ? ` (구간 시작 = 0, ${suffix})`
-        : ` (${suffix})`;
-  const subtitle = `${data?.sub ? `${data.sub} · ` : ""}${modeLabel}${modeNote} · 주간`;
+    mode === "cum"
+      ? indexed
+        ? " (구간 시작 = 100)"
+        : ` (구간 시작 대비 누적, ${suffix})`
+      : ` (${suffix})`;
+  const subtitle = `${data?.sub ? `${data.sub} · ` : ""}${modeLabel}${modeNote} · 일간`;
 
   return (
     // col-span-4 (2~5번째 열) — ETF 카드가 1칸으로 줄면서 넘겨받은 폭이다.
@@ -564,6 +562,8 @@ export function PriceMetricChartCard({
           <Chart
             lines={lines}
             suffix={suffix}
+            signed={!indexed}
+            baseline={baseline}
             title={`${data?.label ?? ""} 지표 추이`}
             w={box.w}
             h={box.h}
@@ -576,31 +576,22 @@ export function PriceMetricChartCard({
         <div className="flex flex-wrap items-center justify-center gap-1.5 px-3 py-1">
           <span className="mr-0.5 text-[10px] font-bold text-ink-muted">보기</span>
           {MODES.map((m) => {
-            const on = effMode === m.key;
-            // 벤치마크가 없는 자산군(채권·환)에서는 상대곡선이 성립하지 않는다.
-            const off = m.key === "rs" && rsOff;
+            const on = mode === m.key;
             return (
               <button
                 key={m.key}
                 type="button"
-                disabled={off}
                 onClick={() => setMode(m.key)}
                 title={
-                  off
-                    ? "이 자산군에는 벤치마크가 없습니다 — 금리는 비율로 나눌 수 없고, 환은 그 자체가 상대가격입니다."
-                    : m.key === "cum"
-                      ? "보는 구간 시작을 0 으로 맞춘 누적 곡선"
-                      : m.key === "rs"
-                        ? "벤치마크로 나눈 상대곡선 — 우상향이면 아웃퍼폼"
-                        : "그 시점의 3개월 전 대비 — 0 선을 넘으면 추세 전환"
+                  m.key === "cum"
+                    ? "보는 구간 시작을 0 으로 맞춘 누적 곡선"
+                    : "그 시점의 3개월 전 대비 — 0 선을 넘으면 추세 전환"
                 }
                 className={cn(
                   "flex items-baseline gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
-                  off
-                    ? "cursor-not-allowed text-slate-300"
-                    : on
-                      ? "bg-ge-blue-bg font-extrabold text-ge-point"
-                      : "text-ink-muted hover:bg-canvas-soft",
+                  on
+                    ? "bg-ge-blue-bg font-extrabold text-ge-point"
+                    : "text-ink-muted hover:bg-canvas-soft",
                 )}
               >
                 <span
@@ -645,9 +636,7 @@ export function PriceMetricChartCard({
                   <span className="font-bold text-ink">{s.label}</span>
                   {last != null ? (
                     <span className="tabular-nums text-ink-muted">
-                      {last > 0 ? "+" : ""}
-                      {last.toFixed(1)}
-                      {suffix}
+                      {fmtVal(last, suffix, !indexed)}
                     </span>
                   ) : null}
                 </button>

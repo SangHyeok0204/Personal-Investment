@@ -171,31 +171,31 @@ def test_rolling_series_is_historical_not_a_single_point():
     assert v == pytest.approx((base / (base - 91) - 1) * 100, rel=1e-9)
 
 
-def test_metric_payload_carries_price_and_r3m_and_benchmark():
+def test_metric_payload_carries_price_and_r3m():
     cols = {
         "SPX Index": _s([(date(2026, 6, 1) + timedelta(days=i), 100.0 + i) for i in range(120)]),
         "MXWD Index": _s([(date(2026, 6, 1) + timedelta(days=i), 50.0 + i * 0.5) for i in range(120)]),
     }
     out = pb.build_metric_payload(cols, "SPX Index")
-    assert [m["key"] for m in out["modes"]] == ["cum", "rs", "r3m"]
+    assert [m["key"] for m in out["modes"]] == ["cum", "r3m"]
     assert len(out["series"]) == 1
     ser = out["series"][0]
     # ★가격 원본과 롤링 3M 을 **둘 다** 싣는다 — 모드 전환에 재요청이 없어야 한다.
     assert ser["price"] and ser["r3m"]
-    # 두 배열은 같은 주간 격자 위에 있다(r3m 만 앞이 잘려 짧다)
+    # ★★차트는 **일간**이다(사용자 지시 2026-08-31). 주간으로 솎으면 안 된다 —
+    #   입력 120일이 그대로 120점으로 나와야 한다.
+    assert len(ser["price"]) == 120
+    assert [d for d, _ in ser["price"]] == sorted(d for d, _ in ser["price"])
+    # 두 배열은 같은 격자 위에 있다(r3m 만 앞 91일이 잘려 짧다)
     assert set(d for d, _ in ser["r3m"]) <= set(d for d, _ in ser["price"])
-    # 상대곡선의 분모 — 주식은 MSCI ACWI
-    assert out["benchmark"]["key"] == "MXWD Index"
-    assert out["benchmark"]["label"] == "MSCI ACWI"
+    assert len(ser["r3m"]) == 120 - 91
 
 
-def test_metric_payload_unit_follows_category_and_bond_has_no_benchmark():
+def test_metric_payload_unit_follows_category():
     cols = {"GT10 Govt": _s([(date(2026, 8, 27), 4.6), (date(2026, 8, 28), 4.68)])}
     out = pb.build_metric_payload(cols, "GT10 Govt")
     assert out["is_yield"] is True and out["unit"] == "bp"
     assert out["label"] == "10Y" and out["cat"] == "bond"
-    # ★금리를 금리로 나눈 상대곡선은 의미가 없다 — 화면이 토글을 비활성으로 둔다.
-    assert out["benchmark"] is None
     # 모르는 티커는 note 로 알린다
     miss = pb.build_metric_payload(cols, "NOPE Index")
     assert miss["series"] == [] and miss["note"]
@@ -209,7 +209,6 @@ def test_group_payload_shape_matches_single():
     out = pb.build_group_metric_payload(cols, "equity", "DM", "미국")
     assert [s["key"] for s in out["series"]] == ["SPX Index", "CCMP Index"]
     assert all(s["price"] and s["r3m"] for s in out["series"])
-    assert out["benchmark"]["key"] == "MXWD Index"
     # 분류에 없는 묶음은 note
     assert pb.build_group_metric_payload(cols, "equity", "DM", "없는곳")["note"]
 

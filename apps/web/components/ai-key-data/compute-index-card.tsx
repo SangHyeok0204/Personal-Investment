@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getComputeIndex, type ComputeIndexSeries } from "@/lib/api";
 import { EMDASH } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
+import { POLL_MS } from "@/components/ai-key-data/poll";
+import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
 
 // [컴퓨팅 지수 모니터링] — [AI Key Data] 탭 좌상단 3칸.
 // (2026-08-26 종목 모니터 상단에 신설 → 2026-08-27 이 탭으로 이사. 형식·크기 그대로.)
@@ -23,8 +25,6 @@ import { cn } from "@/lib/utils";
 // SVG 속성은 raw hex, 바깥 HTML 은 tailwind 토큰.
 
 // 원천 xlsx 가 일간이라 30초로 조를 이유가 없다. 다른 카드(30초)와 다른 주기다.
-const POLL_MS = 300_000;
-
 // 계열색 — 하우스 팔레트에서 고름(ge-point / lp-eval 팔레트의 주황·초록).
 // 흰 캔버스(#ffffff) 기준 CVD·명도 검증 통과. 주황은 대비 2.65:1 이라 색만으로
 // 두지 않고 패널마다 이름·현재값을 글자로 같이 띄운다(색맹·저대비 보완).
@@ -41,10 +41,14 @@ const INK = "#3a4150";
 const UP = "#e11d48"; // 한국 관례 — 상승 빨강 / 하락 파랑 (format.moveColor 와 같은 짝)
 const DOWN = "#2563eb";
 
-const PAD_L = 42; // y 라벨
+// ★2026-08-31 글자 상향(9~9.5 -> 11~11.5px)에 맞춰 축 여백도 넓혔다 —
+//   안 넓히면 y 라벨이 잘리고 x 날짜가 서로 겹친다.
+const PAD_L = 52; // y 라벨
 const PAD_R = 10;
-const XAXIS_H = 16;
-const TITLE_H = 17; // 패널마다 이름·현재값 한 줄
+const XAXIS_H = 20;
+// ★2026-08-31 사용자 지시로 키움(17 -> 26). 4사분면으로 갈라져 패널 폭은 넓어졌는데
+//   제목 줄 글자는 10~11px 그대로라 '지금 값·등락률'이 안 읽혔다.
+const TITLE_H = 26; // 패널마다 이름·현재값 한 줄
 
 const day = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
 
@@ -158,22 +162,25 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
             <g key={s.key}>
               {/* 패널 제목 줄 — 계열이 1개라 범례 없이 이름이 곧 식별자다.
                   글자는 ink 색으로 두고 색 식별은 왼쪽 스와치가 진다. */}
-              <rect x={PAD_L} y={py0 - 13} width={3} height={9} rx={1.5} fill={color} />
-              <text x={PAD_L + 8} y={py0 - 5} fontSize={10.5} fontWeight={800} fill={INK}>
+              <rect x={PAD_L} y={py0 - 19} width={4} height={13} rx={2} fill={color} />
+              <text x={PAD_L + 10} y={py0 - 8} fontSize={13} fontWeight={800} fill={INK}>
                 {s.name}
               </text>
               <text
-                x={PAD_L + 8 + s.name.length * 6.4 + 6}
-                y={py0 - 5}
-                fontSize={9.5}
+                x={PAD_L + 10 + s.name.length * 7.8 + 7}
+                y={py0 - 8}
+                fontSize={11}
                 fill={AXIS_TEXT}
               >
                 {s.label} · {s.unit}
               </text>
+              {/* ★값은 오른쪽 끝, 등락률은 그 왼쪽. 등락률 x 를 **값 길이로 계산**한다 —
+                  예전엔 `w - PAD_R - 52` 고정이었는데, 글자를 16px 로 키우면 값이 그 자리를
+                  넘어와 둘이 겹친다(단위가 index 면 `1.0524` 처럼 자릿수도 늘어난다). */}
               <text
                 x={w - PAD_R}
-                y={py0 - 5}
-                fontSize={11}
+                y={py0 - 8}
+                fontSize={16}
                 fontWeight={800}
                 fill={INK}
                 textAnchor="end"
@@ -182,9 +189,9 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
                 {fmtVal(s.kind, t.last)}
               </text>
               <text
-                x={w - PAD_R - 52}
-                y={py0 - 5}
-                fontSize={10}
+                x={w - PAD_R - (fmtVal(s.kind, t.last).length * 8.8 + 10)}
+                y={py0 - 8}
+                fontSize={13}
                 fontWeight={700}
                 fill={t.chg_1d_pct == null ? AXIS_TEXT : t.chg_1d_pct > 0 ? UP : DOWN}
                 textAnchor="end"
@@ -204,7 +211,7 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
                     <text
                       x={PAD_L - 5}
                       y={y + 3}
-                      fontSize={9}
+                      fontSize={11}
                       fill={AXIS_TEXT}
                       textAnchor="end"
                       style={{ fontVariantNumeric: "tabular-nums" }}
@@ -242,7 +249,7 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
             key={d}
             x={X(d)}
             y={h - 4}
-            fontSize={9}
+            fontSize={11}
             fill={AXIS_TEXT}
             textAnchor="middle"
             style={{ fontVariantNumeric: "tabular-nums" }}
@@ -283,11 +290,11 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
             transform: tipRight ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
           }}
         >
-          <div className="mb-0.5 text-[10px] tabular-nums text-ink-muted">{hoverX}</div>
+          <div className="mb-0.5 text-[12px] tabular-nums text-ink-muted">{hoverX}</div>
           {series.map((s, i) => {
             const v = lookup[i].get(hoverX);
             return (
-              <div key={s.key} className="flex items-center gap-1.5 text-[11px] leading-tight">
+              <div key={s.key} className="flex items-center gap-1.5 text-[13px] leading-tight">
                 <span
                   className="inline-block h-2 w-2 shrink-0 rounded-sm"
                   style={{ background: COLOR[s.key] ?? INK }}
@@ -305,7 +312,32 @@ function Chart({ series, w, h }: { series: ComputeIndexSeries[]; w: number; h: n
   );
 }
 
+// 사분면 한 칸 — 자기 크기를 재서 `Chart` 를 계열 하나로 그린다.
+// ★2026-08-31 사용자 지시로 세로 스택 -> **2x2 사분면**. SDLLMTK 가 들어와 계열이 4개가
+//   됐는데 세로로 쌓으면 한 패널 높이가 1/4 로 줄어 선이 뭉갠다.
+// ★계열마다 축을 따로 갖는 건 그대로다 — GPU 렌탈($1.6~5.7/GPU-hr)과 LLM 토큰 지수(1.05)는
+//   단위 자체가 달라 한 축에 겹치면 없는 상관을 만든다(dual-axis 금지).
+function QuadPanel({ s }: { s: ComputeIndexSeries }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className="min-h-0 min-w-0">
+      {box.w > 0 && box.h > 0 ? <Chart series={[s]} w={box.w} h={box.h} /> : null}
+    </div>
+  );
+}
+
 export function ComputeIndexCard() {
+  const { zoomed, toggle, zoomCls } = useCardZoom();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["compute-index"],
     queryFn: getComputeIndex,
@@ -315,34 +347,28 @@ export function ComputeIndexCard() {
 
   // 컨테이너 실측 — 이 카드는 그리드 칸에 맞춰 높이까지 변한다(폭만 재는 다른
   // 차트와 다른 점). 패널 3개가 남은 높이를 3등분한다.
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [box, setBox] = useState({ w: 0, h: 0 });
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const read = () => setBox({ w: el.clientWidth, h: el.clientHeight });
-    read();
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
   return (
-    <section className="lg:col-span-3 flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas">
+    <section
+      className={cn(
+        zoomCls,
+        "lg:col-span-3 flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas",
+      )}
+    >
       {/* 제목 띠 강조색(ge-header) — 2026-08-28 사용자 지시로 페이지 카드가 전부 같은 색. */}
       <header className="flex items-center gap-2 rounded-t-xl bg-ge-header px-3 py-1.5">
-        <h2 className="shrink-0 text-[13px] font-extrabold text-white">컴퓨팅 지수 모니터링</h2>
-        <span className="min-w-0 truncate text-[11px] text-white/70">
+        <h2 className="shrink-0 text-[15px] font-extrabold text-white">컴퓨팅 지수 모니터링</h2>
+        <span className="min-w-0 truncate text-[13px] text-white/70">
           Silicon Data GPU 렌탈 지수 · CME 컴퓨트 선물(10/5 상장 예정) 기초지수
         </span>
         {data?.asof ? (
-          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-white/60">
+          <span className="ml-auto shrink-0 text-[13px] tabular-nums text-white/60">
             {data.asof} 기준
           </span>
         ) : null}
+      <ZoomButton zoomed={zoomed} onToggle={toggle} />
       </header>
 
-      <div ref={wrapRef} className="min-h-0 flex-1 px-1 py-0.5">
+      <div className="min-h-0 flex-1 px-1 py-0.5">
         {isLoading ? (
           <Center msg="불러오는 중…" />
         ) : isError ? (
@@ -357,9 +383,15 @@ export function ComputeIndexCard() {
             }
             tone={data?.note ? "text-amber-600" : undefined}
           />
-        ) : box.w > 0 && box.h > 0 ? (
-          <Chart series={series} w={box.w} h={box.h} />
-        ) : null}
+        ) : (
+          // 사분면 2x2. 계열이 3개면 한 칸이 비고, 5개가 들어오면 자동으로 3행이 된다
+          // (`grid-rows-2` 를 박지 않는 이유 — 지수가 늘어도 화면이 안 깨진다).
+          <div className="grid h-full min-h-0 grid-cols-1 gap-x-2 gap-y-1 md:grid-cols-2">
+            {series.map((s2) => (
+              <QuadPanel key={s2.key} s={s2} />
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -368,7 +400,7 @@ export function ComputeIndexCard() {
 function Center({ msg, tone }: { msg: string; tone?: string }) {
   return (
     <div className="flex h-full items-center justify-center px-6 text-center">
-      <span className={cn("text-[12px] font-semibold leading-relaxed text-ink-muted", tone)}>
+      <span className={cn("text-[13.5px] font-semibold leading-relaxed text-ink-muted", tone)}>
         {msg}
       </span>
     </div>

@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getPolicyRate } from "@/lib/api";
 import { EMDASH } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
+import { POLL_MS } from "@/components/ai-key-data/poll";
+import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
 
 // [정책금리] — [AI Key Data] 우상단 3칸 (2026-08-27).
 // FOMC 금리 결정을 계단 차트로. 원천은 AI Key Data macro_releases.csv 의
@@ -15,17 +17,17 @@ import { cn } from "@/lib/utils";
 //   그래서 결정일까지 수평으로 가다가 그 날 수직으로 꺾는다.
 // 렌더 관례는 컴퓨팅 지수 카드와 같다(ResizeObserver + viewBox 를 px 와 1:1).
 
-const POLL_MS = 300_000; // 회의는 6~8주에 한 번 — 자주 물을 이유가 없다
-
 const LINE = "#4a7ab5";
 const GRID = "#EDF0F5";
 const AXIS_TEXT = "#8a94a6";
 const CROSS = "#B7C0CE";
 
-const PAD_L = 40;
+// ★2026-08-31 글자 상향(9~9.5 -> 11~11.5px)에 맞춰 축 여백도 넓혔다 —
+//   안 넓히면 y 라벨이 잘리고 x 날짜가 서로 겹친다.
+const PAD_L = 50;
 const PAD_R = 12;
 const PAD_T = 10;
-const XAXIS_H = 18;
+const XAXIS_H = 20;
 
 const day = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
 
@@ -126,7 +128,7 @@ function Chart({
               <text
                 x={PAD_L - 5}
                 y={y + 3}
-                fontSize={9.5}
+                fontSize={11.5}
                 fill={AXIS_TEXT}
                 textAnchor="end"
                 style={{ fontVariantNumeric: "tabular-nums" }}
@@ -163,11 +165,11 @@ function Chart({
         })}
 
         {/* x축 — 첫·마지막 결정일만(칸이 좁아 촘촘히 넣으면 겹친다) */}
-        <text x={PAD_L} y={h - 4} fontSize={9.5} fill={AXIS_TEXT} textAnchor="start"
+        <text x={PAD_L} y={h - 4} fontSize={11.5} fill={AXIS_TEXT} textAnchor="start"
               style={{ fontVariantNumeric: "tabular-nums" }}>
           {points[0][0].slice(2, 7).replace("-", ".")}
         </text>
-        <text x={PAD_L + plotW} y={h - 4} fontSize={9.5} fill={AXIS_TEXT} textAnchor="end"
+        <text x={PAD_L + plotW} y={h - 4} fontSize={11.5} fill={AXIS_TEXT} textAnchor="end"
               style={{ fontVariantNumeric: "tabular-nums" }}>
           현재
         </text>
@@ -196,8 +198,8 @@ function Chart({
               X(day(hv[0])) > w / 2 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
           }}
         >
-          <div className="text-[10px] tabular-nums text-ink-muted">{hv[0]} FOMC</div>
-          <div className="text-[13px] font-extrabold tabular-nums text-ink">{fmtPct(hv[1])}</div>
+          <div className="text-[12px] tabular-nums text-ink-muted">{hv[0]} FOMC</div>
+          <div className="text-[15px] font-extrabold tabular-nums text-ink">{fmtPct(hv[1])}</div>
         </div>
       ) : null}
     </div>
@@ -212,6 +214,7 @@ export function PolicyRateCard({
   /** 탭 묶음에 들어갈 때 제목 자리에 끼우는 칩(page.tsx 가 상태를 든다). */
   tabs?: React.ReactNode;
 }) {
+  const { zoomed, toggle, zoomCls } = useCardZoom();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["policy-rate"],
     queryFn: getPolicyRate,
@@ -236,6 +239,7 @@ export function PolicyRateCard({
   return (
     <section
       className={cn(
+        zoomCls,
         "flex min-h-0 flex-col rounded-xl border border-hairline bg-canvas",
         colSpan === 3 ? "lg:col-span-3" : colSpan === 2 ? "lg:col-span-2" : "lg:col-span-1",
       )}
@@ -244,16 +248,17 @@ export function PolicyRateCard({
           탭 묶음에 들어가면 제목 자리를 칩이 대신한다(활성 칩이 곧 카드 이름). */}
       <header className="flex items-center gap-2 rounded-t-xl bg-ge-header px-3 py-1.5">
         {tabs ?? (
-          <h2 className="shrink-0 text-[13px] font-extrabold text-white">정책금리</h2>
+          <h2 className="shrink-0 text-[15px] font-extrabold text-white">정책금리</h2>
         )}
-        <span className="min-w-0 truncate text-[11px] text-white/70">
+        <span className="min-w-0 truncate text-[13px] text-white/70">
           FOMC 결정 · 회의 사이는 유지(계단)
         </span>
         {data?.asof ? (
-          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-white/60">
+          <span className="ml-auto shrink-0 text-[13px] tabular-nums text-white/60">
             {data.asof} 기준
           </span>
         ) : null}
+      <ZoomButton zoomed={zoomed} onToggle={toggle} />
       </header>
 
       {points.length > 0 ? (
@@ -264,7 +269,7 @@ export function PolicyRateCard({
           </span>
           {/* 동결 중이면 "N회 연속 동결", 방금 움직였으면 그 폭(bp). 색은 인상 빨강 /
               인하 파랑(화면 공통 등락 관례)이고 동결은 무채색이다. */}
-          <span className="text-[11px] tabular-nums text-ink-muted">
+          <span className="text-[13px] tabular-nums text-ink-muted">
             {data?.last_change_date ? (
               <>
                 <b
@@ -312,7 +317,7 @@ export function PolicyRateCard({
 function Center({ msg, tone }: { msg: string; tone?: string }) {
   return (
     <div className="flex h-full items-center justify-center px-6 text-center">
-      <span className={cn("text-[12px] font-semibold leading-relaxed text-ink-muted", tone)}>
+      <span className={cn("text-[13.5px] font-semibold leading-relaxed text-ink-muted", tone)}>
         {msg}
       </span>
     </div>

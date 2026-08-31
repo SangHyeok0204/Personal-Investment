@@ -1,7 +1,11 @@
 """[가격 모니터] — 주간가격모니터 price_monitor.xlsx 판독 (2026-08-28).
 
-[종목 모니터] 가운데 2~4번째 칸 카드의 데이터원. 84개 시장(주식 42·채권 17·원자재
-14·환 5·암호화폐 6)의 DtD·WtD·MtD·YtD 와 3년 주간 시계열을 자산군 단위로 낸다.
+[종목 모니터] 가운데 2~4번째 칸 카드의 데이터원. 87개 시장(주식 44·채권 17·원자재
+15·환 5·암호화폐 6)의 DtD·WtD·MtD·YtD 를 자산군 단위로 낸다.
+※여기 숫자는 **분류표에 정의된 수**다. 시트 열이 비면 그 행은 조용히 빠지므로 화면
+  개수는 더 적을 수 있다 — 신설 열은 블벅 새로고침 전까지 값이 없다.
+※시계열은 두 갈래다: 목록 payload 의 `series` 는 아직 3년 **주간**(현재 소비처 없음),
+  차트 payload(build_metric_payload·build_group_metric_payload)는 **일간**이다.
 
 ★★분류·라벨·지표 계산식은 **회의자료 생성기에서 그대로 이식**했다
   (`S:\\GE\\raw\\리서치\\종합\\주간가격모니터\\output\\dashboard_html_writer.py`).
@@ -68,15 +72,19 @@ _EQUITY: list[tuple] = [
     ("DM", "그외", "캐나다 TSX", "", "SPTSX Index"),
     ("DM", "그외", "호주 ASX200", "", "AS51 Index"),
     # ★홍콩은 MSCI 상 DM 이지만 실질 노출이 중국이라 EM 에 둔다(생성기와 같은 판단).
+    # ★KOSPI·KOSDAQ 전체지수는 2026-08-31 신설 — 파생인 200·150 앞에 둔다.
+    ("EM", "한국", "KOSPI", "", "KOSPI Index"),
     ("EM", "한국", "KOSPI200", "", "KOSPI2 Index"),
+    ("EM", "한국", "KOSDAQ", "", "KOSDAQ Index"),
     ("EM", "한국", "KOSDAQ150", "", "KOSDQ150 Index"),
     ("EM", "한국", "KRX300", "", "KRX300 Index"),
     ("EM", "중국", "CSI300", "", "SHSZ300 Index"),
     ("EM", "중국", "상해종합", "", "SHCOMP Index"),
     ("EM", "중국", "과창판50", "", "STAR50 Index"),
     ("EM", "중국", "창업판", "", "SZ399006 Index"),
-    ("EM", "중국", "H주 (HSCEI)", "", "HSCEI Index"),
     ("EM", "홍콩", "항셍", "", "HSI Index"),
+    # ★H주(HSCEI)는 본토 기업이지만 홍콩 상장·홍콩 거래라 홍콩에 둔다(사용자 지시 2026-08-31).
+    ("EM", "홍콩", "H주 (HSCEI)", "", "HSCEI Index"),
     ("EM", "홍콩", "항셍테크", "", "HSTECH Index"),
     ("EM", "그외", "대만 가권", "", "TWSE Index"),
     ("EM", "그외", "인도 NIFTY50", "", "NIFTY Index"),
@@ -316,17 +324,18 @@ def _build_tree(rows: list[dict]) -> list[dict]:
 
 # ★★2026-08-31 전면 교체(사용자 지시). DtD·WtD·MtD·YtD **시계열**을 전부 뺐다 —
 #   달력 앵커 지표는 월초·연초마다 0 으로 리셋되는 톱니라 추세를 읽을 수 없고, 그
-#   숫자는 우하단 요약 표(compute_row 의 8개 값)가 이미 보여준다. 차트는 3모드만:
-#     · cum (누적수익률)    — 보는 구간 시작 = 0% 로 리베이스. **프론트가 계산한다**.
-#     · rs  (벤치마크 대비) — 같은 가격 계열을 벤치마크로 나눈 상대곡선. 역시 프론트.
-#     · r3m (롤링 3M)       — 구간과 무관하므로 **서버가 계산**해 내려보낸다.
-# ★★cum·rs 를 서버가 계산하면 안 되는 이유: 리베이스 기준점은 사용자가 헤더 날짜
-#   칸으로 좁힌 **보는 구간의 첫 점**이다. 서버는 그 구간을 모르므로 고정 시작점으로
-#   계산할 수밖에 없고, 그러면 구간을 좁혀도 0% 기준이 안 따라온다. 그래서 서버는
-#   **가격 원본(price)** 을 실어 주고 프론트가 나눈다 — 모드 전환에 재요청도 없다.
+#   숫자는 우하단 요약 표(compute_row 의 8개 값)가 이미 보여준다. 차트는 2모드만:
+#     · cum (누적수익률) — 보는 구간 시작 = 0% 로 리베이스. **프론트가 계산한다**.
+#     · r3m (롤링 3M)    — 구간과 무관하므로 **서버가 계산**해 내려보낸다.
+# ★★cum 을 서버가 계산하면 안 되는 이유: 리베이스 기준점은 사용자가 헤더 날짜 칸으로
+#   좁힌 **보는 구간의 첫 점**이다. 서버는 그 구간을 모르므로 고정 시작점으로 계산할
+#   수밖에 없고, 그러면 구간을 좁혀도 0% 기준이 안 따라온다. 그래서 서버는 **가격
+#   원본(price)** 을 실어 주고 프론트가 나눈다 — 모드 전환에 재요청도 없다.
+# ★'벤치마크 대비'(상대곡선) 모드는 만들었다가 같은 날 **제거**했다(사용자 지시).
+#   그래서 payload 에 벤치마크 계열이 없다 — 되살릴 거면 자산군별 분모 티커
+#   (equity=MXWD·commodity=BCOM·crypto=BGCI, 채권·환은 없음)부터 다시 세워야 한다.
 CHART_MODES = [
     {"key": "cum", "label": "누적수익률"},
-    {"key": "rs", "label": "벤치마크 대비"},
     {"key": "r3m", "label": "롤링 3M"},
 ]
 
@@ -334,21 +343,22 @@ CHART_MODES = [
 # 말하면 안 된다. ROLLING 에서 끌어와 두 곳이 갈라지지 않게 한다.
 R3M_DAYS = dict((k, d) for k, _l, d in ROLLING)["r3m"]
 
-# 자산군별 벤치마크 — 상대곡선(rs)의 분모다. 각 자산군 '벤치마크' 묶음의 첫 행.
-# ★채권·환에는 없다: 금리를 금리로 나눈 상대곡선은 의미가 없고(bp 세계에는 비율이
-#   없다), 환은 자산군 자체가 이미 상대가격이라 분모를 세울 자리가 없다.
-#   payload 의 benchmark 가 null 이면 화면이 그 토글을 비활성으로 둔다.
-BENCHMARK = {
-    "equity": "MXWD Index",     # MSCI ACWI (전세계)
-    "commodity": "BCOM Index",  # 원자재지수
-    "crypto": "BGCI Index",     # 크립토지수
-}
+
+def _daily(series: dict[date, float]) -> list[list]:
+    """날짜 오름차순 [날짜, 값]. 시트 행을 그대로 낸다.
+
+    ★2026-08-31 사용자 지시로 차트가 **일간**이 됐다(그 전에는 `_weekly` 로 ISO 주
+      마지막 관측일만 남겼다). 시트가 주말·휴일을 ffill 하므로 주말 행은 금요일 값이
+      그대로 이어진 평평한 구간으로 그려진다 — 정상이다.
+    ⚠️`_weekly` 는 지우지 않았다: 목록 payload(build_payload)의 3년 시계열이 아직 쓴다.
+    """
+    return [[d.isoformat(), series[d]] for d in sorted(series)]
 
 
 def compute_rolling_series(
     series: dict[date, float], days: int, is_yield: bool
 ) -> list[list]:
-    """날짜마다 '그 시점의 N일 전 대비'를 계산해 한 시계열로 낸다(주간 솎기 포함).
+    """날짜마다 '그 시점의 N일 전 대비'를 계산해 한 시계열로 낸다(일간).
 
     ★"2026-04-01 의 롤링 3M" 은 그날 기준으로 다시 계산한 값이다 — 최신 한 점이
       아니라 **매일의 지표를 역사적으로** 쌓는다. 0 선 교차가 곧 추세 전환이다.
@@ -369,35 +379,23 @@ def compute_rolling_series(
         v = _change(series[d], at_or_before(d - timedelta(days=days)), is_yield)
         if v is not None:
             out[d] = v
-    return _weekly(out, min(out)) if out else []
+    return _daily(out)
 
 
 def _chart_series(ticker: str, label: str, sub: str, s: dict[date, float],
                   is_yield: bool) -> dict:
     """차트 계열 한 개 — 가격 원본 + 롤링 3M 을 같이 싣는다.
 
-    ★두 배열의 날짜가 어긋나면 안 된다. 둘 다 `_weekly`(ISO 주 마지막 관측일)를
-      거치므로 같은 날짜에 떨어진다 — r3m 만 앞 91일이 없어 짧게 시작할 뿐이다.
+    ★두 배열의 날짜가 어긋나면 안 된다. 둘 다 시트 행을 그대로 쓰므로 같은 날짜에
+      떨어진다 — r3m 만 앞 91일이 기준을 못 잡아 짧게 시작할 뿐이다.
     """
     return {
         "key": ticker,
         "label": label,
         "sub": sub,
-        "price": _weekly(s, min(s)),
+        "price": _daily(s),
         "r3m": compute_rolling_series(s, R3M_DAYS, is_yield),
     }
-
-
-def _benchmark_block(columns: dict[str, dict[date, float]], cat: dict) -> dict | None:
-    """상대곡선의 분모가 될 벤치마크 가격 계열. 없는 자산군이면 None."""
-    ticker = BENCHMARK.get(cat["key"])
-    if not ticker:
-        return None
-    s = columns.get(ticker)
-    if not s:
-        return None
-    label = next((r[2] for r in cat["rows"] if r[4] == ticker), ticker)
-    return {"key": ticker, "label": label, "points": _weekly(s, min(s))}
 
 
 def build_metric_payload(columns: dict[str, dict[date, float]], key: str) -> dict:
@@ -421,7 +419,6 @@ def build_metric_payload(columns: dict[str, dict[date, float]], key: str) -> dic
         "is_yield": bool(spec and spec[0]["yield"]),
         "modes": [dict(m) for m in CHART_MODES],
         "series": [],
-        "benchmark": None,
         "note": None,
     }
     s = columns.get(key)
@@ -430,7 +427,6 @@ def build_metric_payload(columns: dict[str, dict[date, float]], key: str) -> dic
         return out
 
     out["series"].append(_chart_series(key, spec[1], spec[2], s, out["is_yield"]))
-    out["benchmark"] = _benchmark_block(columns, spec[0])
     last = max(s)
     out["asof"] = last.isoformat()
     out["price"] = s[last]
@@ -466,7 +462,6 @@ def build_group_metric_payload(
         "unit": "bp" if is_yield else "%",
         "is_yield": is_yield,
         "series": [],
-        "benchmark": None,
         "asof": None,
         "note": None,
     }
@@ -482,7 +477,6 @@ def build_group_metric_payload(
         out["series"].append(_chart_series(ticker, label, sub, s, is_yield))
         asofs.append(max(s).isoformat())
 
-    out["benchmark"] = _benchmark_block(columns, cat)
     out["asof"] = max(asofs) if asofs else None
     if not out["series"]:
         out["note"] = "이 묶음은 아직 시트에 값이 없습니다."
