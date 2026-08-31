@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -28,6 +29,10 @@ from datetime import datetime
 
 SRC_DIR = os.environ.get("STOCK_MONITOR_SRC_DIR", "/srv/legacy/toss_minute")
 CACHE_DIR = os.environ.get("STOCK_MONITOR_CACHE_DIR", "/app/.cache/stock_monitor")
+# 종목 메타(stock_info)·5대 축(stock_axis) — 파일 키는 **한글 이름**(심볼 아님).
+# stock_info/{이름}.json      {name, symbol, sector:{L1..L5}, country, currency, news_axis}
+# stock_axis/{이름}_axis.json {name, symbol, news_axis, axes:[5]}  ← 화면 편집이 여길 고쳐 쓴다
+INPUT_DIR = os.environ.get("STOCK_MONITOR_INPUT_DIR", "/srv/legacy/toss_input")
 
 REFRESH_CHECK_S = 30          # 분봉이라 촘촘히 본다(수집기는 1분마다 쓴다)
 COPY_RETRIES = 3
@@ -49,17 +54,27 @@ def _sidecars_absent(path: str) -> bool:
 
 
 def _copy_when_quiet(src: str, dst: str) -> bool:
-    """sidecar 부재를 게이트로 복사한다. 복사 전후 mtime/size 가 어긋나면 버린다."""
+    """sidecar 부재를 게이트로 복사한다. 복사 전후 mtime/size 가 어긋나면 버린다.
+
+    ★검증(quick_check)을 통과한 사본만 tmp→os.replace 로 **원자 교체**한다.
+    예전엔 dst 를 제자리에서 덮어썼는데, 복사가 도는 1~2초 동안 다른 요청 스레드가
+    dst 를 열면 반쯤 덮인 파일을 읽어 'database disk image is malformed' 503 이
+    났다 — 화면의 "collector 에 못 닿았습니다" 간헐 오류의 정체(2026-08-25 장중
+    실측: 응답 0.00s 즉시 503 = 손상 캐시 판독 실패, 타임아웃 아님).
+    교체 후엔 읽던 연결은 제 fd 로 옛 파일을 계속 보고, 새 연결만 새 파일을 연다
+    (index_window._copy_db 와 같은 패턴 — 저쪽은 처음부터 이렇게 했다).
+    """
     if not os.path.exists(src):
         return False
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + ".tmp"
     for _ in range(COPY_RETRIES):
         if not _sidecars_absent(src):
             time.sleep(0.4)
             continue
         st0 = os.stat(src)
         try:
-            shutil.copy2(src, dst)
+            shutil.copy2(src, tmp)
         except OSError as ex:
             _log(f"복사 실패: {ex}")
             time.sleep(0.4)
@@ -67,15 +82,24 @@ def _copy_when_quiet(src: str, dst: str) -> bool:
         st1 = os.stat(src)
         if (st0.st_mtime, st0.st_size) != (st1.st_mtime, st1.st_size):
             continue                      # 복사 중에 상류가 썼다 — 다시
+        # ★close 는 finally 로 — execute 가 던지는 경로에서 연결이 열린 채 남으면
+        #   (Windows 로컬 테스트 실측) tmp 제거가 막힌다.
         try:
-            con = sqlite3.connect(dst)
-            ok = con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-            con.close()
+            con = sqlite3.connect(tmp)
+            try:
+                ok = con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+            finally:
+                con.close()
         except sqlite3.Error:
             ok = False
         if ok:
+            os.replace(tmp, dst)          # 검증 통과분만 설치
             return True
         time.sleep(0.4)
+    try:
+        os.remove(tmp)                    # 실패 잔재 정리 — dst 는 마지막 정상본 유지
+    except OSError:
+        pass
     _log("조용한 순간을 못 잡았다 — 이전 스냅샷을 계속 쓴다")
     return False
 
@@ -203,3 +227,96 @@ class StockMonitor:
             "value_basis": "분봉 Σ(volume×close) — 토스 앱 체결분만 세는 '토스증권 거래대금'과 다르다",
             "rows": out[:limit],
         }
+
+
+# ── 종목 상세 · 5대 축 ──────────────────────────────────────────────────────
+# 파일 키가 한글 이름이라 심볼→파일 역인덱스가 없다. 전량 스캔으로 만들 수도 있지만
+# SMB 위 199파일 stat 이 요청 예산을 넘긴 전례(회의탭 PoC 503)가 있어, 화면이 이미
+# 들고 있는 name 을 그대로 받아 **딱 2파일만** 직독한다.
+
+def _safe_name(name: str) -> str | None:
+    """경로 문자를 막는다 — name 이 그대로 파일명이 된다."""
+    if not name or any(t in name for t in ("/", "\\", "..", "\x00")):
+        return None
+    return name
+
+
+def stock_detail(name: str) -> dict | None:
+    """stock_info/{이름}.json + stock_axis/{이름}_axis.json 병합. 둘 다 없으면 None.
+
+    news_axis 는 두 파일에 다 있는데 **축 파일 값이 이긴다** — 편집으로 갱신되는 쪽이
+    그 파일이라, info 쪽이 이기면 방금 저장한 값이 화면에서 되돌아가 보인다.
+    """
+    nm = _safe_name(name)
+    if nm is None:
+        return None
+    out: dict = {"name": nm, "symbol": None, "sector": None, "country": None,
+                 "currency": None, "news_axis": False,
+                 "axes": ["", "", "", "", ""], "has_axis_file": False}
+    found = False
+    try:
+        with open(os.path.join(INPUT_DIR, "stock_info", f"{nm}.json"),
+                  encoding="utf-8") as f:
+            info = json.load(f)
+        out.update({k: info.get(k, out[k]) for k in
+                    ("symbol", "sector", "country", "currency", "news_axis")})
+        found = True
+    except (OSError, json.JSONDecodeError):
+        pass
+    try:
+        with open(os.path.join(INPUT_DIR, "stock_axis", f"{nm}_axis.json"),
+                  encoding="utf-8") as f:
+            ax = json.load(f)
+        axes = ax.get("axes")
+        if isinstance(axes, list):
+            out["axes"] = [str(a) for a in (axes + [""] * 5)[:5]]
+        out["symbol"] = out["symbol"] or ax.get("symbol")
+        out["news_axis"] = bool(ax.get("news_axis", out["news_axis"]))
+        out["has_axis_file"] = True
+        found = True
+    except (OSError, json.JSONDecodeError):
+        pass
+    return out if found else None
+
+
+def save_axes(payload: dict) -> tuple[int, dict]:
+    """5대 축 저장 — stock_axis/{이름}_axis.json 을 tmp→os.replace 로 원자 교체.
+
+    (status, body) 를 돌려주고 HTTP 매핑은 라우트가 한다. 파일이 없으면 404 —
+    생성은 상류(수기 입력) 소관이라 여기서 새 파일을 만들지 않는다.
+    """
+    nm = _safe_name(str(payload.get("name") or ""))
+    if nm is None:
+        return 400, {"detail": "이름이 비었거나 경로 문자가 들어있다"}
+    axes = payload.get("axes")
+    if not isinstance(axes, list) or len(axes) != 5 \
+            or not all(isinstance(a, str) for a in axes):
+        return 400, {"detail": "axes 는 문자열 5개 배열이라야 한다"}
+
+    path = os.path.join(INPUT_DIR, "stock_axis", f"{nm}_axis.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cur = json.load(f)
+    except FileNotFoundError:
+        return 404, {"detail": "축 파일이 없다 — 생성은 상류(수기 입력) 소관"}
+    except (OSError, json.JSONDecodeError) as ex:
+        return 503, {"detail": f"축 파일을 못 읽었다: {ex}"}
+
+    # 화면이 보던 종목과 파일이 같은 종목인지 대조 — 이름이 같고 심볼이 다르면
+    # (개명·재상장 등) 조용히 덮어쓰지 않는다.
+    sym = payload.get("symbol")
+    if sym and cur.get("symbol") and sym != cur["symbol"]:
+        return 409, {"detail": f"symbol 불일치 — 파일 {cur['symbol']} vs 요청 {sym}"}
+
+    # 상류 스키마·키 순서를 그대로 보존한다(수기 입력자가 diff 로 봐도 낯설지 않게).
+    doc = {"name": cur.get("name", nm), "symbol": cur.get("symbol"),
+           "news_axis": bool(payload.get("news_axis", cur.get("news_axis", False))),
+           "axes": [a.strip() for a in axes]}
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError as ex:
+        return 503, {"detail": f"저장 실패: {ex}"}
+    return 200, {"ok": True, "name": nm, "saved": doc}

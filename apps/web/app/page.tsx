@@ -6,6 +6,7 @@ import { CalendarDays, Clock, Menu, RefreshCw, Search, User } from "lucide-react
 import type { LucideIcon } from "lucide-react";
 import { getMeetingFile } from "@/lib/api";
 import { MoversTicker } from "@/components/movers-ticker";
+import { useSidebar } from "@/components/layout/sidebar-context";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,10 +17,13 @@ import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
-// 하단 통합 박스의 원본 — S:\GE\_Team\07_회의자료\글로벌주식운용부 회의 체계.html.
+// 하단 통합 박스의 원본 — S:\GE\_Team\07_회의자료\글로벌주식운용부 회의 체계_수정본.html.
 // 회의 마운트(/srv/legacy/meeting) 루트 바로 아래이므로 rel 은 파일명 그대로다.
 // 부서에서 이 파일을 직접 고치므로 상단 '회의 체계 갱신' 버튼으로 다시 읽어온다.
-const MEETING_DOC = "글로벌주식운용부 회의 체계.html";
+// ★2026-08-27 `_수정본` 으로 교체(구본 `글로벌주식운용부 회의 체계.html` 은 7/29 이후
+//   갱신이 없다 — 부서가 수정본을 따로 만들어 그쪽만 고치고 있다). 파일명이 또 바뀌면
+//   여기 한 줄만 고치면 된다 — 갱신 버튼도 이 상수를 그대로 다시 읽는다.
+const MEETING_DOC = "글로벌주식운용부 회의 체계_수정본.html";
 
 function formatDate(d: Date) {
   return {
@@ -49,6 +53,7 @@ function useNow() {
 }
 
 export default function HomePage() {
+  const sidebar = useSidebar();
   const now = useNow();
   const date = now ? formatDate(now) : null;
   const clock = now ? formatClock(now) : "—";
@@ -66,10 +71,23 @@ export default function HomePage() {
     <div className="flex min-h-screen flex-col gap-4 p-4 xl:gap-5 xl:p-5">
       {/* 상단 헤더 */}
       <header className="flex h-14 shrink-0 items-center gap-4 rounded-2xl border border-hairline bg-canvas px-5 shadow-card">
-        <Menu className="h-5 w-5 text-ink-muted" />
+        {/* 사이드바 접기/펼치기 — 이 화면은 Topbar 를 안 쓰고 자체 헤더라 따로 잇는다.
+            (아래 검색창 오른쪽 Menu 아이콘은 장식이라 그대로 둔다.) */}
+        <button
+          type="button"
+          onClick={sidebar.toggle}
+          aria-label={sidebar.collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+          aria-expanded={!sidebar.collapsed}
+          title={sidebar.collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+          className="-m-1.5 shrink-0 rounded-lg p-1.5 text-ink-muted transition-colors hover:bg-canvas-soft hover:text-ink"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
         <div className="flex-1" />
-        {/* 회의 체계 갱신 — S: 원본(글로벌주식운용부 회의 체계.html)을 다시 읽어
-            하단 박스를 최신본으로 교체한다. */}
+        {/* 회의 체계 갱신 — 하단 박스와 **같은 경로**(MEETING_DOC)를 다시 읽어 최신본으로
+            교체한다. refetch 는 staleTime 을 무시하고 항상 네트워크를 타고, getMeetingFile
+            은 `cache: "no-store"`, collector 는 캐시 없이 그때그때 디스크를 읽는다 —
+            세 층이 다 뚫려 있어야 부서가 방금 고친 내용이 바로 올라온다. */}
         <button
           type="button"
           onClick={() => void meetingQuery.refetch()}

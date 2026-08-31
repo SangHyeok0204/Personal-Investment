@@ -1,5 +1,8 @@
+"use client";
+
 import type { ReactNode } from "react";
 import { Bell, ChevronDown, CircleHelp, Menu, Search } from "lucide-react";
+import { useSidebar } from "@/components/layout/sidebar-context";
 
 /**
  * Per-page top bar (portfolio-detail-spec §1). The shell (height, border, global
@@ -16,10 +19,22 @@ export function Topbar({
   status?: ReactNode;
   actions?: ReactNode;
 }) {
+  const { collapsed, toggle } = useSidebar();
+
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-7">
       <div className="flex min-w-0 items-center gap-5">
-        <Menu className="h-5 w-5 shrink-0 text-slate-500" />
+        {/* 사이드바 접기/펼치기 — 접으면 본문이 212px 넓어진다(모든 페이지 공통). */}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+          className="-m-1.5 shrink-0 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <Menu className="h-5 w-5 shrink-0" />
+        </button>
         <div className="min-w-0">
           <div className="truncate text-[15px] font-semibold tracking-tight text-slate-900">
             {title}

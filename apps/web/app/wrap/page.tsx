@@ -83,6 +83,8 @@ export default function WrapPage() {
   const [selKey, setSelKey] = useState<string | null>(null);
   const [treeMode, setTreeMode] = useState<TreeMode>("confirmed");
   const treeModeDef = TREE_MODES.find((m) => m.key === treeMode) ?? TREE_MODES[0];
+  // 기본값은 기존 화면 그대로인 환율 OFF(현지통화).
+  const [treeFx, setTreeFx] = useState<FxMode>("off");
 
   const data = query.data;
   const collectorDown =
@@ -99,6 +101,16 @@ export default function WrapPage() {
 
   const stale = data != null && Date.now() - data.timestamp > 60_000;
   const fxUsd = data?.fx?.rates?.USD ?? null; // 실시간 원/달러 환율
+
+  // 분류 트리에 적용되는 환등락 — 구간마다 다르다(① T-2→T-1 소스 시트 / ② T-1→실시간).
+  // 없으면(소스 결측) 환율 ON 을 막고 OFF 로 되돌린다 — 켜 봐야 트리가 0 으로 눕는다.
+  const fxChgForMode =
+    (treeMode === "confirmed"
+      ? selected?.fx_return_pct
+      : selected?.fx_realtime_pct) ?? null;
+  const effectiveFx: FxMode = fxChgForMode == null ? "off" : treeFx;
+  // 제목 라벨은 실제로 적용된 쪽(effectiveFx)을 따른다 — 되돌려졌는데 ON 이라 쓰면 거짓말이다.
+  const treeFxDef = FX_MODES.find((m) => m.key === effectiveFx) ?? FX_MODES[0];
 
   return (
     <>
@@ -158,38 +170,85 @@ export default function WrapPage() {
               ))}
             </div>
 
-            {/* ② 분류별 비중·기여도 트리 (전일확정 / 실시간 토글) */}
+            {/* ② 분류별 비중·기여도 트리 (전일확정/실시간 · 환율 ON/OFF 토글) */}
             <section className="rounded-2xl border border-hairline bg-canvas p-5 shadow-card">
-              <div className="mb-1 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
+              <div className="mb-1 flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 pt-1">
                   <span className="h-4 w-1.5 rounded-full bg-ge-point" />
                   <span
                     className="text-[13px] font-extrabold text-ge-navy"
-                    title={treeModeDef.hint}
+                    title={`${treeModeDef.hint}\n${treeFxDef.hint}`}
                   >
-                    분류별 비중·기여도 ({treeModeDef.label}) — {selected.name}
+                    분류별 비중·기여도 ({treeModeDef.label} · {treeFxDef.label}) —{" "}
+                    {selected.name}
                   </span>
                 </div>
-                <div className="flex shrink-0 overflow-hidden rounded-lg border border-hairline text-[11px] font-bold">
-                  {TREE_MODES.map((m) => (
-                    <button
-                      key={m.key}
-                      type="button"
-                      onClick={() => setTreeMode(m.key)}
-                      title={m.hint}
-                      className={cn(
-                        "px-2.5 py-1 transition-colors",
-                        treeMode === m.key
-                          ? "bg-ge-navy text-white"
-                          : "bg-canvas text-ink-muted hover:bg-canvas-soft",
-                      )}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+                {/* 구간 토글 위, 통화 토글 아래 — 두 축이 직교라 세로로 쌓는다. */}
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <div className="flex overflow-hidden rounded-lg border border-hairline text-[11px] font-bold">
+                    {TREE_MODES.map((m) => (
+                      <button
+                        key={m.key}
+                        type="button"
+                        onClick={() => setTreeMode(m.key)}
+                        title={m.hint}
+                        className={cn(
+                          "px-2.5 py-1 transition-colors",
+                          treeMode === m.key
+                            ? "bg-ge-navy text-white"
+                            : "bg-canvas text-ink-muted hover:bg-canvas-soft",
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {/* 적용 중인 환등락 — 트리 값이 통째로 밀리는 이유가 이 숫자다.
+                        구간마다 다른 환을 쓴다(① T-2→T-1 시트 / ② T-1→실시간 네이버). */}
+                    {fxChgForMode != null ? (
+                      <span
+                        className="text-[10.5px] tabular-nums text-ink-muted"
+                        title={`${treeModeDef.label} 구간의 원/달러 등락`}
+                      >
+                        환 {signedPct(fxChgForMode)}
+                      </span>
+                    ) : null}
+                    <div className="flex overflow-hidden rounded-lg border border-hairline text-[11px] font-bold">
+                      {FX_MODES.map((m) => {
+                        // 그 구간의 환등락이 없으면(소스 결측) ON 은 못 켠다 —
+                        // 켜면 종목 환반영값이 전부 null 이라 트리가 0 으로 눕는다.
+                        const off = m.key === "on" && fxChgForMode == null;
+                        return (
+                          <button
+                            key={m.key}
+                            type="button"
+                            onClick={() => setTreeFx(m.key)}
+                            disabled={off}
+                            title={
+                              off
+                                ? "이 구간의 환등락 데이터가 없어 환 반영을 켤 수 없습니다"
+                                : m.hint
+                            }
+                            className={cn(
+                              "px-2.5 py-1 transition-colors",
+                              // 강조도 실제 적용된 쪽으로 — ON 이 막혀 OFF 로
+                              // 되돌아갔는데 ON 이 켜져 보이면 안 된다.
+                              effectiveFx === m.key
+                                ? "bg-ge-navy text-white"
+                                : "bg-canvas text-ink-muted hover:bg-canvas-soft",
+                              off && "cursor-not-allowed opacity-40",
+                            )}
+                          >
+                            {m.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
-              <CategoryTree p={selected} mode={treeMode} />
+              <CategoryTree p={selected} mode={treeMode} fx={effectiveFx} />
             </section>
 
             {/* ③ 구성종목 기여도 테이블 */}
@@ -428,14 +487,43 @@ const TREE_MODES = [
 ] as const;
 type TreeMode = (typeof TREE_MODES)[number]["key"];
 
-// 종목의 기여도 — 모드별로 구간만 갈아끼운다. 값이 없으면 null(집계에서 0 취급).
-function holdingContrib(h: WrapHolding, mode: TreeMode): number | null {
-  if (mode === "confirmed") {
+/* 트리 통화 — 같은 구간을 현지통화로 볼지 원화로 볼지. 구간(TREE_MODES)과 직교라
+ * 두 토글의 조합 4가지가 그대로 4개 화면이다.
+ * ★환 반영은 웹에서 곱하지 않는다 — 서버가 종목마다 (1+수익률)(1+환등락) − 1 로
+ *   계산해 둔 값(return_krw_pct / realtime_return_krw_pct)에 비중만 곱해 더한다.
+ *   덧셈 분해(수익률+환)로는 교차항이 빠져 카드값과 어긋난다. */
+const FX_MODES = [
+  {
+    key: "off",
+    label: "환율 OFF",
+    hint: "현지통화(USD) 기준 — 환 등락 제외. 루트 = 카드의 주식분",
+  },
+  {
+    key: "on",
+    label: "환율 ON",
+    hint: "원화 기준 — 종목별 (1+수익률)(1+환등락) − 1 × 비중의 분류별 합. 루트 = 카드에 크게 찍히는 원화 수익률",
+  },
+] as const;
+type FxMode = (typeof FX_MODES)[number]["key"];
+
+// 종목의 기여도 — 구간(mode) × 통화(fx) 로 필드만 갈아끼운다.
+// 값이 없으면 null(집계에서 0 취급).
+function holdingContrib(
+  h: WrapHolding,
+  mode: TreeMode,
+  fx: FxMode,
+): number | null {
+  if (mode === "confirmed" && fx === "off") {
+    // 이 조합만 서버가 기여도까지 계산해 준다(테이블 '기여' 열과 같은 값).
     return typeof h.contribution_pct === "number" ? h.contribution_pct : null;
   }
-  return typeof h.realtime_return_pct === "number"
-    ? (h.weight_pct / 100) * h.realtime_return_pct
-    : null;
+  const r =
+    mode === "confirmed"
+      ? h.return_krw_pct
+      : fx === "off"
+        ? h.realtime_return_pct
+        : h.realtime_return_krw_pct;
+  return typeof r === "number" ? (h.weight_pct / 100) * r : null;
 }
 
 interface CatMid {
@@ -453,13 +541,17 @@ interface Cat1 {
 }
 
 // 보유종목 → 대분류→중분류 집계 (비중 합 + 기여도 합, 비중 내림차순).
-function aggregateCategories(p: WrapPortfolio, mode: TreeMode): Cat1[] {
+function aggregateCategories(
+  p: WrapPortfolio,
+  mode: TreeMode,
+  fx: FxMode,
+): Cat1[] {
   const byCat1 = new Map<string, Cat1>();
   for (const h of p.holdings ?? []) {
     const c1 = (h.cat1 || "").trim() || "미분류";
     const c2 = (h.cat2 || "").trim() || "기타";
     const w = typeof h.weight_pct === "number" ? h.weight_pct : 0;
-    const c = holdingContrib(h, mode) ?? 0;
+    const c = holdingContrib(h, mode, fx) ?? 0;
     let g = byCat1.get(c1);
     if (!g) {
       g = { name: c1, weight: 0, contrib: 0, mids: [], x: 0 };
@@ -488,8 +580,16 @@ const ROOT_Y = 8;
 const C1_Y = 84;
 const C2_Y = 160;
 
-function CategoryTree({ p, mode }: { p: WrapPortfolio; mode: TreeMode }) {
-  const cats = useMemo(() => aggregateCategories(p, mode), [p, mode]);
+function CategoryTree({
+  p,
+  mode,
+  fx,
+}: {
+  p: WrapPortfolio;
+  mode: TreeMode;
+  fx: FxMode;
+}) {
+  const cats = useMemo(() => aggregateCategories(p, mode, fx), [p, mode, fx]);
   if (!cats.length) {
     return <p className="py-6 text-sm text-ink-muted">분류 데이터가 없습니다.</p>;
   }
@@ -524,8 +624,19 @@ function CategoryTree({ p, mode }: { p: WrapPortfolio; mode: TreeMode }) {
 
   const sign = (v: number) => (v >= 0 ? POS : NEG);
 
-  // 루트 = 그 구간 기여도의 총합(카드의 주식분). ① return_pct(=return1_usd) / ② return2_usd.
-  const rootRet = mode === "confirmed" ? p.return_pct : (p.return2_usd ?? 0);
+  // 루트 = 그 구간·그 통화 기여도의 총합 = 카드에 찍히는 값.
+  //   환 OFF: ① return_pct(=return1_usd) / ② return2_usd  — 카드의 주식분
+  //   환 ON : ① return1_krw            / ② return2_krw   — 카드에 크게 찍히는 원화값
+  // ★서버값을 그대로 쓴다(Σ 를 다시 구하지 않는다) — 두 값이 같다는 걸 실측으로
+  //   확인했고(Δ≈1e-9), 카드와 트리가 같은 숫자를 보여야 하기 때문이다.
+  const rootRet =
+    mode === "confirmed"
+      ? fx === "on"
+        ? (p.return1_krw ?? p.return_pct)
+        : p.return_pct
+      : fx === "on"
+        ? (p.return2_krw ?? p.return2_usd ?? 0)
+        : (p.return2_usd ?? 0);
 
   return (
     <div className="overflow-x-auto">

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    ai_key_data,
     ai_usage,
     imports,
     inav,
@@ -60,3 +61,4 @@ app.include_router(macro.router)
 app.include_router(lan.router)
 app.include_router(stock_discussion.router)
 app.include_router(stock_monitor.router)
+app.include_router(ai_key_data.router)

@@ -63,7 +63,7 @@ export interface CsvImportResponse {
 export interface AiUsageMeter {
   label: string;
   subtitle: string | null;
-  // null = 소진율 판정 불가(Genspark 가 월 할당량을 못 알아낸 경우). 0% 로 그리지 않는다.
+  // null = 소진율 판정 불가(업스트림이 %를 산출하지 못한 경우). 0% 로 그리지 않는다.
   pct: number | null;
   remaining_pct: number | null;
 }
@@ -78,9 +78,6 @@ export interface AiUsageAccount {
   // '사용 크레딧'(초과분 과금) 토글 실측값. false = 플랜 한도에서 그대로 중단.
   // null = 판정 불가(스위치 미발견 / GPT 는 해당 개념 없음).
   extra_usage_enabled: boolean | null;
-  // Genspark 전용 — 월 할당/잔여 크레딧. Claude/GPT 는 항상 null.
-  monthly_credits: number | null;
-  credit_balance: number | null;
   items: AiUsageMeter[];
 }
 
@@ -91,7 +88,6 @@ export interface AiTokenUsageResponse {
   fetched_at: string;
   claude: AiUsageAccount[];
   codex: AiUsageAccount[];
-  genspark: AiUsageAccount[];
 }
 
 export interface InavEtf {
@@ -180,6 +176,9 @@ export interface WrapHolding {
   contribution_pct: number | null;
   // 실시간수익률 = 현재가/전일종가 − 1 (장중 등락).
   realtime_return_pct: number | null;
+  // 같은 구간에 환까지 반영 = (1+실시간수익률)(1+환등락②) − 1.
+  // return_krw_pct 의 ② 짝 — 분류 트리 '환율 ON' × 실시간 모드가 쓴다.
+  realtime_return_krw_pct?: number | null;
   matched: boolean;
   tradeTime: string | null;
   cat1: string;
@@ -272,6 +271,18 @@ export interface FundSeriesResponse {
 
 export function getFundSeries(): Promise<FundSeriesResponse> {
   return request<FundSeriesResponse>("/api/v1/inav/fund-series");
+}
+
+// 소스 엑셀 재적재(S: build_funds 재실행). SMB xlsx 파싱이라 수 초 걸리는 1회성 경로.
+export interface FundSeriesRefresh {
+  status: "ok" | "error";
+  reason?: string;
+  log?: string[];
+}
+export function refreshFundSeries(): Promise<FundSeriesRefresh> {
+  return request<FundSeriesRefresh>("/api/v1/inav/fund-series/refresh", {
+    method: "POST",
+  });
 }
 
 // 리밸런싱 이력(track record): 자사·TORUS 시점별 편입 구성.
@@ -1488,18 +1499,26 @@ export interface StockMonitor {
   asof: string | null;
   day?: string;
   sort?: string;
+  market?: string;         // "kr"(기본) | "us"
   universe?: number;
   value_basis?: string;
+  change_basis?: string;   // us: 등락률 앵커 정의(직전 정규장 마감 이전 마지막 체결)
+  feed_at?: string | null; // us: 수집기 마지막 flush 시각(status.last_flush_at)
   note?: string;
   rows: StockMonitorRow[];
 }
 
+// market=us 는 미장_실시간체결가.db lane — 토스 WS 틱 기반, 한글명 없음(name=symbol),
+// σ·z 통계 없음(전부 null). KR 과 payload 모양은 같다.
+export type StockMarket = "kr" | "us";
+
 export function getStockMonitor(
   sort: "value" | "change" | "sigma" = "value",
   limit = 30,
+  market: StockMarket = "kr",
   day?: string,
 ): Promise<StockMonitor> {
-  const qs = new URLSearchParams({ sort, limit: String(limit) });
+  const qs = new URLSearchParams({ sort, limit: String(limit), market });
   if (day) qs.set("day", day);
   return request<StockMonitor>(`/api/v1/stock-monitor?${qs.toString()}`);
 }
@@ -1523,4 +1542,666 @@ export interface IndexStrip {
 
 export function getIndexStrip(): Promise<IndexStrip> {
   return request<IndexStrip>("/api/v1/stock-monitor/index-strip");
+}
+
+// ── [종목 모니터] ETF 순매수 모니터 ──────────────────────────────────────────
+// 원천은 CHECK 에이전트가 적재하는 ETF_FLOW_MONITOR.db (관심 ETF 수급 스냅샷,
+// 계약은 시장모니터 폴더의 ETF_FLOW_MONITOR_DB_안내.md). 적재 시작 전에는
+// rows 가 빈 배열로 온다 — 카드가 대기 문구를 띄운다.
+export interface EtfFlowRow {
+  code: string;
+  name: string | null;
+  listing_date: string | null;  // 'YYYY-MM-DD'
+  trade_value: number | null;   // 당일 누적 거래대금(원)
+  trade_volume: number | null;  // 당일 누적 거래량(주)
+  indiv_net_buy: number | null; // 당일 누적 개인 순매수 대금(원, 매수우위 +)
+  indiv_net_lp_est: number | null; // LP기반 추정 개인 순매수(원) — 피드 vol3tick(억원)×1e8
+  trade_date: string | null;
+  observed_at: string;
+}
+export interface EtfFlows {
+  generated_at: string;
+  asof: string | null;
+  rows: EtfFlowRow[];
+}
+
+export function getEtfFlows(): Promise<EtfFlows> {
+  return request<EtfFlows>("/api/v1/stock-monitor/etf-flows");
+}
+
+// ── [종목 모니터] 수익률 모니터 ──────────────────────────────────────────────
+// 원천은 주간가격모니터 price_monitor.xlsx (S: 마운트) — collector price_returns.py
+// 가 계산까지 마친 값을 나른다(자산 목록 정본도 그쪽 ASSETS). unit="pct" 는 %수익률,
+// "bp" 는 금리 변화폭(bp). rebound 는 1주/1달/3달 저점 대비 중 √시간 정규화로 고른
+// 대표 1개(all 에 3종 전부 동봉). spark 는 최근 1년을 60점으로 솎은 값 배열.
+export interface PriceReturnAsset {
+  key: string;
+  name: string;
+  unit: "pct" | "bp";
+  asof: string;               // 'YYYY-MM-DD' — 그 자산의 마지막 관측일
+  last: number;
+  returns: {
+    ytd: number | null;
+    mtd: number | null;
+    wtd: number | null;
+    dtd: number | null;
+  };
+  rebound: {
+    window: "1w" | "1m" | "3m";
+    label: string;            // '1달 저점 대비' 등 — collector 가 정한다
+    value: number;
+    low: number;
+    low_date: string;
+    all: Record<string, number | null>;
+  } | null;
+  spark: number[];
+}
+export interface PriceReturns {
+  generated_at: string;
+  asof: string | null;
+  assets: PriceReturnAsset[];
+}
+
+export function getPriceReturns(): Promise<PriceReturns> {
+  return request<PriceReturns>("/api/v1/stock-monitor/price-returns");
+}
+
+// ── [AI Key Data] 컴퓨팅 지수 모니터링 ───────────────────────────────────────
+// Silicon Data GPU 렌탈 지수($/GPU-hr) — 세대별로 패널 하나씩.
+// 원천은 AI Key Data의 GPU임대지수_주가_통합.xlsx — collector compute_index.py
+// 가 판독하고 지수 목록 정본도 그쪽 INDICES(현재 H100·B200·A100 순).
+// ★단가를 한 차트에 여러 y축으로 겹치면 안 되므로(세대별 스케일 2배 차이) 세로 분할.
+// ★기초 파일에 없는 지수는 series 에서 조용히 빠진다 — 화면은 온 것만 그린다.
+// points = [날짜 "YYYY-MM-DD", 값] 오름차순.
+export interface ComputeIndexStats {
+  start: number;
+  start_date: string;
+  last: number;
+  last_date: string;
+  min: number;
+  min_date: string;
+  max: number;
+  max_date: string;
+  chg_1d_pct: number | null; // 전일 대비(지수가 일간이라 마지막 두 점)
+  chg_pct: number | null;    // 구간 전체
+  n: number;
+}
+export interface ComputeIndexSeries {
+  key: "h100" | "b200" | "a100";
+  name: string;              // 'SDH100RT' | 'SDB200RT' | 'SDA100RT'
+  label: string;             // 'H100' | 'B200' | 'A100'
+  unit: string;              // '$/GPU-hr'
+  kind: "price";
+  points: [string, number][];
+  stats: ComputeIndexStats;
+}
+export interface ComputeIndex {
+  generated_at: string;
+  asof: string | null;
+  unit: string;
+  // 계열이 비어 있을 때의 사유(예: 원천 xlsx 가 폴더에서 사라짐). 카드가 그대로 띄운다.
+  note?: string | null;
+  series: ComputeIndexSeries[];
+}
+
+export function getComputeIndex(): Promise<ComputeIndex> {
+  return request<ComputeIndex>("/api/v1/stock-monitor/compute-index");
+}
+
+// ── [AI Key Data] 정책금리 ───────────────────────────────────────────────────
+// FOMC 금리 결정(수준 %). 원천은 AI Key Data macro_releases.csv 의 event=RATE
+// 행 — 같은 파일의 CPI·PCE 는 전월비 %(변화율)라 단위가 달라 섞지 않는다.
+// ★points 는 **결정 시점만** 담는다. 회의 사이엔 금리가 그대로 유지되므로 화면이
+//   계단(step)으로 편다 — 점을 직선으로 이으면 없던 중간값이 생긴다.
+export interface PolicyRate {
+  generated_at: string;
+  unit: string;                    // '%'
+  note?: string | null;            // 계열이 비었을 때의 사유(원천 결측 등)
+  asof: string | null;
+  last: number | null;             // 현재 정책금리(%)
+  last_date: string | null;
+  chg_bp: number | null;           // 직전 결정 대비(bp)
+  last_change_date: string | null; // 마지막으로 움직인 회의
+  holds: number;                   // 그 뒤 동결 횟수
+  points: [string, number][];      // [결정일, 금리%] 오름차순
+}
+
+export function getPolicyRate(): Promise<PolicyRate> {
+  return request<PolicyRate>("/api/v1/stock-monitor/policy-rate");
+}
+
+// ── [AI Key Data] 금리 5주제 ─────────────────────────────────────────────────
+// 원천은 `input/raw/금리/금리_2.xlsx` 한 장(신상품팀 공모손차 데이터 사본, 계약서는
+// 같은 폴더 _출처.md). 다섯 카드가 같은 파일을 보므로 **엔드포인트도 하나**다 —
+// react-query 가 같은 queryKey 로 묶어 주므로 실제 fetch 도 한 번이다.
+// ★일별 3,886행짜리(인플레·WTI)는 collector 가 **주간 마지막값**으로 솎아서 준다.
+export interface RateSeries {
+  key: string;
+  label: string;                 // 시트의 컬럼명 그대로(단위 포함)
+  last: number;
+  last_date: string;
+  points: [string, number][];
+}
+export interface RateSeriesGroup {
+  asof: string | null;
+  series: RateSeries[];
+}
+export interface BondIssuer {
+  ticker: string;
+  name: string;
+  amt_b: number;
+  n: number;
+}
+export interface RateBonds {
+  by_year: [number, number][];   // [연도, 발행액(십억)]
+  by_issuer: BondIssuer[];
+  total_b: number;
+  n: number;
+  asof: string | null;
+  // ⚠️발행 통화 액면을 그대로 합산한 값이다(워크북 Year 요약 열과 같은 정의).
+  unit: string;
+}
+export interface RateTopics {
+  generated_at: string;
+  note?: string | null;
+  bonds: RateBonds | null;
+  inflation: RateSeriesGroup | null;
+  wti: RateSeriesGroup | null;
+  adp: RateSeriesGroup | null;
+  fomc_prob: RateSeriesGroup | null;
+}
+
+export function getRateTopics(): Promise<RateTopics> {
+  return request<RateTopics>("/api/v1/stock-monitor/rate-topics");
+}
+
+// ══ [AI Key Data] AI 사용량 · Epoch — 2026-08-28 D2안 ═══════════════════════
+// 사용자 승인: ADP·FOMC내재확률을 메인에서 이 계열(하위 라우트)로 이주하고
+// 그 2칸에 AI 사용량 카드를 넣는다(그리드 무변경, 기존 6장 안 건드림).
+// 신규 엔드포인트는 전부 `/api/v1/ai-key-data` 신규 라우터 소관
+// (기존 3개는 여전히 `/api/v1/stock-monitor` 밑 — 이전은 별도 작업, ws2 설계 §2.3).
+//
+// ⚠️★★아래 타입은 ws2 설계 문서의 제네릭 계약(그룹={series:[{key,label,kind,points}]})
+//   이 아니라 **실제 라이브 응답을 2026-08-28 curl 로 실측해 그대로 옮긴 것**이다.
+//   백엔드(ws1/ws3)가 문서보다 더 구체적인 모양으로 구현했다 — 예: OpenRouter 는
+//   벤더가 시계열이 아니라 스냅샷 목록, Epoch 칩은 날짜-값 쌍이 아니라 `quarters`
+//   공유축 + 병렬 배열, 데이터센터는 레코드 배열(`buildout`). 화면은 이 실제
+//   모양을 작은 매퍼로 `AiSeries`(TimeSeriesChart 입력)로 변환해서 그린다.
+//   VS Code(`/vscode-installs`)만 아직 라우트가 없다(404 실측, 2026-08-28) —
+//   그 타입만 설계 문서 그대로 유지한 추정치다.
+
+// staleness 소스 블록 — 6개 라이브 엔드포인트가 공통으로 붙이는 그대로.
+// ★2026-08-28 재정정: `irrecoverable` 이 이제 6개 전부에 항상 실린다(vscode 만
+//   true, 나머지 5개는 명시적 false — curl 로 재확인). 한때 필드가 안 보여서
+//   `fetch_ok` 로 우회했었는데 원래 설계(§4.3)대로 되돌린다: stale_days<=1 이면
+//   무표시, stale_days>=2 && irrecoverable 이면 rose("N일 미수집 — 복구 불가"),
+//   stale_days>=2 (그 외) 면 amber("N일 지연"). 필드 부재와 false 를 가를 필요가
+//   이제 없다(항상 명시적으로 온다).
+export interface AiKeyDataSource {
+  name: string;
+  dataset: string;
+  url: string;
+  license: string | null;
+  license_url: string | null;
+  citation: string;
+  retrieved: string;
+  irrecoverable: boolean; // true = 결측이 영구 손실인 소스(현재는 VS Code 뿐)
+  stale_days: number;
+  fetched_at: string;
+  fetch_ok: boolean;
+  latest_date: string | null;
+}
+
+// 화면이 그리는 저수준 계열(TimeSeriesChart 입력) — API 원본과 모양이 다를 때
+// (칩의 병렬 배열, 데이터센터의 레코드 배열, 펀딩의 이벤트 목록) 카드가 매핑한다.
+// ★point 값이 null 이면 "결측"이지 0 이 아니다 — 선을 잇지 않고 끊는다.
+// anomaly_dates 는 그 날짜의 점을 rose 로 강조한다(예: VS Code MS 소급 정정으로
+// 값이 줄어든 날) — 0으로 자르거나 숨기지 않고 **보이게** 만드는 장치.
+export interface AiSeries {
+  key: string;
+  label: string;
+  unit?: string;
+  kind: "line" | "step" | "scatter";
+  last: number | null;
+  points: [string, number | null][];
+  incomplete_from?: string | null;
+  anomaly_dates?: string[];
+}
+
+// ── AI 사용량 탭 카드 ① OpenRouter 토큰 사용량 ───────────────────────────────
+// 원천 tokens_daily_long.csv(BOM+CRLF) — collector openrouter_tokens.py.
+// ★★`coverage:"top50_plus_other"` — 전수가 아니다. `vendors` 는 시계열이 아니라
+//   **스냅샷**(최근 창 합계 1개씩)이라 차트가 아니라 숫자 뱃지로만 노출한다.
+//   "점유율" 대신 `other_share_pct` 를 그대로 보여준다(모델별 % 는 만들지 않는다).
+// `totals.daily_ma7` 가 기본 표시선, `totals.daily` 는 범례 토글(raw). license 는
+// `source.license` 가 null 이라 대외 게재 전 이용약관 확인 필요(조건 임의 생성 금지).
+// ⚠️이름을 `AiTokenUsage`/`getAiTokenUsage` 로 하면 이미 있는 무관한 기능
+//   (Claude/Codex 플랜 사용량 모니터, :84 `AiTokenUsageResponse` · :1203
+//   `getAiTokenUsage` → `/api/v1/ai-token-usage`)과 겹쳐 next build 가 죽는다.
+//   URL 경로는 설계 그대로 쓰고 TS 식별자만 `OpenRouter` 로 갈랐다.
+export interface OpenRouterVendor {
+  key: string;
+  name: string;
+  tokens: number;
+  n_models: number;
+  share_pct: number;
+}
+export interface OpenRouterTokenUsage {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  unit: string; // "tokens"
+  coverage: string; // "top50_plus_other"
+  totals: {
+    daily: [string, number][];
+    daily_ma7: [string, number | null][];
+    weekly: [string, number][];
+  };
+  incomplete_buckets: string[]; // 부분 집계 버킷 날짜(주로 weekly 쪽 — daily 뷰엔 영향 적음)
+  stats: {
+    last_date: string;
+    last: number;
+    mtd_t: number;
+    mom_pct: number | null;
+    yoy_x: number | null;
+  };
+  vendors: OpenRouterVendor[]; // 스냅샷 — 차트 아님, 뱃지 전용
+  other_share_pct: number;
+}
+export function getOpenRouterTokenUsage(): Promise<OpenRouterTokenUsage> {
+  return request<OpenRouterTokenUsage>("/api/v1/ai-key-data/ai-token-usage");
+}
+
+// ── AI 사용량 탭 카드 ② npm 코딩에이전트 다운로드 ────────────────────────────
+// 요일 효과가 커서(주말 스윙) `totals.daily_ma7` 이 기본, raw 는 범례 토글.
+// `packages[]` 는 패키지별 실측치(자체 raw+ma7+stats 보유) — 카드 폭 제약상
+// 차트엔 총합만 그리고, 상위 패키지는 숫자 뱃지로만 노출한다.
+export interface NpmPackageStats {
+  last: number;
+  last_date: string;
+  chg_1d_pct: number | null;
+  chg_1w_pct: number | null;
+  window_total: number;
+  share_pct: number;
+  n: number;
+  stale_days: number;
+}
+export interface NpmPackage {
+  key: string;
+  name: string;
+  kind: "line";
+  points: [string, number][];
+  ma7: [string, number | null][];
+  stats: NpmPackageStats;
+}
+export interface NpmDownloads {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  totals: {
+    daily: [string, number][];
+    daily_ma7: [string, number | null][];
+  };
+  packages: NpmPackage[];
+  n_packages: number;
+}
+export function getNpmDownloads(): Promise<NpmDownloads> {
+  return request<NpmDownloads>("/api/v1/ai-key-data/npm-downloads");
+}
+
+// ── AI 사용량 탭 카드 ③ VS Code 확장 설치수 ──────────────────────────────────
+// ★2026-08-28 라우트 개통·curl 실측으로 재작성(이전엔 404 라 설계 문서 추정치였다).
+// `measure:"stock"` — 시점 누적 총량이지 증분이 아니다. **결측일은 과거 조회 API 가
+// 없어 영구 손실**(`source.irrecoverable=true`) — 데몬이 꺼졌던 구간은 `gaps[]`
+// 로 남고 다시는 못 채운다.
+//
+// ★★현재는 스냅샷이 1일치뿐이라(`n_snapshots:1`) `delta`/`delta_marks`/
+//   `revisions`/`gaps` 가 전부 빈 배열이다 — note 가 "내일 수집분부터 자동으로
+//   생깁니다"라고 명시. 아래 타입·화면 로직은 계약대로 미리 짜 둔 것이고,
+//   비어있지 않은 실 데이터로는 아직(2026-08-28) 검증 못 했다.
+// ★span_days 필수 확인 지점 — 데몬이 하루 이상 꺼졌다 켜지면 다음 delta 는
+//   "하루 증분"이 아니라 `span_days` 일치 누적분이다. 일 증분처럼 그리면 틀린
+//   숫자가 된다 — 화면은 `span_days>1` 이면 "N일 누적 + 일평균 환산" 을 같이 적는다.
+// ★음수 델타(`delta_marks[].negative`)는 MS 소급 정정 — 0으로 자르거나 숨기지
+//   않는다. `revisions[]` 에 원래 from→to 가 보존돼 있어 그대로 노출한다.
+export interface VscodeSnapshot {
+  date: string;
+  utc: string;
+  n_extensions: number;
+}
+export interface VscodeGap {
+  // ⚠️필드 이름 추정 — 현재 라이브 데이터가 빈 배열이라 실측 불가(§주석 위 참조).
+  from?: string;
+  to?: string;
+  date?: string;
+  days?: number;
+}
+export interface VscodeExtensionStats {
+  last: number;
+  last_date: string;
+  n: number;
+  delta_last: number | null;
+  delta_last_date: string | null;
+  negative_days: number;
+  stale_days: number;
+}
+export interface VscodeDeltaPoint {
+  date: string;
+  value: number;
+  span_days: number; // ★1보다 크면 데몬 공백을 낀 누적분 — "하루 증분"으로 읽으면 안 된다
+}
+export interface VscodeDeltaMark {
+  date: string;
+  negative: boolean; // true = 그 시점 값이 직전보다 줄었다(MS 소급 정정)
+  note?: string | null;
+}
+export interface VscodeExtension {
+  key: string;
+  id: string;
+  name: string;
+  short: string;
+  kind: "line";
+  install: number;
+  snapshot_date: string;
+  snapshot_utc: string;
+  version: string;
+  last_updated: string;
+  update_count: number;
+  download_count: number;
+  avg_rating: number;
+  rating_count: number;
+  stock: [string, number][]; // 시점 누적 설치수 — 이게 차트에 그리는 계열
+  delta: VscodeDeltaPoint[];
+  delta_marks: VscodeDeltaMark[];
+  stats: VscodeExtensionStats;
+}
+export interface VscodeRevision {
+  extension: string;
+  date: string;
+  delta: number;
+  from: number;
+  to: number;
+}
+export interface VscodeInstalls {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  unit: string; // "installs"
+  kind: "line";
+  measure: "stock";
+  snapshots: VscodeSnapshot[];
+  n_snapshots: number;
+  gaps: VscodeGap[]; // 영구 손실 구간 — irrecoverable 과 묶어서 노출한다
+  extensions: VscodeExtension[];
+  revisions: VscodeRevision[];
+  totals: {
+    install: number;
+    snapshot_date: string;
+    n_extensions: number;
+    delta: VscodeDeltaPoint[];
+  };
+}
+export function getVscodeInstalls(): Promise<VscodeInstalls> {
+  return request<VscodeInstalls>("/api/v1/ai-key-data/vscode-installs");
+}
+
+// ── Epoch AI — 기업 / 칩 / 데이터센터 (2026-08-28 부터 /ai-key-data 메인 카드) ──
+// 3년에 수십 행짜리 뉴스 이벤트라 kind 가 step|scatter 로 온다 — 연속선 금지
+// (없는 정밀도를 만든다). 라이선스는 `source.license`("CC BY 4.0") 그대로 노출.
+// ★usage·compute_spend 그룹은 안 온다 — ws1 실측(usage_reports 12/49행,
+//   compute_spend 14행/2사)이 너무 희소해 **1차 제외**로 확정됐다(마스터 플랜 §4).
+//   ws2 설계 문서의 4그룹 표는 그 확정 전 초안이다.
+export interface EpochSeriesStats {
+  last: number | null;
+  last_date: string | null;
+  chg_pct?: number | null;
+  n: number;
+  stale_days?: number;
+}
+export interface EpochRevenueSeries {
+  key: string;
+  name: string;
+  points: [string, number][];
+  stats: EpochSeriesStats;
+}
+export interface EpochFundingRound {
+  company: string;
+  date: string;
+  equity: number | null;
+  debt: number | null;
+  valuation: number | null;
+  status: string;
+  type: string;
+  confidence: string;
+}
+export interface EpochCompanies {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  revenue: {
+    unit: string;
+    kind: "line" | "step" | "scatter";
+    note?: string | null;
+    series: EpochRevenueSeries[];
+  } | null;
+  funding: {
+    unit: string;
+    kind: "line" | "step" | "scatter";
+    note?: string | null;
+    rounds: EpochFundingRound[]; // 시계열이 아니라 이벤트 목록 — 카드가 회사별로 묶어 점을 만든다
+  } | null;
+}
+export function getEpochCompanies(): Promise<EpochCompanies> {
+  return request<EpochCompanies>("/api/v1/ai-key-data/epoch-companies");
+}
+
+// ★칩은 날짜-값 쌍이 아니라 `quarters`(공유 x축) + 설계사별 **병렬 배열**
+//   (`flow`/`cum`/`units`, 인덱스가 quarters 와 1:1)로 온다 — 카드가 zip 해서 그린다.
+export interface EpochChipDesigner {
+  key: string;
+  name: string;
+  flow: number[]; // 분기 신규
+  cum: number[]; // 누적(H100e 환산)
+  units: number[];
+  stats: { cum_last: number; flow_last: number; share_pct: number };
+}
+export interface EpochChips {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  unit: string; // "H100e"
+  quarters: string[]; // designers[].flow/cum/units 와 같은 인덱스를 공유하는 x축(분기말)
+  incomplete_quarters: string[];
+  designers: EpochChipDesigner[];
+}
+export function getEpochChips(): Promise<EpochChips> {
+  return request<EpochChips>("/api/v1/ai-key-data/epoch-chips");
+}
+
+// ★데이터센터는 `buildout[]` 레코드 배열 하나에 날짜+3지표(전력·H100e·Capex)가
+//   같이 들어 있다 — 카드가 지표별로 풀어 3계열을 만든다.
+export interface EpochDcBuildoutPoint {
+  date: string;
+  sites: number;
+  it_power_mw: number;
+  h100e: number;
+  capex_bn: number;
+}
+export interface EpochDatacenters {
+  generated_at: string;
+  asof: string | null;
+  note?: string | null;
+  source: AiKeyDataSource | null;
+  units: { power: string; compute: string; capex: string };
+  buildout: EpochDcBuildoutPoint[];
+}
+export function getEpochDatacenters(): Promise<EpochDatacenters> {
+  return request<EpochDatacenters>("/api/v1/ai-key-data/epoch-datacenters");
+}
+
+// ── [종목 모니터] 가격 모니터 (주간가격모니터 84개 시장) ──────────────────────
+// 원천은 price_monitor.xlsx — collector price_board.py 가 판독하고, 분류·라벨·지표
+// 정의는 회의자료 생성기(dashboard_html_writer.py)에서 이식한 것이다.
+// ★자산군 하나씩 받는다(cat) — 84개 전량 + 3년 주간 시계열을 한 번에 실으면 무겁다.
+// ★★채권(bond)은 **bp**, 나머지는 **%**. `is_yield`·`unit` 로 갈라 표기한다 —
+//   금리의 %변화율은 의미가 없고 마이너스 구간에서 부호가 뒤집힌다.
+export type PriceCatKey = "equity" | "bond" | "commodity" | "fx" | "crypto";
+
+// ★달력 앵커(mtd·ytd)와 롤링(r1m~r1y)이 **둘 다** 온다(2026-08-31). 달력 앵커는
+//   "이번 달 얼마"를 답하고, 롤링은 시장끼리 비교할 때 쓴다 — 월초에는 모든 시장의
+//   MtD 가 0 근처로 뭉쳐 비교가 안 되기 때문이다. 우하단 요약 표가 8개를 다 쓴다.
+export interface PriceBoardRow {
+  key: string;      // 블룸버그 티커 = 고유키
+  group: string;    // layer1 — 벤치마크/DM/EM · 미국/한국/… · 에너지/귀금속/… (없으면 "")
+  sub_group: string; // layer2 — DM·EM 안의 지역 묶음(없으면 "")
+  label: string;
+  sub: string;      // 보조 라벨(단위·출처)
+  asof: string;
+  price: number;
+  dtd: number | null;
+  wtd: number | null;
+  mtd: number | null;
+  ytd: number | null;
+  r1m: number | null;  // 롤링 30일
+  r3m: number | null;  // 롤링 91일 — 차트의 '롤링 3M' 과 같은 창
+  r6m: number | null;  // 롤링 182일
+  r1y: number | null;  // 롤링 365일
+}
+
+// 좌측 목록의 계층 — 자산군(탭) → layer1 → layer2 → 실제 지수(leaf).
+// 그룹이 빈 자산군(환·비트코인)은 leaf 가 최상단에 바로 온다.
+export type PriceTreeNode =
+  | { type: "node"; label: string; children: PriceTreeNode[] }
+  | ({ type: "leaf" } & Omit<PriceBoardRow, "group" | "sub_group">);
+export interface PriceBoardSeries {
+  key: string;
+  label: string;
+  points: [string, number][]; // 3년 주간 마지막값
+}
+export interface PriceBoard {
+  generated_at: string;
+  note?: string | null;
+  cat: PriceCatKey;
+  cat_label: string;
+  unit: string;       // '%' | 'bp'
+  is_yield: boolean;
+  asof: string | null;
+  categories: { key: PriceCatKey; label: string }[];
+  rows: PriceBoardRow[];
+  tree: PriceTreeNode[];
+  series: PriceBoardSeries[];
+}
+
+export function getPriceBoard(cat: PriceCatKey): Promise<PriceBoard> {
+  return request<PriceBoard>(`/api/v1/stock-monitor/price-board?cat=${cat}`);
+}
+
+// ── 차트 계열 ────────────────────────────────────────────────────────────────
+// ★★2026-08-31 계약 교체. DtD·WtD·MtD·YtD **시계열**은 없어졌다 — 달력 앵커라
+//   월초·연초마다 0 으로 리셋되는 톱니여서 추세를 읽을 수 없고, 그 숫자는 요약
+//   표(PriceBoardRow)가 이미 준다. 차트는 3모드다:
+//     · cum (누적수익률)    — **프론트가** 보는 구간 첫 점 기준으로 price 를 리베이스
+//     · rs  (벤치마크 대비) — **프론트가** price 를 benchmark 로 나눈 상대곡선
+//     · r3m (롤링 3M)       — 서버가 계산해 준 그대로
+//   그래서 계열마다 price·r3m 을 **둘 다** 싣는다 — 모드를 바꿔도 재요청이 없다.
+// ★cum·rs 를 서버가 못 만드는 이유: 리베이스 기준점이 사용자가 좁힌 구간의 첫 점이라
+//   서버가 모른다. 고정 시작점으로 계산하면 구간을 좁혀도 0% 가 안 따라온다.
+export type PriceChartMode = "cum" | "rs" | "r3m";
+export interface PriceChartSeries {
+  key: string;   // 티커
+  label: string;
+  sub: string;
+  price: [string, number][]; // 가격 원본(주간) — cum·rs 의 재료
+  r3m: [string, number][];   // 롤링 91일 지표(주간). 앞 91일이 없어 price 보다 짧다
+}
+// 상대곡선의 분모. 채권·환은 null 이다(금리를 금리로 나눌 수 없고, 환은 그 자체가
+// 이미 상대가격이다) — 그때는 화면이 '벤치마크 대비' 토글을 비활성으로 둔다.
+export interface PriceBenchmark {
+  key: string;
+  label: string;
+  points: [string, number][];
+}
+interface PriceChartCommon {
+  generated_at: string;
+  unit: string;      // '%' | 'bp'
+  is_yield: boolean;
+  modes: { key: PriceChartMode; label: string }[];
+  series: PriceChartSeries[];
+  benchmark: PriceBenchmark | null;
+  note?: string | null;
+}
+export interface PriceMetricPayload extends PriceChartCommon {
+  key: string;
+  label: string;
+  sub: string;
+  cat: PriceCatKey | null;
+  asof?: string;
+  price?: number;
+}
+
+export function getPriceMetricSeries(key: string): Promise<PriceMetricPayload> {
+  return request<PriceMetricPayload>(
+    `/api/v1/stock-monitor/price-board/metric-series?key=${encodeURIComponent(key)}`,
+  );
+}
+
+// 묶음(예: DM/미국) 안 시장들의 차트 계열. metric-series 와 **payload 모양이 같다**
+// — 계열이 1개냐 N개냐만 다르다. 그래서 차트는 series 배열 하나만 그리면 양쪽을 다 그린다.
+export interface PriceGroupPayload extends PriceChartCommon {
+  kind: "group";
+  cat: PriceCatKey;
+  l1: string;
+  l2: string;
+  label: string;
+  sub: string;
+  asof: string | null;
+}
+
+export function getPriceGroupSeries(
+  cat: PriceCatKey,
+  l1: string,
+  l2: string,
+): Promise<PriceGroupPayload> {
+  const q = new URLSearchParams({ cat, l1, l2 });
+  return request<PriceGroupPayload>(
+    `/api/v1/stock-monitor/price-board/group-series?${q.toString()}`,
+  );
+}
+
+// ── [종목 모니터] 종목 상세(5대 축) ──────────────────────────────────────────
+// 원천이 S:\...\Toss_분봉_모니터\input\raw 의 이름-키 JSON 이라 name 으로 묻는다.
+// (차트 스크리닝·실시간 뉴스는 2026-08-25 은퇴 — chart 타입·클라이언트도 함께 삭제)
+export interface StockDetail {
+  name: string;
+  symbol: string | null;
+  sector: Record<string, string> | null;  // {L1..L5}
+  country: string | null;
+  currency: string | null;
+  news_axis: boolean;
+  axes: string[];                          // 5대 축 — 수기 입력, 화면에서 편집
+  has_axis_file: boolean;
+}
+export function getStockDetail(name: string): Promise<StockDetail> {
+  return request<StockDetail>(
+    `/api/v1/stock-monitor/stock-detail?name=${encodeURIComponent(name)}`,
+  );
+}
+
+export interface SaveStockAxisInput {
+  name: string;
+  symbol?: string | null;   // 있으면 서버가 파일과 대조한다(불일치 409)
+  news_axis: boolean;
+  axes: string[];           // 정확히 5개
+}
+export function saveStockAxis(body: SaveStockAxisInput): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/v1/stock-monitor/stock-axis", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
 }

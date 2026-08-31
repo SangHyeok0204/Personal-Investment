@@ -80,8 +80,23 @@ def _copy_db() -> None:
         ensure_dirs()
         tmp = DEST_DB.with_name(DEST_DB.name + ".tmp")
         shutil.copyfile(SRC_DB, tmp)
+        # ★설치 전 무결성 검증(2026-08-25) — 중앙 PC 가 SMB 원본을 쓰는 도중 읽으면
+        #   torn copy 가 나오는데, 검사 없이 os.replace 하면 그 손상본이 설치되어
+        #   다음 복사(60초)까지 'database disk image is malformed' 가 계속 났다
+        #   (장중 KOSDAQ150 실측). stock_monitor._copy_when_quiet 와 같은 게이트.
+        con = sqlite3.connect(tmp)
+        try:
+            ok = con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        except sqlite3.Error:
+            ok = False
+        finally:
+            con.close()
+        if not ok:
+            os.remove(tmp)
+            _log("copy discarded: quick_check failed (원본 쓰기와 겹침) — 이전 사본 유지")
+            return
         os.replace(tmp, DEST_DB)  # 원자적 교체 — 읽는 중이어도 안전(Linux)
-    except OSError as exc:
+    except (OSError, sqlite3.Error) as exc:
         _log(f"copy failed: {exc!r}")
 
 

@@ -177,6 +177,24 @@ services:
       # 수집기가 1분마다 쓰는 **라이브 WAL** 이라 guru13f 와 같은 sidecar-게이트로
       # /app/.cache 에 복사해 읽는다(WAL-over-SMB 는 SQLite 미지원).
       - "/mnt/s/GE/raw/data/Toss_분봉_모니터/output:/srv/legacy/toss_minute:ro"
+      # [종목 모니터] 종목 메타(stock_info)와 5대 축(stock_axis) — 파일 키는 한글 이름,
+      # 내용은 {name, symbol, ...} JSON 한 장씩. 운용역이 수기로 채우는 입력이다.
+      # stock_axis 만 :rw — 화면의 축 편집이 {이름}_axis.json 을 고쳐 쓴다(tmp→replace).
+      # perf_analysis output/funds 와 같은 "좁은 rw" 선례. stock_info 는 읽기만 한다.
+      - "/mnt/s/GE/raw/data/Toss_분봉_모니터/input/raw/stock_info:/srv/legacy/toss_input/stock_info:ro"
+      - "/mnt/s/GE/raw/data/Toss_분봉_모니터/input/raw/stock_axis:/srv/legacy/toss_input/stock_axis:rw"
+      # [종목 모니터] 수익률 모니터 — 주간가격모니터 파이프라인이 갱신하는
+      # price_monitor.xlsx (블룸버그 일단위 시세, 주말 ffill). 폴더째 :ro 로 물리고
+      # collector 는 그 안의 price_monitor.xlsx 한 장만 읽는다(price_returns.py).
+      - "/mnt/s/GE/raw/data/주간가격모니터/input/raw:/srv/legacy/price_monitor:ro"
+      # [종목 모니터] 컴퓨팅 지수 모니터링 — GPU 렌탈 지수(SDH100RT·SDB200RT).
+      # ★2026-08-27 이전: 원래 위 주간가격모니터 폴더에 얹혀 있었는데 [AI Key Data]
+      #   프로젝트가 신설되면서 그쪽 input/raw 로 옮겨졌다(같은 블록 구조 + 종목 OHLCV
+      #   시트가 붙은 통합본). 마운트를 얹어 놓지 않으면 카드가 "원천 파일 없음"을 띄운다.
+      # ★2026-08-28 프로젝트 개명(AI Key Data -> AI Key Data). 경로에 공백이 있어
+      #   따옴표가 필수다. 마운트 별칭(gpu_compute)은 그대로 둔다 — 컨테이너 안 이름이라
+      #   바꾸면 collector·env 를 다 같이 고쳐야 하고 얻는 게 없다.
+      - "/mnt/s/GE/raw/data/AI Key Data/input/raw:/srv/legacy/gpu_compute:ro"
       # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
       - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
       # [뉴스 모니터링 · 텔레그램] 상류 Telegram_Bot(다른 PC 상주)이 굽는 집계 JSON.

@@ -2,76 +2,41 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  getIndexStrip,
-  getStockMonitor,
-  type IndexStripItem,
-  type StockMonitorRow,
-} from "@/lib/api";
+import { getIndexStrip, type IndexStripItem, type PriceCatKey } from "@/lib/api";
 import { Topbar } from "@/components/layout/topbar";
+import { EtfFlowCard } from "@/components/stock-monitor/etf-flow-card";
+import { PriceTreeCard, type PriceSel } from "@/components/stock-monitor/price-tree-card";
+import { PriceMetricChartCard } from "@/components/stock-monitor/price-metric-chart-card";
+import { PriceSummaryCard } from "@/components/stock-monitor/price-summary-card";
+import { EMDASH, moveColor } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
 
-// [종목 모니터] — KOSPI200 분봉 급등락·이상현상. 시장 모니터링 하위(iNAV·WRAP·LP평가와 동급).
+// [종목 모니터] — 시장 모니터링 하위(iNAV·WRAP·LP평가와 동급).
 //
-// 화면 규격(사용자 확정 2026-08-21): 대시보드를 가로3×세로2로 6등분했을 때 **왼쪽 위 +
-// 가운데 위** 2칸. 그래서 grid 는 3열 2행이고 이 표가 `col-span-2`(상단 좌·중)를 먹는다.
-// 나머지 4칸은 아직 비어 있다 — 다음 카드가 들어올 자리다.
+// 화면 규격(사용자 지시 2026-08-28 전면 개편): 가로6×세로2 = 12등분.
+//   · 1번째 칸 위·아래 2칸   = 지표 리스트 (자산군 탭 + layer1/layer2 계층 트리)
+//   · 2~5번째 칸 위·아래 8칸 = 지표 추이 차트 (누적수익률 / 벤치마크 대비 / 롤링 3M)
+//   · 상단 6번째 1칸         = ETF 순매수 모니터
+//   · 아래 6번째 1칸         = 수익률 요약 표 (DtD~YtD + 롤링 1M·3M·6M·1Y)
 //
-// 컬럼은 토스 '실시간 차트'(docs/toss 실시간.png)를 따른다. 다만
-//   · `토스증권 거래 비율` 은 토스 앱 내부값이라 뺐다(사용자 확정).
-//   · `시가총액`·`산업`·`실시간 이슈`(구 토스 AI 요약)는 원천이 없어 **자리만** 둔다.
-//     빈 칸으로 두는 편이 나중에 소스가 붙을 때 화면을 안 건드린다.
-// ★거래대금은 분봉 Σ(volume×close)다. 토스는 자기 앱 체결분만 세므로 같은 이름이지만
-//   값이 다르다 — 서버가 value_basis 로 그 사실을 실어 보내고 화면은 그걸 그대로 적는다.
+// ★★2026-08-31 개편(사용자 지시): 달력 앵커 지표(DtD·WtD·MtD·YtD)의 **시계열을
+//   차트에서 걷어내고 표로 옮겼다**. 그 지표들은 월초·연초마다 0 으로 리셋되는
+//   톱니라 추세를 읽을 수 없고, 월초에는 모든 시장이 0 근처로 뭉쳐 비교도 안 된다.
+//   그래서 화면의 역할을 갈랐다 — **발견은 표(정렬·틴트), 확인은 차트(궤적)**.
+// ★2026-08-28 ETF 카드를 2칸→1칸으로 줄였다(사용자 지시). 그만큼 차트가 3칸→4칸으로
+//   넓어진다 — 안 늘리면 5번째 열이 통째로 빈 구멍이 된다.
+// 참조 화면: S:\GE\raw\data\주간가격모니터\reference\주간가격모니터.png
+//
+// ★★'실시간 급등락 종목' 카드는 2026-08-28 제거(사용자 지시). 그와 함께 미장 분봉
+//   쿼리·표 팝업(StockTableModal)·이슈 헤드라인(RealtimeIssues)도 이 화면에서
+//   빠졌다 — 컴포넌트와 collector lane(us_stock_monitor)은 남아 있으니 되살릴 땐
+//   import 와 카드 한 장만 다시 놓으면 된다.
+//
+// ★가격 모니터 두 카드는 상태(자산군 탭 · 선택 지수)를 **페이지가 들고 있다** —
+//   서로 다른 그리드 칸이라 형제로 놓인다. 목록은 자산군 payload 를, 차트는 고른
+//   지수의 지표 시계열을 각각 받는다(선택할 때마다 한 시장씩).
 
-const EMDASH = "−";
-const POLL_MS = 30_000; // 장중 분봉이 1분마다 갱신된다. LP평가와 같은 주기.
-
-type SortKey = "value" | "change" | "sigma";
-
-const SORTS: { key: SortKey; label: string; hint: string }[] = [
-  { key: "value", label: "거래대금", hint: "토스 화면과 같은 정렬" },
-  { key: "change", label: "등락률", hint: "당일 등락 큰 순" },
-  { key: "sigma", label: "이상탐지", hint: "그 종목 자신의 변동성 대비 몇 σ인가" },
-];
-
-function fmtInt(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EMDASH;
-  return Math.round(v).toLocaleString("en-US");
-}
-
-// 억/조 단위 — 토스 화면 표기(225억원 · 1,749.4조원)를 따른다.
-function fmtWon(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EMDASH;
-  if (v >= 1e12) return `${(v / 1e12).toLocaleString("en-US", { maximumFractionDigits: 1 })}조원`;
-  if (v >= 1e8) return `${Math.round(v / 1e8).toLocaleString("en-US")}억원`;
-  return `${Math.round(v).toLocaleString("en-US")}원`;
-}
-
-function fmtPct(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EMDASH;
-  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
-}
-
-function fmtSigma(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EMDASH;
-  return `${v > 0 ? "+" : ""}${v.toFixed(2)}σ`;
-}
-
-// 등락 색 — 한국 관례(상승 빨강 / 하락 파랑). 토스 화면과 같다.
-function moveColor(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v) || v === 0) return "text-ink-muted";
-  return v > 0 ? "text-rose-600" : "text-blue-600";
-}
-
-// σ 강조 — |σ|≥2 는 그 종목 기준 드문 움직임이다. 고정 임계값(±5%)으로는 못 가르는 자리.
-function sigmaTone(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return "text-ink-muted";
-  const a = Math.abs(v);
-  if (a >= 3) return "font-extrabold text-rose-700";
-  if (a >= 2) return "font-bold text-amber-600";
-  return "text-ink-muted";
-}
+const POLL_MS = 30_000; // 지수 스트립 — 장중 분단위로 갱신된다.
 
 // 스파크라인 — 값 배열을 폭 100 높이 28 의 path 로 접는다. 차트 라이브러리를 쓰지 않는
 // 이유는 이 화면에 5개가 동시에 뜨고 각각 60점뿐이라, SVG 한 줄이 더 싸고 빠르기 때문이다.
@@ -120,17 +85,13 @@ function IndexCell({ x }: { x: IndexStripItem }) {
 }
 
 export default function StockMonitorPage() {
-  const [sort, setSort] = useState<SortKey>("value");
+  // 가격 모니터 — 목록과 차트가 공유하는 상태. 탭을 바꾸면 선택을 비워
+  // 그 자산군의 첫 지수로 떨어지게 한다.
+  const [priceCat, setPriceCat] = useState<PriceCatKey>("equity");
+  // 선택은 지수 하나(leaf) 또는 묶음(group) 둘 중 하나다 — 차트가 모드를 갈라 쓴다.
+  const [priceSel, setPriceSel] = useState<PriceSel | null>(null);
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["stock-monitor", sort],
-    queryFn: () => getStockMonitor(sort, 30),
-    refetchInterval: POLL_MS,
-  });
-
-  const rows: StockMonitorRow[] = data?.rows ?? [];
-
-  // 지수 스트립 — 분봉 표와 별개 폴링(원천 DB 도 다르다: INDEX_MONITOR.db).
+  // 지수 스트립 — 원천이 CHECK 에이전트의 INDEX_MONITOR.db 다.
   const { data: strip } = useQuery({
     queryKey: ["index-strip"],
     queryFn: getIndexStrip,
@@ -146,33 +107,7 @@ export default function StockMonitorPage() {
     <div className="flex h-screen flex-col">
       <Topbar
         title="종목 모니터"
-        subtitle="시장 모니터링 · KOSPI200 분봉 급등락 / 이상현상"
-        status={
-          data?.asof ? (
-            <span className="truncate text-[11px] tabular-nums text-slate-400">
-              {data.asof} 기준 · 유니버스 {data.universe ?? EMDASH}종목 · 30초 폴링
-            </span>
-          ) : undefined
-        }
-        actions={
-          <div className="flex overflow-hidden rounded-lg border border-hairline text-[12px] font-bold">
-            {SORTS.map((s) => (
-              <button
-                key={s.key}
-                title={s.hint}
-                onClick={() => setSort(s.key)}
-                className={cn(
-                  "px-2.5 py-1 transition-colors",
-                  sort === s.key
-                    ? "bg-ge-navy text-white"
-                    : "bg-canvas text-ink-muted hover:bg-canvas-soft",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        }
+        subtitle="시장 모니터링 · 미장 실시간 체결 급등락 / 이상현상"
       />
 
       {/* ★PageContainer 를 쓰지 않는다. 기본형은 `mx-auto max-w-5xl px-8 py-10` 이라
@@ -181,9 +116,9 @@ export default function StockMonitorPage() {
           2026-08-21). 그래서 왼쪽·위 여백을 0 으로 두고 오른쪽·아래만 숨통을 준다.
           ⚠️공용 PageContainer 는 건드리지 않는다 — inav·wrap·lp-eval 등 10개 화면이
             같이 쓴다. 한 화면 때문에 전부를 밀면 안 된다. */}
-      {/* 지수 스트립 — 톱바 바로 아래, 표 위. 높이는 내용만큼만 먹고(shrink-0)
+      {/* 지수 스트립 — 톱바 바로 아래, 카드 위. 높이는 내용만큼만 먹고(shrink-0)
           나머지를 아래 그리드가 가져간다. 6등분 계산에서 제외되는 띠다. */}
-      <div className="shrink-0 border-b border-hairline bg-surface">
+      <div className="shrink-0 border-b border-hairline bg-canvas">
         <div className="flex divide-x divide-hairline overflow-x-auto">
           {indices.length === 0
             ? <div className="px-3 py-3 text-[11px] text-ink-muted">지수 불러오는 중…</div>
@@ -195,145 +130,40 @@ export default function StockMonitorPage() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 pb-6 pr-6">
-        {/* 가로3 × 세로2 = 6등분. 이 표가 상단 좌·중 2칸을 차지한다.
-            h-full 이라야 두 행이 각각 절반을 갖는다 — 없으면 내용 높이로 커진다. */}
-        <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-3 lg:grid-rows-2">
-          <section className="lg:col-span-2 lg:row-span-1 flex min-h-0 flex-col rounded-xl border border-hairline bg-surface">
-            <header className="flex items-baseline gap-2 border-b border-hairline px-4 py-2.5">
-              <h2 className="text-[13px] font-extrabold text-ink">실시간 차트</h2>
-              <span className="text-[11px] text-ink-muted">
-                {SORTS.find((s) => s.key === sort)?.hint}
-              </span>
-              {data?.value_basis ? (
-                <span
-                  title={data.value_basis}
-                  className="ml-auto shrink-0 cursor-help text-[10px] text-slate-400"
-                >
-                  거래대금 정의 ⓘ
-                </span>
-              ) : null}
-            </header>
+      {/* ★2026-08-28 사용자 지시로 여백을 **완전히** 걷어냈다 — gap 도 0, 바깥 padding
+          도 0. 카드끼리 맞붙어 화면을 꽉 채운다.
+          ⚠️그래서 카드는 `rounded-xl border` 를 버리고 **오른쪽/아래 한 방향 테두리**만
+            갖는다. 사방 테두리를 그대로 두면 맞닿은 자리마다 선이 2px 로 겹치고, 둥근
+            모서리가 카드 사이에 흰 홈을 판다. */}
+      <div className="min-h-0 flex-1">
+        {/* 가로6 × 세로2 = 12등분. h-full 이라야 두 행이 각각 절반을 갖는다. */}
+        <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-6 lg:grid-rows-2">
+          {/* 가격 모니터 — 왼쪽 4칸(1칸 목록 + 3칸 차트)을 위아래 통으로 쓴다.
+              참조 화면: S:\GE\raw\data\주간가격모니터\reference\주간가격모니터.png
+              (왼쪽 지표 리스트 + 오른쪽 큰 차트 + 하단 클릭 가능한 범례) */}
+          <PriceTreeCard
+            cat={priceCat}
+            onCat={(c) => {
+              setPriceCat(c);
+              setPriceSel(null); // 자산군이 바뀌면 선택을 비워 그 군의 첫 지수로 떨어뜨린다
+            }}
+            selected={priceSel}
+            onSelect={setPriceSel}
+          />
+          <PriceMetricChartCard sel={priceSel} cat={priceCat} />
 
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="w-full border-collapse text-[12px]">
-                <thead className="sticky top-0 z-10 bg-canvas-soft">
-                  <tr className="text-[11px] font-semibold text-ink-muted">
-                    <th className="px-2 py-1.5 text-left">순위</th>
-                    <th className="px-2 py-1.5 text-left">종목</th>
-                    <th className="px-2 py-1.5 text-right">현재가</th>
-                    <th className="px-2 py-1.5 text-right">등락률</th>
-                    <th className="px-2 py-1.5 text-right">거래대금</th>
-                    <th className="px-2 py-1.5 text-right">시가총액</th>
-                    <th className="px-2 py-1.5 text-left">산업</th>
-                    <th className="px-2 py-1.5 text-left">실시간 이슈</th>
-                    {/* 이상탐지 재료 — 토스 화면에는 없다. 이 탭의 존재 이유다. */}
-                    <th className="px-2 py-1.5 text-right" title="등락률 ÷ 그 종목의 일간 σ">
-                      등락 σ
-                    </th>
-                    <th className="px-2 py-1.5 text-right" title="(당일 누적거래량 − 평균) ÷ 표준편차">
-                      거래량 z
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoading ? (
-                    <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-ink-muted">
-                        불러오는 중…
-                      </td>
-                    </tr>
-                  ) : isError ? (
-                    <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-rose-600">
-                        collector 에 못 닿았습니다.
-                      </td>
-                    </tr>
-                  ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-ink-muted">
-                        {data?.note ?? "표시할 종목이 없습니다."}
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map((r) => (
-                      <tr
-                        key={r.symbol}
-                        className="border-t border-hairline/60 hover:bg-canvas-soft"
-                      >
-                        <td className="px-2 py-1.5 tabular-nums text-ink-muted">{r.rank}</td>
-                        <td className="px-2 py-1.5">
-                          <span className="font-semibold text-ink">{r.name}</span>
-                          <span className="ml-1.5 text-[10px] tabular-nums text-slate-400">
-                            {r.symbol}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-ink">
-                          {fmtInt(r.price)}원
-                        </td>
-                        <td
-                          className={cn(
-                            "px-2 py-1.5 text-right font-semibold tabular-nums",
-                            moveColor(r.change_pct),
-                          )}
-                        >
-                          {fmtPct(r.change_pct)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-ink">
-                          {fmtWon(r.value)}
-                        </td>
-                        {/* 원천 없음 — 자리만 둔다 */}
-                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-300">
-                          {fmtWon(r.market_cap)}
-                        </td>
-                        <td className="px-2 py-1.5 text-slate-300">{r.industry ?? EMDASH}</td>
-                        <td className="px-2 py-1.5 text-slate-300">{r.issue ?? EMDASH}</td>
-                        <td
-                          className={cn(
-                            "px-2 py-1.5 text-right tabular-nums",
-                            sigmaTone(r.change_sigma),
-                          )}
-                        >
-                          {fmtSigma(r.change_sigma)}
-                        </td>
-                        <td
-                          className={cn(
-                            "px-2 py-1.5 text-right tabular-nums",
-                            sigmaTone(r.volume_z),
-                          )}
-                        >
-                          {fmtSigma(r.volume_z)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          {/* ETF 순매수 모니터 — 상단 6번째 1칸. 관심 ETF(주로 신규상장)의 개인 순매수.
+              원천은 CHECK 에이전트가 적재하는 ETF_FLOW_MONITOR.db — 적재 전에는 카드가
+              대기 문구를 띄운다. */}
+          <EtfFlowCard />
 
-          {/* 섹터별 등락률 — 우상단 1칸. 아직 placeholder 다.
-              ★막아 둔 이유: 섹터 분류 기준(밸류체인 L1/L2? GICS? KRX 업종?)이 안 정해졌고
-                종목→섹터 매핑도 없다. 기준을 먼저 정하지 않고 아무 분류나 붙이면 숫자가
-                그럴듯해 보여서 틀린 것을 못 알아본다 — 빈 채로 두는 편이 안전하다.
-              universe 199종목은 이미 손에 있으므로, 매핑만 생기면 이 자리에서 집계한다. */}
-          <section className="flex min-h-0 flex-col rounded-xl border border-dashed border-hairline bg-canvas-soft/40">
-            <header className="flex items-baseline gap-2 border-b border-hairline px-4 py-2.5">
-              <h2 className="text-[13px] font-extrabold text-ink-muted">섹터별 등락률</h2>
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-                준비 중
-              </span>
-            </header>
-            <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-              <div className="text-[11px] leading-relaxed text-ink-muted">
-                섹터 분류 기준과 종목 매핑이 정해지면 채웁니다.
-                <br />
-                <span className="text-slate-400">
-                  후보 — 밸류체인 L1/L2 · KRX 업종 · GICS
-                </span>
-              </div>
-            </div>
-          </section>
+          {/* 수익률 요약 표 — 아래 행 6번째 1칸('주목해야할 지수'가 있던 자리).
+              차트에서 뺀 달력 앵커 지표(DtD~YtD)에 롤링 1M·3M·6M·1Y 를 더해 놓는다.
+              ★쿼리 키가 PriceTreeCard 와 같아(["price-board", cat]) 요청은 한 번만
+                나간다 — 이 카드는 네트워크를 더 쓰지 않는다.
+              ⚠️price-return-card.tsx · price-board-card.tsx · price-chart-card.tsx 와
+                collector price_returns.py 는 여전히 안 쓰인다(되살릴 때 배선만 이으면 된다). */}
+          <PriceSummaryCard cat={priceCat} sel={priceSel} />
         </div>
       </div>
     </div>

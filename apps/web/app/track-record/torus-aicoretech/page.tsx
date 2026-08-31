@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { RotateCw, X } from "lucide-react";
 import {
   getFundSeries,
   getInavWrapRebalancing,
+  refreshFundSeries,
   type FundSeriesResponse,
   type RebalSeries,
   type RebalEvent,
@@ -146,18 +147,26 @@ const canCoview = (gs: string[]) => gs.every((g) => COVIEW_GROUPS.includes(g));
  * 축을 합집합으로 두는 것 자체는 그대로다(교집합으로 자르면 인셉션이 늦은 계열이 구간
  * 전체를 잘라 버린다). 값이 없는 구간은 null 로 비우고, buildPlot 이 각 선을 자기 첫
  * 데이터부터 그리면서 창 시작 기준으로 리베이스한다.
+ *
+ * `showBm=false` 면 참조지수를 뺀다(범례에서 끈 상태). 펀드끼리만 견주고 싶을 때 쓰며,
+ * 빠진 만큼 y 축이 남은 선에 맞게 다시 잡힌다.
  */
 function buildModel(
   data: FundSeriesResponse | undefined,
   groups: string[],
+  showBm: boolean,
 ): Model | null {
   // 색은 **등록된 전체** 기준으로 배정한다. 보이는 것만으로 배정하면 그룹을 바꿀 때마다
   // 남은 선들의 색이 바뀌어 버린다.
   const colors = assignColors((data?.funds ?? []).map((f) => f.id));
+  const inGroups = (data?.funds ?? []).filter((f) => groups.includes(groupOf(f.id)));
+  // 참조지수만 등록된 그룹에서는 그 참조지수가 곧 그 그룹의 본체다. 끄면 그릴 것이
+  // 없어져 차트가 통째로 비므로, 본체가 따로 있을 때만 끈다.
+  const hideBm = !showBm && inGroups.some((f) => !f.id.endsWith(BM_SUFFIX));
   let seenBm = false;
-  const funds = (data?.funds ?? []).filter((f) => {
-    if (!groups.includes(groupOf(f.id))) return false;
+  const funds = inGroups.filter((f) => {
     if (!f.id.endsWith(BM_SUFFIX)) return true;
+    if (hideBm) return false;
     if (seenBm) return false; // 공통 참조지수 — 첫 번째 것만 그린다
     seenBm = true;
     return true;
@@ -489,7 +498,10 @@ export default function TorusAicoretechPage() {
     );
   };
 
-  const model = useMemo(() => buildModel(data, shown), [data, shown]);
+  // 참조지수 표시 여부. 그리는 참조지수는 언제나 하나(공통)라 토글도 하나면 된다.
+  const [showBm, setShowBm] = useState(true);
+
+  const model = useMemo(() => buildModel(data, shown, showBm), [data, shown, showBm]);
   const D = useMemo(() => model?.D ?? [], [model]);
 
   const [period, setPeriod] = useState<Period>({ kind: "recent", months: 3 });
@@ -613,7 +625,7 @@ export default function TorusAicoretechPage() {
                 )}
               </div>
               {plot && (
-                <div className="ml-auto">
+                <div className="ml-auto flex items-center gap-2">
                   <PeriodControls
                     period={period}
                     setPeriod={setPeriod}
@@ -625,6 +637,7 @@ export default function TorusAicoretechPage() {
                     setCStart={setCStart}
                     setCEnd={setCEnd}
                   />
+                  <RefreshFundsButton refetch={() => query.refetch()} />
                 </div>
               )}
             </div>
@@ -654,6 +667,7 @@ export default function TorusAicoretechPage() {
                 funds={data?.funds ?? []}
                 shown={shown}
                 onPick={onPick}
+                onToggleBm={() => setShowBm((v) => !v)}
                 markers={markers}
                 selEvent={selEvent}
                 onSelectMarker={onSelectMarker}
@@ -681,6 +695,45 @@ export default function TorusAicoretechPage() {
   );
 }
 
+/* ── 엑셀 재적재 버튼 — 기간 선택기 우측의 조그만 ↻ ──────────────────────
+   S: build_funds 를 collector 가 즉석에서 다시 돌린다(수 초). 성공하든 일부만
+   성공하든 refetch 해서 만들어진 만큼은 화면에 반영한다. */
+function RefreshFundsButton({ refetch }: { refetch: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await refreshFundSeries();
+      if (r.status !== "ok")
+        setErr(r.reason ?? r.log?.join(" · ") ?? "갱신 실패");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "갱신 실패");
+    } finally {
+      await refetch();
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={run}
+      disabled={busy}
+      title={err ?? "엑셀 다시 읽기 — 소스 엑셀에서 시계열을 다시 적재합니다"}
+      className={cn(
+        "rounded-lg border border-hairline bg-canvas-soft p-1.5 hover:bg-ge-blue-bg",
+        err ? "text-red-500" : "text-ink-secondary",
+      )}
+    >
+      <RotateCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} />
+    </button>
+  );
+}
+
 /* ── 준비 완료 상태: 헤더 스트립 + 컨트롤 + 차트 + 범례 ───────────────── */
 
 function ReadyChart({
@@ -688,6 +741,7 @@ function ReadyChart({
   funds,
   shown,
   onPick,
+  onToggleBm,
   markers,
   selEvent,
   onSelectMarker,
@@ -696,6 +750,7 @@ function ReadyChart({
   funds: { id: string; label: string; inception: string; lastDate: string }[];
   shown: string[];
   onPick: (g: string) => void;
+  onToggleBm: () => void;
   markers: Marker[];
   selEvent: { key: string; date: string } | null;
   onSelectMarker: (key: string, date: string) => void;
@@ -716,6 +771,14 @@ function ReadyChart({
 
   const winStart = plot.dates[0] ?? "";
   const winEnd = plot.dates[plot.dates.length - 1] ?? "";
+
+  // 참조지수는 몇 개 그룹을 보고 있든 하나다(buildModel 이 공통 참조지수를 첫 것으로
+  // 합친다). 그래서 칩도 그 하나에만 달고, 껐다 켜는 것도 그 하나다. 켜졌는지는 실제로
+  // 선이 그려졌는지로 판단한다 — 참조지수만 등록된 그룹은 꺼도 그려지기 때문.
+  const bmOwnerId = funds.find(
+    (f) => f.id.endsWith(BM_SUFFIX) && shown.includes(groupOf(f.id)),
+  )?.id;
+  const bmOff = !plot.lines.some((l) => l.id === bmOwnerId);
 
   return (
     <div className="space-y-3">
@@ -743,9 +806,9 @@ function ReadyChart({
         )}
       </div>
 
-      {/* 범례 = **펀드** 선택기. 고르는 단위는 펀드 하나뿐이고, 참조지수는 그 펀드를
-          고르면 따라 붙는다(선택지가 아니라 딸림 정보라서 버튼이 아닌 글자로 둔다).
-          클릭은 껐다 켜기가 아니라 갈아 끼우기다. */}
+      {/* 범례 = 선택기. 펀드 클릭은 껐다 켜기가 아니라 갈아 끼우기이고(동시 표시가
+          허용된 조합만 더하기/빼기), 참조지수 클릭은 그냥 껐다 켜기다. 참조지수는 고른
+          펀드에 딸려 나오되 펀드끼리만 견주고 싶을 때 뺄 수 있다. */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-hairline pt-3">
         {groupsOf(funds).map((g) => {
           // 그룹의 본체(펀드)와 딸린 참조지수. 참조지수만 등록된 그룹이면 본체가 없으니
@@ -753,11 +816,12 @@ function ReadyChart({
           const main = funds.find((f) => f.id === g) ?? funds.find((f) => groupOf(f.id) === g);
           if (!main) return null;
           const off = !shown.includes(g);
-          // 참조지수 칩은 **차트에 실제로 그려진** 것만 단다. 공통 참조지수는 buildModel 이
+          // 참조지수 칩은 실제로 쓰이는 그 하나에만 단다. 공통 참조지수는 buildModel 이
           // 하나로 합쳐 버리므로, 합쳐지면서 빠진 쪽에는 칩이 붙지 않는다(값 없는 "—" 방지).
-          const bmId = g + BM_SUFFIX;
-          const bm = funds.find((f) => f.id === bmId);
-          const bmDrawn = plot.lines.some((l) => l.id === bmId);
+          const bm =
+            bmOwnerId && groupOf(bmOwnerId) === g
+              ? funds.find((f) => f.id === bmOwnerId)
+              : undefined;
           // 여러 펀드를 같이 보고 있으면 그 참조지수는 공통이다 — 라벨로 그렇게 알린다.
           const bmShared = shown.length > 1;
           const retOf = (id: string) => {
@@ -804,29 +868,43 @@ function ReadyChart({
                   </span>
                 )}
               </button>
-              {/* 참조지수는 고른 펀드에만 딸려 나온다. 누를 수 없다. */}
-              {!off && bm && bmDrawn && (
-                <span className="flex items-center gap-1.5 border-l border-hairline pl-3">
-                  <span
-                    className="inline-block h-2.5 w-4 rounded-full"
-                    style={{ background: colorOf(bm.id) }}
-                  />
-                  <span
-                    className="text-[12px] font-semibold text-ink-secondary"
+              {/* 참조지수는 고른 펀드에 딸려 나오되, 눌러서 뺐다 켰다 할 수 있다. */}
+              {bm && (
+                <span className="border-l border-hairline pl-3">
+                  <button
+                    type="button"
+                    aria-pressed={!bmOff}
+                    onClick={onToggleBm}
                     title={
-                      bmShared
-                        ? "지금 보고 있는 펀드들의 공통 참조지수 (같은 지수라 하나만 그립니다)"
-                        : bm.label
+                      bmOff
+                        ? "클릭하면 참조지수를 다시 그립니다"
+                        : bmShared
+                          ? "클릭하면 참조지수를 뺍니다 · 지금 보고 있는 펀드들의 공통 참조지수입니다 (같은 지수라 하나만 그립니다)"
+                          : `클릭하면 참조지수를 뺍니다 · ${bm.label}`
                     }
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md px-1.5 py-0.5 transition hover:bg-canvas-soft",
+                      bmOff && "opacity-40",
+                    )}
                   >
-                    참조지수{bmShared && " (공통)"}
-                  </span>
-                  <span
-                    className="text-[12.5px] font-bold tabular-nums"
-                    style={{ color: signColor(retOf(bm.id)) }}
-                  >
-                    {signedPct(retOf(bm.id))}
-                  </span>
+                    <span
+                      className="inline-block h-2.5 w-4 rounded-full"
+                      style={{ background: bmOff ? "#c9d1dd" : colorOf(bm.id) }}
+                    />
+                    <span className="text-[12px] font-semibold text-ink-secondary">
+                      참조지수{bmShared && " (공통)"}
+                    </span>
+                    {bmOff ? (
+                      <span className="text-[11px] text-ink-faint">보기</span>
+                    ) : (
+                      <span
+                        className="text-[12.5px] font-bold tabular-nums"
+                        style={{ color: signColor(retOf(bm.id)) }}
+                      >
+                        {signedPct(retOf(bm.id))}
+                      </span>
+                    )}
+                  </button>
                 </span>
               )}
             </span>

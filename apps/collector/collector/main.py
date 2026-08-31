@@ -72,6 +72,7 @@ from collector.state import SnapshotState, json_safe, now_kst_string
 from collector.wrap import WrapCollector
 from collector.guru13f import Guru13F
 from collector.stock_monitor import StockMonitor
+from collector.us_stock_monitor import UsStockMonitor
 
 FX_SYMBOLS = ("USD", "CNY", "HKD", "JPY", "EUR", "CAD", "TWD")
 
@@ -238,6 +239,9 @@ class Collector:
         self.guru13f = Guru13F()
         # [종목 모니터] KOSPI200 분봉 급등락·이상탐지 (독립 .cache 스냅샷, KIS 비의존).
         self.stock_monitor = StockMonitor()
+        # [종목 모니터 · 미장] 미장_실시간체결가.db(토스 WS 틱) ro 직독 증분 집계.
+        # 첫 요청에서 백그라운드 판독 스레드가 lazy 기동 — 안 보면 SMB 를 안 건드린다.
+        self.us_stock_monitor = UsStockMonitor()
 
         self.engine: InavEngine | None = None
         self.instruments: list[dict] = []
@@ -1255,17 +1259,229 @@ class Collector:
                 _log(f"index-strip failed: {exc!r}")
                 return JSONResponse({"detail": "index-strip error"}, status_code=503)
 
+        @app.get("/etf-flows")
+        def etf_flows():
+            # [종목 모니터] ETF 순매수 모니터 — CHECK 호가 envelope 의 newEtfs 판독.
+            #   (첫 설계는 S: DB 브리지였으나 CHECK 쪽이 호가 lane 에 태워 와서 교체.)
+            #   envelope 수신 전(기동 직후)에는 rows 빈 배열(화면이 대기 문구).
+            from collector import etf_flows as _ef
+
+            try:
+                return JSONResponse(_ef.build_etf_flows(state.hoga()))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"etf-flows failed: {exc!r}")
+                return JSONResponse({"detail": "etf-flows error"}, status_code=503)
+
+        @app.get("/price-returns")
+        def price_returns():
+            # [종목 모니터] 수익률 모니터 — 주간가격모니터 price_monitor.xlsx 판독.
+            #   관심 자산(금·비트코인·30년 국채금리)의 YtD·MtD·WtD·DtD + 저점 대비
+            #   상승 + 1년 스파크. 자산 목록은 price_returns.ASSETS 가 정본.
+            from collector import price_returns as _pr
+
+            try:
+                return JSONResponse(_pr.build_price_returns())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"price-returns failed: {exc!r}")
+                return JSONResponse({"detail": "price-returns error"}, status_code=503)
+
+        @app.get("/compute-index")
+        def compute_index():
+            # [종목 모니터] 컴퓨팅 지수 모니터링 — GPU선물지수.xlsx 판독.
+            #   Silicon Data 렌탈 지수 SDH100RT·SDB200RT + 배수(B200/H100) 3분할.
+            #   원천 파일이 price_monitor.xlsx 와 같은 폴더라 마운트 공유.
+            from collector import compute_index as _ci
+
+            try:
+                return JSONResponse(_ci.build_compute_index())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"compute-index failed: {exc!r}")
+                return JSONResponse({"detail": "compute-index error"}, status_code=503)
+
+        @app.get("/policy-rate")
+        def policy_rate():
+            # [AI Key Data] 정책금리 — macro_releases.csv 의 event=RATE 행(FOMC 결정).
+            #   같은 AI Key Data 마운트(/srv/legacy/gpu_compute)를 쓴다.
+            from collector import policy_rate as _pr
+
+            try:
+                return JSONResponse(_pr.build_policy_rate())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"policy-rate failed: {exc!r}")
+                return JSONResponse({"detail": "policy-rate error"}, status_code=503)
+
+        @app.get("/rate-topics")
+        def rate_topics():
+            # [AI Key Data] 금리 5주제 — 금리_2.xlsx 한 장(채권발행·인플레·WTI·ADP·FOMC확률).
+            #   다섯 카드가 같은 파일을 보므로 엔드포인트도 하나다.
+            from collector import rate_topics as _rt
+
+            try:
+                return JSONResponse(_rt.build_rate_topics())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"rate-topics failed: {exc!r}")
+                return JSONResponse({"detail": "rate-topics error"}, status_code=503)
+
+        @app.get("/ai-token-usage")
+        def ai_token_usage():
+            # [AI Key Data] OpenRouter 일간 토큰 사용량 — tokens_daily_long.csv 판독.
+            #   같은 AI Key Data 마운트(/srv/legacy/gpu_compute)를 쓴다.
+            #   ★전수집계가 아니라 top-50 + `other` 버킷이다(payload 의 coverage).
+            #   7일 평활은 여기서 계산해 내려보낸다(ADP 카드의 ma12 와 같은 선례).
+            from collector import ai_token_usage as _atu
+
+            try:
+                return JSONResponse(_atu.build_ai_token_usage())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"ai-token-usage failed: {exc!r}")
+                return JSONResponse({"detail": "ai-token-usage error"}, status_code=503)
+
+        @app.get("/npm-downloads")
+        def npm_downloads():
+            # [AI Key Data] 코딩 에이전트 CLI 의 npm 일별 다운로드 — npm_downloads_long.csv.
+            #   ★ws3 수집기 배포 전에는 파일이 없고, 그때는 503 이 아니라 빈 payload + note 다.
+            from collector import npm_downloads as _npm
+
+            try:
+                return JSONResponse(_npm.build_npm_downloads())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"npm-downloads failed: {exc!r}")
+                return JSONResponse({"detail": "npm-downloads error"}, status_code=503)
+
+        @app.get("/vscode-installs")
+        def vscode_installs():
+            # [AI Key Data] VS Code AI 확장 설치수 — vscode_installs_long.csv 스냅샷.
+            #   ★★유일하게 누락일을 영구 복구할 수 없는 소스다(시점 누적 스톡, 과거
+            #   조회 API 없음). 그래서 payload 가 gaps[] 와 source.irrecoverable 로
+            #   "수집이 멈췄다"를 눈에 보이게 한다 — 값보다 그게 더 중요하다.
+            #   ⚠️delta 는 스냅샷 2개부터 생긴다. 1일치면 빈 배열 + note 로 정상 렌더.
+            from collector import vscode_installs as _vsc
+
+            try:
+                return JSONResponse(_vsc.build_vscode_installs())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"vscode-installs failed: {exc!r}")
+                return JSONResponse({"detail": "vscode-installs error"}, status_code=503)
+
+        @app.get("/epoch-companies")
+        def epoch_companies():
+            # [AI Key Data] AI Lab ARR(계단) + 조달 라운드 — ai_companies.zip 내부 직독.
+            #   zip 은 풀지 않는다(마운트가 :ro 라 애초에 불가능). 그룹별 note 로 격리.
+            from collector import epoch_datasets as _ed
+
+            try:
+                return JSONResponse(_ed.build_epoch_companies())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"epoch-companies failed: {exc!r}")
+                return JSONResponse({"detail": "epoch-companies error"}, status_code=503)
+
+        @app.get("/epoch-chips")
+        def epoch_chips():
+            # [AI Key Data] 제조사별 분기 AI 칩 출하 — ai_chip_sales.zip 내부 직독.
+            #   ★누적표(cumulative_timelines*)는 기산점이 제조사마다 달라 쓰지 않는다 —
+            #   timelines_by_chip 에서 공통 기산점으로 재누적한다.
+            from collector import epoch_datasets as _ed
+
+            try:
+                return JSONResponse(_ed.build_epoch_chips())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"epoch-chips failed: {exc!r}")
+                return JSONResponse({"detail": "epoch-chips error"}, status_code=503)
+
+        @app.get("/epoch-datacenters")
+        def epoch_datacenters():
+            # [AI Key Data] AI 데이터센터 빌드아웃 — data_centers.zip 내부 직독.
+            #   ⚠️타임라인 486행 중 78행이 미래(2030까지)라 asof 로 자른다. 안 자르면
+            #   IT 전력이 13,085 → 35,379 MW(2.70배)가 되어 계획을 현재로 발표한다.
+            from collector import epoch_datasets as _ed
+
+            try:
+                return JSONResponse(_ed.build_epoch_datacenters())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"epoch-datacenters failed: {exc!r}")
+                return JSONResponse(
+                    {"detail": "epoch-datacenters error"}, status_code=503
+                )
+
+        @app.get("/price-board")
+        def price_board(cat: str = "equity"):
+            # [종목 모니터] 가격 모니터 — price_monitor.xlsx 84개 시장.
+            #   자산군 하나씩 낸다(cat=equity|bond|commodity|fx|crypto) — 전량을 한 번에
+            #   내면 3년 주간 시계열까지 실려 payload 가 몇 배가 된다.
+            from collector import price_board as _pb
+
+            try:
+                return JSONResponse(_pb.build_price_board(cat))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"price-board failed: {exc!r}")
+                return JSONResponse({"detail": "price-board error"}, status_code=503)
+
+        @app.get("/price-board/metric-series")
+        def price_board_metric_series(key: str):
+            # [종목 모니터] 시장 하나의 차트 계열 — 가격 원본 + 롤링 3M(차트용).
+            #   목록 payload 에 다 실을 수 없다 — 클릭할 때 하나씩.
+            from collector import price_board as _pb
+
+            try:
+                return JSONResponse(_pb.build_metric_series(key))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"price-board/metric-series failed: {exc!r}")
+                return JSONResponse({"detail": "metric-series error"}, status_code=503)
+
+        @app.get("/price-board/group-series")
+        def price_board_group_series(cat: str = "equity", l1: str = "", l2: str = ""):
+            # [종목 모니터] 묶음(예: DM/미국) 안 시장들의 차트 계열.
+            #   목록에서 layer2 를 누르면 그 아래 시장들을 한 차트에 겹쳐 비교한다.
+            from collector import price_board as _pb
+
+            try:
+                return JSONResponse(_pb.build_group_series(cat, l1, l2))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"price-board/group-series failed: {exc!r}")
+                return JSONResponse({"detail": "group-series error"}, status_code=503)
+
         @app.get("/stock-monitor")
         def stock_monitor(day: str | None = None, sort: str = "value",
-                          limit: int = 30):
+                          limit: int = 30, market: str = "kr"):
             # [종목 모니터] KOSPI200 분봉 기반 급등락·이상현상. Toss_분봉_모니터 DB 판독.
             #   sort: value(거래대금) | change(등락률) | sigma(자기 변동성 대비)
+            #   market=us 는 미장_실시간체결가.db lane (us_stock_monitor.py, day 무시).
             try:
-                return JSONResponse(
-                    self.stock_monitor.build(day=day, sort=sort, limit=limit))
+                mon = self.us_stock_monitor if market == "us" else self.stock_monitor
+                return JSONResponse(mon.build(day=day, sort=sort, limit=limit))
             except Exception as exc:  # noqa: BLE001
                 _log(f"stock-monitor failed: {exc!r}")
                 return JSONResponse({"detail": "stock-monitor error"}, status_code=503)
+
+        @app.get("/stock-monitor/stock-detail")
+        def stock_monitor_stock_detail(name: str):
+            # [종목 모니터] 종목 상세 — stock_info(sector·country) + stock_axis(5대 축).
+            #   파일 키가 한글 이름이라 화면이 들고 있는 name 을 그대로 받는다.
+            from collector import stock_monitor as _sm
+
+            try:
+                payload = _sm.stock_detail(name)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"stock-detail failed: {exc!r}")
+                return JSONResponse({"detail": "stock-detail error"}, status_code=503)
+            if payload is None:
+                return JSONResponse({"detail": "그 이름의 종목 파일이 없다"},
+                                    status_code=404)
+            return JSONResponse(payload)
+
+        @app.post("/stock-monitor/stock-axis")
+        def stock_monitor_save_axis(payload: dict):
+            # [종목 모니터] 5대 축 저장 — S: stock_axis/{이름}_axis.json 원자 교체.
+            #   :rw 마운트는 그 폴더 하나뿐이다(docker-compose 주석 참조).
+            from collector import stock_monitor as _sm
+
+            try:
+                status, body = _sm.save_axes(payload)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"stock-axis save failed: {exc!r}")
+                return JSONResponse({"detail": "stock-axis save error"},
+                                    status_code=503)
+            return JSONResponse(body, status_code=status)
 
         @app.get("/wrap-performance")
         def wrap_performance():
@@ -1501,6 +1717,19 @@ class Collector:
             except Exception as exc:  # noqa: BLE001
                 _log(f"fund-series failed: {exc!r}")
                 return JSONResponse({"detail": "fund-series error"}, status_code=503)
+
+        # [누적 수익률 비교 · ↻] 소스 엑셀을 그 자리에서 다시 읽어 funds/*.json 을 다시
+        # 굽는다(S: build_funds 재실행). SMB xlsx 파싱이라 수 초 걸리는 느린 경로 —
+        # 버튼 요청에만 돈다. 갱신분은 다음 /fund-series 가 mtime 캐시로 집어 올린다.
+        @app.post("/fund-series/refresh")
+        def fund_series_refresh():
+            from collector import perf_generate as _pg
+            try:
+                return JSONResponse(_pg.refresh_fund_series())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"fund-series/refresh failed: {exc!r}")
+                return JSONResponse({"detail": "fund-series refresh error"},
+                                    status_code=503)
 
         @app.get("/health")
         def health():

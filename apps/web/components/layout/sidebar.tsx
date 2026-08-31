@@ -13,6 +13,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useSidebar } from "@/components/layout/sidebar-context";
 import { cn } from "@/lib/utils";
 
 // 5개 분류 체계 (시장 모니터링 / 뉴스 모니터링 / Quant / 기타 / 설정).
@@ -34,6 +35,9 @@ const navItems: NavItem[] = [
       { label: "WRAP", href: "/wrap" },
       { label: "LP 평가", href: "/lp-eval" },
       { label: "종목 모니터", href: "/stock-monitor" },
+      // 하위 페이지 `/ai-key-data/epoch` 는 2026-08-28 사용자 지시로 폐지 —
+      // Epoch AI·ADP·FOMC내재확률이 전부 메인 카드(탭)로 편입됐다.
+      { label: "AI Key Data", href: "/ai-key-data" },
     ],
   },
   {
@@ -86,9 +90,24 @@ const navItems: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const [openLabel, setOpenLabel] = useState<string | null>(null);
+  const { collapsed } = useSidebar();
 
   return (
-    <aside className="relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main via-ge-point to-ge-navy py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]">
+    // ★접기는 **음수 마진**으로 한다(2026-08-28). `-ml-[212px]` 면 레이아웃 상 폭이
+    //   0이 되어 본문이 그만큼 넓어지고, aside 자신은 화면 왼쪽 밖으로 밀려나
+    //   '슬라이드해서 접히는' 모양이 된다. 한 클래스로 두 효과가 같이 난다.
+    // ⚠️`w-0 + overflow-hidden` 으로 접으면 안 된다 — 이 aside 안에서 하위 메뉴가
+    //   `absolute left-full` 로 **바깥으로** 뜨는데 overflow-hidden 이 그걸 잘라
+    //   플라이아웃 메뉴가 통째로 안 보이게 된다.
+    // ⚠️`aria-hidden` 도 주지 않는다 — 접힌 상태에서도 링크가 탭 이동 대상이면
+    //   포커스가 화면 밖으로 새는데, 그건 접기 UX 와 별개 문제라 여기서 만들지 않는다.
+    <aside
+      className={cn(
+        "relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main via-ge-point to-ge-navy py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]",
+        "transition-[margin-left] duration-300 ease-in-out motion-reduce:transition-none",
+        collapsed && "-ml-[212px]",
+      )}
+    >
       {/* 브랜드 — 클릭 시 메인(/) 이동 */}
       <Link
         href="/"

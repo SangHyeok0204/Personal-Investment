@@ -2,15 +2,6 @@
   "checkIntervalMs": 30000,
   "servers": [
     {
-      "id": "192_168_199_120-4000-1776907079564",
-      "name": "LAN Server Monitor",
-      "host": "192.168.199.120",
-      "port": 4000,
-      "protocol": "http",
-      "description": "",
-      "group": "Developer_PT1"
-    },
-    {
       "id": "192_168_199_120-8765-1776907420711",
       "name": "종토방 모니터",
       "host": "192.168.199.120",

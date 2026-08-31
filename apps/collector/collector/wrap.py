@@ -722,6 +722,17 @@ class WrapCollector:
                     if (ret1 is not None and fxc is not None)
                     else None
                 )
+                # ② 구간(전일종가→현재가)의 환 반영 짝. ① 과 같은 식·같은 현금 예외를
+                # 쓰고 환등락만 fx_chg2(T-1→실시간)로 바꾼다.
+                # ★분류 트리의 '환율 ON' 이 이 값을 쓴다(2026-08-27) — 웹에서 환을 다시
+                #   곱하면 식이 두 곳으로 갈라지므로 서버가 계산해 내려보낸다.
+                #   Σ(비중 × 이 값) = return2_krw 임을 실측 확인(Δ≈5e-9).
+                fxc2 = 0.0 if (is_cash and currency == "KRW") else fx_chg2
+                rt_krw = (
+                    ((1.0 + rt / 100.0) * (1.0 + fxc2) - 1.0) * 100.0
+                    if (rt is not None and fxc2 is not None)
+                    else None
+                )
                 contrib = (w / 100.0 * ret1) if ret1 is not None else None
 
                 tw += w
@@ -753,6 +764,8 @@ class WrapCollector:
                         "contribution_pct": contrib,
                         # 전일종가 → 현재가.
                         "realtime_return_pct": rt,
+                        # 같은 구간에 환까지 반영 (분류 트리 '환율 ON' × 실시간).
+                        "realtime_return_krw_pct": rt_krw,
                         "matched": matched,
                         "tradeTime": info["tradeTime"] if info else None,
                         "cat1": cls.get("cat1") or "",

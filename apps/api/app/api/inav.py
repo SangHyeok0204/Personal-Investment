@@ -61,13 +61,15 @@ async def _proxy_collector(
     )
 
 
-async def _proxy_collector_post(path: str) -> Response:
+async def _proxy_collector_post(
+    path: str, timeout_s: float = COLLECTOR_TIMEOUT_S
+) -> Response:
     """POST 변형 — 작업 시작처럼 부수효과가 있는 호출용. 본문은 쓰지 않는다."""
     try:
-        async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
             upstream = await asyncio.wait_for(
                 client.post(f"{settings.COLLECTOR_URL}{path}"),
-                timeout=COLLECTOR_TIMEOUT_S,
+                timeout=timeout_s,
             )
     except (httpx.HTTPError, asyncio.TimeoutError):
         return JSONResponse(status_code=503, content={"detail": "collector unavailable"})
@@ -293,6 +295,12 @@ async def get_perf_report_file(
 async def get_fund_series(if_none_match: str | None = Header(default=None)) -> Response:
     """Proxy 표준 스키마 펀드 시계열(누적수익률% + 리밸 날짜). 펀드 N 개."""
     return await _proxy_collector("/fund-series", if_none_match)
+
+
+@router.post("/fund-series/refresh")
+async def post_fund_series_refresh() -> Response:
+    """소스 엑셀 재적재(S: build_funds 재실행) — 카드 ↻ 버튼 1회성 느린 경로."""
+    return await _proxy_collector_post("/fund-series/refresh", COLLECTOR_SLOW_TIMEOUT_S)
 
 
 # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────────────

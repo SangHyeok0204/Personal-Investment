@@ -196,11 +196,12 @@ def _run_ev(kind: str, scope: str, force: bool) -> dict:
 
 # ═══════════════════════════════════════════════════════════
 
-def _refresh_fund_series() -> dict:
+def refresh_fund_series() -> dict:
     """대시보드 [누적 수익률 비교] 그래프의 시계열(`funds/*.json`).
 
     `analyze_cli` 가 보고서를 만든 뒤 곁들여 부르던 것과 같다. 소스가 같은 엑셀이라 따로
-    스케줄할 이유가 없고, 1초짜리이며 claude 를 부르지 않는다.
+    스케줄할 이유가 없고, 1초짜리이며 claude 를 부르지 않는다. 카드의 ↻ 버튼
+    (`/fund-series/refresh`)도 이걸 그대로 부른다.
     """
     _engine()                       # sys.path 에 엔진 경로를 얹는다
     import build_funds
@@ -244,6 +245,6 @@ def generate(scope: str = "일간", force: bool = False) -> dict:
         # 하나라도 소스가 안 온 게 있으면 n8n 이 마지막 발화에서 이걸 보고 알린다.
         "sourceStale": any(r.get("sourceStale") for r in results),
         "results": results,
-        "fundSeries": _refresh_fund_series() if ran else {"status": "skip"},
+        "fundSeries": refresh_fund_series() if ran else {"status": "skip"},
         "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
