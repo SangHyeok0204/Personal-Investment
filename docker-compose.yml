@@ -195,6 +195,12 @@ services:
       #   따옴표가 필수다. 마운트 별칭(gpu_compute)은 그대로 둔다 — 컨테이너 안 이름이라
       #   바꾸면 collector·env 를 다 같이 고쳐야 하고 얻는 게 없다.
       - "/mnt/s/GE/raw/data/AI Key Data/input/raw:/srv/legacy/gpu_compute:ro"
+      # [국내상장 ETF] 분류별 자금·수익률 - 운용역이 매일 굽는 워크북 한 장
+      #   (국내상장ETF 모니터링.xlsm 의 value 시트) 만 읽는다. 같은 폴더의
+      #   daily_analysis/*.txt 는 Slack 용 상·하위 10개 발췌라 전수가 아니어서 안 본다.
+      # ★워크북은 매일 **덮어쓰기**라 과거가 없다. 그래서 collector 가 판독할 때마다
+      #   그날 스냅샷을 ./storage(=/srv/storage, :rw)의 sqlite 에 적재해 이력을 만든다.
+      - "/mnt/s/GE/_Team/03_모니터링/02_국내상장_ETF:/srv/legacy/etf_monitor:ro"
       # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
       - "/mnt/s/GE/_Team/07_회의자료:/srv/legacy/meeting:ro"
       # [뉴스 모니터링 · 텔레그램] 상류 Telegram_Bot(다른 PC 상주)이 굽는 집계 JSON.
@@ -208,6 +214,18 @@ services:
       # ⚠️2026-08-12 이전엔 collector 가 raw CSV 를 증분 tail 로 읽어 문장 유사도로
       # 직접 카드를 만들었다(그 방식은 폐기 — 서식이 같으면 남남을 묶었다).
       - "/mnt/s/GE/raw/data/텔레그램모니터:/srv/legacy/telegram:ro"
+      # [종목 모니터링 · 미국] 어닝모니터 마스터 원장. 상류(다른 PC 상주 daily-server)가
+      # ET 08:30·17:30 슬롯마다 Investing.com 크롤 → SEC 8-K → claude CLI 관전포인트까지
+      # 돌려 `보유종목정리.xlsx` 한 장에 UPSERT 한다. collector 는 그 파일만 읽는다
+      # (같은 폴더의 Backup/ 87장은 안 본다). Slack 알림도 계속 상류가 쏜다.
+      # ★계산이 왜 저쪽에 있나: 텔레그램·성과보고와 같다 — 이 컨테이너엔 claude 가 없다.
+      - "/mnt/s/GE/raw/data/어닝모니터/input/processed:/srv/legacy/earnings:ro"
+      # [종목 모니터링 · 미국] 이슈 모니터 — 같은 상류의 stock_issue_alert 산출물.
+      # KST 06:00 에 {YYYYMM}/{DD}/ 로 떨어지는 analysis_data.json(숫자) + 종목이슈분석.md
+      # (claude 가 쓴 분석 3줄·이슈 사유·근거 출처)를 collector 가 합쳐서 낸다.
+      # ⚠️필터를 통과한 종목이 없는 날은 폴더에 txt 한 줄만 남는다(닷새 연속도 있었다) —
+      #   그래서 '오늘 것'이 아니라 '내용이 있는 가장 최근 것'을 고른다.
+      - "/mnt/s/GE/raw/data/어닝모니터/output/results/stock_issue_alert:/srv/legacy/stock_issue:ro"
       # [매크로] 매크로모니터가 구운 output/macro_panels.json (FRED·BLS·CME 계산 결과).
       # 같은 폴더의 db/macro.db 는 CPI/PPI 세부품목까지 담아 300MB 라 읽지 않는다 —
       # 수치는 S: 쪽이 소유하고 collector 는 결과 JSON 만 본다(성과보고 JSON 과 같은 배선).

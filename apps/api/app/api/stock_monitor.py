@@ -76,6 +76,19 @@ async def post_stock_axis(payload: dict = Body(...)) -> Response:
     )
 
 
+@router.get("/market-signal")
+async def get_market_signal(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """[시장 시그널] AI 판단 급등락 — ETF 순매수 카드 자리(2026-08-31 교체).
+
+    1단 결정론 룰 → 2단 온톨로지 탐색 → 3단 뉴스 근거. 계산은 전부 collector.
+    ★뉴스 조회가 붙어 실측 5~7초다 → 기본 2초 예산이 아니라 SLOW 예산을 쓴다.
+    """
+    return await _proxy_collector("/market-signal", if_none_match,
+                                  COLLECTOR_SLOW_TIMEOUT_S)
+
+
 @router.get("/etf-flows")
 async def get_etf_flows(
     if_none_match: str | None = Header(default=None),

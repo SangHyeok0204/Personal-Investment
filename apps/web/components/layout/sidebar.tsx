@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Boxes,
+  CandlestickChart,
   ChevronRight,
   History,
   LayoutGrid,
@@ -16,7 +18,7 @@ import type { LucideIcon } from "lucide-react";
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { cn } from "@/lib/utils";
 
-// 5개 분류 체계 (시장 모니터링 / 뉴스 모니터링 / Quant / 기타 / 설정).
+// 분류 체계 (시장 / 상품 / 종목 / 뉴스 모니터링 · Quant · 성과 분석 · 기타 · 설정).
 // href 가 있는 항목만 실제 라우팅되고, 나머지는 아직 준비 중인 placeholder 다.
 type NavItem = {
   label: string;
@@ -35,9 +37,28 @@ const navItems: NavItem[] = [
       { label: "WRAP", href: "/wrap" },
       { label: "LP 평가", href: "/lp-eval" },
       { label: "종목 모니터", href: "/stock-monitor" },
+      { label: "국내상장 ETF", href: "/etf-class" },
       // 하위 페이지 `/ai-key-data/epoch` 는 2026-08-28 사용자 지시로 폐지 —
       // Epoch AI·ADP·FOMC내재확률이 전부 메인 카드(탭)로 편입됐다.
       { label: "AI Key Data", href: "/ai-key-data" },
+    ],
+  },
+  {
+    // 상품(펀드·ETF) 단위로 보는 자리 — 시장(지수)과 종목 사이의 층위다.
+    // 두 하위 모두 아직 화면이 없다. 원천은 이미 있다(펀드공시모니터 · ETF 순매수 lane).
+    label: "상품 모니터링",
+    icon: Boxes,
+    children: [{ label: "펀드공시" }, { label: "ETF 순매수/수익률" }],
+  },
+  {
+    // 개별 종목을 시장별로 보는 자리. 미국부터 연다(어닝 + 이슈).
+    // 한국·중국은 같은 배선(S: 가 굽고 대시보드는 읽는다)을 이어받을 자리만 잡아 뒀다.
+    label: "종목 모니터링",
+    icon: CandlestickChart,
+    children: [
+      { label: "미국", href: "/stock/us" },
+      { label: "한국" },
+      { label: "중국" },
     ],
   },
   {

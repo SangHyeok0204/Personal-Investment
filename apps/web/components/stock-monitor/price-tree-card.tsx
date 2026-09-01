@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, LineChart, Table2 } from "lucide-react";
 import {
   getPriceBoard,
   type PriceBoard,
@@ -36,6 +36,13 @@ const POLL_MS = 600_000;
 export type PriceSel =
   | { kind: "leaf"; key: string }
   | { kind: "group"; l1: string; l2: string; label: string };
+
+// 오른쪽 큰 칸이 무엇을 그리는가(사용자 지시 2026-09-01). 토글은 이 카드의 자산군 탭
+// 오른쪽에 둔다 — 고르는 곳과 보는 곳이 떨어져 있으면 눈이 왕복한다.
+//  · chart = 지금까지의 동작. 지수·묶음을 누르면 오른쪽에 그 시계열이 그려진다.
+//  · table = 회의자료 리포트의 성과표. 자산군 탭이 곧 표이고, 목록 클릭은 그 행을
+//            **물들이기만** 한다(표가 이미 전 시장을 보여 주므로 그릴 것이 없다).
+export type PriceView = "chart" | "table";
 
 function tone(v: number | null): string {
   if (v == null || !Number.isFinite(v) || v === 0) return "text-ink-muted";
@@ -102,6 +109,7 @@ function Node({
   path: string;
   active: PriceSel | null;
   isYield: boolean;
+  view: PriceView;
   onSelect: (sel: PriceSel) => void;
 }) {
   const path = `${rest.path}/${node.label}`;
@@ -110,6 +118,11 @@ function Node({
   // 자식이 전부 지수여야 "묶음"으로 고를 수 있다. DM·EM 처럼 자식이 또 노드면
   // 펼치기 전용 — 하위 묶음 중 어느 것을 그릴지 스스로 정할 수 없다.
   const leafOnly = node.children.every((c) => c.type === "leaf");
+  // ★표 모드에서는 **모든 노드**가 고를 수 있다(사용자 지시 2026-09-01). 차트에서
+  //   DM·EM 을 막았던 이유는 25개를 한 차트에 겹치면 스파게티가 되기 때문인데,
+  //   표에서는 고른다 = 물들인다라서 겹칠 것이 없다. DM 전체를 물들이는 게 오히려
+  //   이 모드의 주 용도다.
+  const selectable = leafOnly || rest.view === "table";
   const parts = path.split("/").filter(Boolean);
   const l1 = parts[0] ?? "";
   const l2 = parts.length > 1 ? parts[parts.length - 1] : "";
@@ -127,7 +140,7 @@ function Node({
           // ★고르는 첫 클릭은 **반드시 연다**. 그냥 toggle 로 두면 채권·원자재처럼
           //   기본 펼침(layer1)인 묶음은 첫 클릭에 접혀 버려 "열리면서"와 어긋난다.
           //   이미 고른 묶음을 다시 누를 때만 접기/펴기로 동작한다.
-          if (leafOnly) {
+          if (selectable) {
             if (!active) {
               if (!isOpen) onToggle(path);
               rest.onSelect({ kind: "group", l1, l2, label: node.label });
@@ -138,7 +151,13 @@ function Node({
             onToggle(path);
           }
         }}
-        title={leafOnly ? `${node.label} ${node.children.length}개 시장 한눈에 비교` : undefined}
+        title={
+          selectable
+            ? rest.view === "table"
+              ? `${node.label} ${node.children.length}개 시장 표에서 강조`
+              : `${node.label} ${node.children.length}개 시장 한눈에 비교`
+            : undefined
+        }
         className={cn(
           "flex w-full items-center gap-1 rounded py-[5px] pr-1.5 text-left transition-colors",
           active ? "bg-ge-blue-bg" : "hover:bg-canvas-soft",
@@ -176,6 +195,7 @@ function Node({
                 path={path}
                 active={rest.active}
                 isYield={rest.isYield}
+                view={rest.view}
                 onSelect={rest.onSelect}
               />
             ) : (
@@ -200,11 +220,15 @@ export function PriceTreeCard({
   onCat,
   selected,
   onSelect,
+  view,
+  onView,
 }: {
   cat: PriceCatKey;
   onCat: (c: PriceCatKey) => void;
   selected: PriceSel | null;
   onSelect: (sel: PriceSel) => void;
+  view: PriceView;
+  onView: (v: PriceView) => void;
 }) {
   const { data, isLoading, isError } = useQuery<PriceBoard>({
     queryKey: ["price-board", cat],
@@ -244,22 +268,54 @@ export function PriceTreeCard({
             </span>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-0.5">
-          {cats.map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              onClick={() => onCat(c.key)}
-              className={cn(
-                "rounded px-2 py-[3px] text-[12.5px] font-bold transition-colors",
-                cat === c.key
-                  ? "bg-white text-ge-header"
-                  : "bg-white/15 text-white/75 hover:bg-white/30",
-              )}
-            >
-              {c.label}
-            </button>
-          ))}
+        {/* 자산군 탭 + (차트/표) 토글. 탭은 5개라 좁은 1칸에서 두 줄로 접히므로
+            토글은 같은 줄이 아니라 **오른쪽 끝에 세로 가운데**로 붙인다(items-center)
+            — 탭이 한 줄이든 두 줄이든 토글 위치가 흔들리지 않는다. */}
+        <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-0.5">
+            {cats.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => onCat(c.key)}
+                className={cn(
+                  "rounded px-2 py-[3px] text-[12.5px] font-bold transition-colors",
+                  cat === c.key
+                    ? "bg-white text-ge-header"
+                    : "bg-white/15 text-white/75 hover:bg-white/30",
+                )}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+          {/* 아이콘 두 개짜리 세그먼트. 글자를 안 쓰는 이유는 폭이다 — 1칸 헤더에
+              '차트'·'표' 를 적으면 자산군 탭이 세 줄로 밀린다. */}
+          <div className="flex shrink-0 overflow-hidden rounded border border-white/25">
+            {(
+              [
+                { v: "chart" as const, Icon: LineChart, title: "차트 — 고른 지수·묶음의 시계열" },
+                { v: "table" as const, Icon: Table2, title: "표 — 자산군 전체 성과표" },
+              ]
+            ).map(({ v, Icon, title }) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => onView(v)}
+                title={title}
+                aria-label={title}
+                aria-pressed={view === v}
+                className={cn(
+                  "flex h-[24px] w-[28px] items-center justify-center transition-colors",
+                  view === v
+                    ? "bg-white text-ge-header"
+                    : "bg-white/10 text-white/70 hover:bg-white/25",
+                )}
+              >
+                <Icon className="h-[15px] w-[15px]" strokeWidth={2.4} />
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -285,6 +341,7 @@ export function PriceTreeCard({
                 path=""
                 active={selected}
                 isYield={isYield}
+                view={view}
                 onSelect={onSelect}
               />
             ) : (

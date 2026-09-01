@@ -1569,6 +1569,69 @@ export function getEtfFlows(): Promise<EtfFlows> {
   return request<EtfFlows>("/api/v1/stock-monitor/etf-flows");
 }
 
+// ── [시장 시그널] AI 판단 급등락 (ETF 순매수 카드 자리) ──────────────────────
+// 원천은 price_monitor.xlsx 하나. collector 가 3단으로 접는다:
+//   1단 결정론 룰(그 시장 자신의 분위수) → 2단 온톨로지 탐색(.ttl/rdflib) → 3단 뉴스.
+// ★`summary` 가 곧 사용자가 요구한 **15자 내외 요약**이다("암호화폐 전반 강세").
+//   LLM 을 부르지 않는다 — 판단은 1·2단이 끝냈고 문장도 거기서 나온다.
+// ★뉴스 근거가 확보된 카드가 앞으로 온다(news_supported). 근거가 없다고 버리지는
+//   않는다 — 뉴스가 늦게 붙는 사건이 많아서 버리면 카드가 자주 빈다.
+export interface MarketSignalArticle {
+  title: string;
+  link: string;
+  pub: string;
+  weight: number;
+}
+export interface MarketSignalCard {
+  asset_class: PriceCatKey;
+  asset_label: string;      // 주식 | 채권 | 원자재 | 환 | 비트코인
+  headline: string;
+  summary: string;          // 2단 가설 문장(정렬·뉴스 검색이 쓴다)
+  // ★카드 큰 글씨는 아래 3줄이다(사용자 지정 2026-09-01) — 수치 중심:
+  //     period   "26-08-31" 또는 "25-09-01 ~ 26-09-01"  (그 룰이 실제로 잰 구간)
+  //     line     "미국채 10Y 시장금리 4.75% 달성"
+  //     line_sub "29일 만의 돌파 · 1일째 지속"
+  period: string;
+  line: string;
+  line_sub: string;
+  hypothesis: string;       // BroadMove | Divergence | DriverLed | Transmission | ...
+  confidence: number;       // 0~1
+  severity: number;
+  evidence: string[];
+  markets: string[];
+  tickers: string[];
+  // 카드를 누르면 가운데 차트가 여기로 옮겨 간다. 좌표 정본은 collector price_board 분류.
+  // ★l2 는 **빈 문자열일 수 있다**(원자재·채권은 계층이 한 겹) — group 모드는 그래도 성립한다.
+  sel: {
+    cat: PriceCatKey;
+    kind: "leaf"; key: string;
+  } | {
+    cat: PriceCatKey;
+    kind: "group"; l1: string; l2: string; label: string;
+  } | null;
+  detail: string[];
+  repeat: boolean;          // 전일에도 떴던 건 — 순위가 내려가고 배지가 붙는다
+  news_supported: boolean;
+  news_score: number | null;
+  articles: MarketSignalArticle[];
+}
+export interface MarketSignal {
+  generated_at: string;
+  asof: string | null;
+  cards: MarketSignalCard[];
+  stats: {
+    markets?: number; signals?: number; hypotheses?: number;
+    collapsed?: number; news_checked?: number; news_supported?: number;
+    repeats?: number;
+  };
+  note?: string | null;
+  cached?: boolean;   // 이 응답이 그 시각의 캐시인가(매 정시 1회만 실제 계산)
+}
+
+export function getMarketSignal(): Promise<MarketSignal> {
+  return request<MarketSignal>("/api/v1/stock-monitor/market-signal");
+}
+
 // ── [종목 모니터] 수익률 모니터 ──────────────────────────────────────────────
 // 원천은 주간가격모니터 price_monitor.xlsx (S: 마운트) — collector price_returns.py
 // 가 계산까지 마친 값을 나른다(자산 목록 정본도 그쪽 ASSETS). unit="pct" 는 %수익률,
@@ -2161,6 +2224,11 @@ export interface PriceBoardRow {
   r3m: number | null;  // 롤링 91일 — 차트의 '롤링 3M' 과 같은 창
   r6m: number | null;  // 롤링 182일
   r1y: number | null;  // 롤링 365일
+  // ★3Y·5Y 는 성과표(표 모드) 전용이다 — 회의자료 리포트의 perf-table 과 같은 열을
+  //   갖기 위해 2026-09-01 에 붙였다. 우하단 요약 표는 여전히 1M~1Y 넷만 쓴다.
+  //   시트 시작(2021-01)보다 창이 길면 null 이다(IBIT 등 신규 상장 열).
+  r3y: number | null;  // 롤링 1,095일
+  r5y: number | null;  // 롤링 1,826일
 }
 
 // 좌측 목록의 계층 — 자산군(탭) → layer1 → layer2 → 실제 지수(leaf).
@@ -2287,4 +2355,217 @@ export function saveStockAxis(body: SaveStockAxisInput): Promise<{ ok: boolean }
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
   });
+}
+
+// ── [종목 모니터링 · 미국] 어닝 ─────────────────────────────────────────────
+// 원천은 S: 어닝모니터 daily-server 가 ET 08:30(BMO)·17:30(AMC) 슬롯마다 굽는 마스터
+// 원장 `보유종목정리.xlsx` 한 장이다. 크롤(Investing.com) · 8-K 구조화(SEC EDGAR) ·
+// 관전포인트/시장반응 생성(claude CLI) · Slack 알림까지 전부 그쪽 서버 소관이고,
+// collector 는 mtime 이 바뀐 판만 다시 읽어 넘긴다.
+//
+// ★예정과 결과가 **다른 필드 집합**인 것은 마스터가 티커당 한 행에 두 분기를 같이 담기
+//   때문이다 — 예정 행의 결과 열은 아직 지난 분기 값이라 싣지 않는다(collector 주석 참조).
+export interface EarningsWatchpoint {
+  point: string;
+  result?: string | null; // 결과 행에만. LLM 분석이 하루 늦게 붙어 null 일 수 있다
+}
+interface EarningsRowBase {
+  ticker: string;
+  name: string;
+  active: boolean; // 관리상태 = 활성(어느 펀드든 보유 중)
+  funds: string[]; // 보유 펀드 코드
+  highlight: boolean; // 주간 리포트 하이라이트 종목
+  session: "AMC" | "BMO" | null; // 장 마감 후 / 장 개시 전
+  marketCap: string | null; // "211.64B" — 이미 사람이 읽는 꼴
+  date: string | null; // YYYY-MM-DD (예정=예정일 / 결과=발표일)
+  updatedAt: string | null; // 상류가 그 행을 만진 시각
+}
+export interface EarningsUpcoming extends EarningsRowBase {
+  epsEstimate: number | null;
+  revenueEstimate: string | null;
+  watchpoints: EarningsWatchpoint[]; // 발표 전 관전포인트 (결과 없음)
+}
+export interface EarningsResult extends EarningsRowBase {
+  quarter: string | null; // "2026Q2"
+  epsEstimate: number | null;
+  epsActual: number | null;
+  revenueEstimate: string | null;
+  revenueActual: string | null;
+  consensus: "상회" | "부합" | "하회" | null;
+  keyMetric: string | null; // 그 종목의 핵심 지표 이름
+  keyMetricResult: string | null;
+  watchpoints: EarningsWatchpoint[]; // 관전포인트 ↔ 그 결과
+  reaction: string | null; // 기타 시장반응 한 문단
+}
+export interface EarningsPayload {
+  generatedAt: string | null; // 마스터 원장 mtime
+  readAt: string; // collector 가 읽은 시각
+  available: boolean; // 마스터를 읽을 수 있었는가
+  stale: boolean; // 크롤링 서버 heartbeat 가 48h 넘게 조용한가
+  heartbeat: string | null; // 메타 시트 daily_server_* 중 최신
+  heartbeatKey: string | null;
+  asOfET: string; // 예정/결과를 가른 기준일(ET)
+  windowDays: number; // 결과 목록 창
+  masterPath: string;
+  note: string | null; // 판독 실패 등 — 있으면 화면에 띄운다
+  upcoming: EarningsUpcoming[];
+  results: EarningsResult[];
+}
+export function getUsEarnings(): Promise<EarningsPayload> {
+  return request<EarningsPayload>("/api/v1/earnings/us");
+}
+
+/* ── [국내상장 ETF] 분류별 개인순매수·수익률 ──────────────────────────────────
+   collector 가 `국내상장ETF 모니터링.xlsm` value 시트를 읽어 만든 한 묶음.
+   축(구분/대분류/중분류/소분류/국가) 5개 × 기간 9개를 **전부** 담고 온다 —
+   화면이 축·기간을 바꿔도 재요청이 없고, 집계식이 서버 한 곳에만 있다.
+
+   ★기간 키는 두 갈래다. 누적(cum) 은 창 그대로(당일·1주·1개월·3개월·6개월),
+     구간(iv) 은 누적끼리 뺀 것(최근1주·1주~1개월·1~3개월·3~6개월). 네 창이 전부
+     오늘로 끝나 서로 포개지므로, 겹침을 걷어내지 않으면 같은 돈을 네 번 센다. */
+export type EtfPeriodKey = "d" | "1w" | "1m" | "3m" | "6m";
+export type EtfIvKey = "1w" | "1m" | "3m" | "6m";
+export type EtfAxisKey = "gubun" | "big" | "mid" | "small" | "country";
+
+export interface EtfPeriodSpec {
+  key: EtfPeriodKey;
+  label: string;
+  span: string | null;
+  start: string | null;
+  end: string | null;
+}
+export interface EtfIntervalSpec {
+  key: EtfIvKey;
+  label: string;
+  outer: string;
+  inner: string | null;
+  start: string | null;
+  end: string | null;
+}
+type ByPeriod = Record<EtfPeriodKey, number | null>;
+type ByIv = Record<EtfIvKey, number | null>;
+
+export interface EtfGroupRow {
+  key: string; // 조상 경로까지 붙인 고유키 ("시장&전략 / 전략형 / 커버드콜")
+  label: string; // 표시명 ("커버드콜")
+  path: string[]; // 조상 라벨
+  n: number;
+  mcap: number; // 억
+  amt: number; // 거래대금 억
+  net_cum: ByPeriod; // 개인순매수 누적(억)
+  net_iv: ByIv; // 개인순매수 구간(억)
+  ret_cum: ByPeriod; // 시총가중 수익률(소수)
+  ret_cum_eq: ByPeriod; // 단순평균 수익률(소수)
+  ret_iv: ByIv;
+  ret_iv_eq: ByIv;
+  ratio_cum: ByPeriod; // 순매수/시총 (%)
+  ratio_iv: ByIv;
+}
+export interface EtfRow {
+  code: string;
+  name: string;
+  country: string;
+  gubun: string;
+  big: string;
+  mid: string;
+  small: string;
+  mcap: number | null;
+  amt: number | null;
+  price: number | null;
+  interest: boolean;
+  net_cum: ByPeriod;
+  net_iv: ByIv;
+  ret_cum: ByPeriod;
+  ret_iv: ByIv;
+}
+export interface EtfClassPayload {
+  generated_at: string;
+  asof: string | null; // 워크북 기준일
+  source_modified: string | null;
+  note: string | null; // 원천 결측·판독 실패 — 있으면 화면이 띄운다
+  axes: { key: EtfAxisKey; label: string }[];
+  periods: EtfPeriodSpec[];
+  intervals: EtfIntervalSpec[];
+  windows: Record<string, { start: string | null; end: string | null }>;
+  groups: Record<EtfAxisKey, EtfGroupRow[]>;
+  etfs: EtfRow[];
+  totals: EtfGroupRow | null;
+  history_days: number; // 적재된 스냅샷 일수
+}
+export function getEtfClass(): Promise<EtfClassPayload> {
+  return request<EtfClassPayload>("/api/v1/etf-class");
+}
+
+export interface EtfHistorySeries {
+  key: string;
+  label: string;
+  net: (number | null)[]; // 그날 개인순매수(억)
+  cum: number[]; // 적재 시작일부터의 누적(억)
+  ret: (number | null)[]; // 시총가중 등락률(소수)
+  total: number;
+}
+export interface EtfHistoryPayload {
+  generated_at: string;
+  axis: EtfAxisKey;
+  dates: string[];
+  series: EtfHistorySeries[];
+  note: string | null;
+}
+export function getEtfClassHistory(
+  axis: EtfAxisKey,
+  days = 180,
+): Promise<EtfHistoryPayload> {
+  return request<EtfHistoryPayload>(
+    `/api/v1/etf-class/history?axis=${axis}&days=${days}`,
+  );
+}
+
+// ── [종목 모니터링 · 미국] 이슈 모니터 ──────────────────────────────────────
+// 같은 상류(어닝모니터)의 `stock_issue_alert` 가 KST 06:00 에 하루 한 번 굽는다:
+// Reddit 버즈 급등 종목을 시총 tier 별 임계로 걸러 주가를 붙이고, claude CLI 가 종목마다
+// 분석 3줄(핵심 이슈 / 구조적 영향 / 투자 시사점)·이슈 사유 태그·근거 출처를 만든다.
+//
+// ★★리포트는 **매일 나오지 않는다** — 필터를 통과한 종목이 없으면 그날은 아예 없다
+//   (2026-08-27~31 닷새 연속). 그래서 payload 는 '내용이 있는 가장 최근 리포트'(asOf·
+//   ageDays)와 '오늘 슬롯 상태'(todayStatus)를 **따로** 싣는다. 화면은 둘 다 밝혀야
+//   사용자가 며칠 전 것을 오늘 것으로 오해하지 않는다.
+export interface StockIssueAnalysis {
+  issue?: string; // 핵심 이슈 — 무슨 일이 있었나
+  structural?: string; // 구조적 영향 — 해자·구조에 무슨 뜻인가
+  implication?: string; // 투자 시사점
+}
+export interface StockIssueItem {
+  ticker: string;
+  name: string;
+  description: string | null; // 기업 한 줄 설명
+  marketCap: string | null; // "$97.8B"
+  priceChange: number | null; // 일일 수익률 %
+  monthlyChange: number | null; // 최근 1개월 수익률 %
+  mentionChange: number | null; // Reddit 언급 변화 %
+  sentiment: number | null; // -1 ~ +1
+  weekly: boolean; // 주간 버즈 기준인가(아니면 24h)
+  triggeredOn: string | null; // 촉발일 YYYY-MM-DD 또는 "미확인"
+  tags: string[]; // 이슈 사유 (실적 이슈 · 공급망 이슈 …)
+  sourceUrl: string | null; // 근거 출처 (죽은 링크는 상류가 비워서 준다)
+  analysis: StockIssueAnalysis;
+}
+export interface StockIssuePayload {
+  generatedAt: string | null; // 리포트 파일 mtime
+  readAt: string;
+  available: boolean; // 리포트 폴더를 읽을 수 있었는가
+  asOf: string | null; // 표시 중인 리포트 날짜
+  ageDays: number | null; // 오늘로부터 며칠 전
+  collectedAt: string | null; // 상류가 수집한 시각
+  today: string; // KST 오늘
+  todayStatus: "ready" | "empty" | "pending";
+  todayMessage: string | null; // empty 일 때 상류가 남긴 한 줄
+  target: string | null; // "Reddit 버즈 급등 + 주가 급변동"
+  filter: string | null; // 필터 기준 한 줄
+  lookbackDays: number;
+  reportDir: string;
+  note: string | null;
+  stocks: StockIssueItem[];
+}
+export function getUsStockIssues(): Promise<StockIssuePayload> {
+  return request<StockIssuePayload>("/api/v1/earnings/us/issues");
 }

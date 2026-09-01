@@ -26,3 +26,8 @@ storage/trigger/*.json
 
 # macOS
 .DS_Store
+
+# [시장 시그널] markets.ttl 은 build_graph.py 가 매일 굽는 **생성물**이다.
+# 런타임 기본 경로는 /app/.cache/market_signal/ (named volume)이고, 로컬 개발에서만
+# 패키지 옆에 떨어진다 — 어느 쪽이든 커밋하지 않는다(낡은 데이터가 이미지에 실린다).
+apps/collector/collector/market_signal/markets.ttl

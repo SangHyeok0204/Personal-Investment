@@ -212,11 +212,16 @@ def _change(cur: float, ref: float | None, is_yield: bool) -> float | None:
 # ★일수는 **달력 기준**이다. 거래일로 세려면 ffill 행을 걷어내야 하는데, 그 판정
 #   ("값이 직전과 같으면 휴일")이 금리처럼 자릿수 짧은 열에서 오탐한다. 시트가 주말을
 #   ffill 하므로 달력 창의 기준일은 항상 값이 있다 — 굳이 거래일로 셀 이유가 없다.
-ROLLING = [("r1m", "1M", 30), ("r3m", "3M", 91), ("r6m", "6M", 182), ("r1y", "1Y", 365)]
+# ★3Y·5Y 는 2026-09-01 신설 — 성과표(perf-table) 가 회의자료 리포트와 같은 열을
+#   갖기 위해서다. 요약 표(우하단 카드)는 여전히 1M~1Y 넷만 쓴다.
+#   ⚠️창이 데이터보다 길면 `_at_or_before` 가 None 을 낸다(시트 시작 2021-01) —
+#     IBIT 처럼 2024년에 상장한 열은 3Y·5Y 가 비고, 0% 로 우기지 않는다.
+ROLLING = [("r1m", "1M", 30), ("r3m", "3M", 91), ("r6m", "6M", 182), ("r1y", "1Y", 365),
+           ("r3y", "3Y", 1095), ("r5y", "5Y", 1826)]
 
 
 def compute_row(series: dict[date, float], upto: date, is_yield: bool) -> dict | None:
-    """한 시장의 Price·DtD·WtD·MtD·YtD + 롤링 1M·3M·6M·1Y. 값이 없으면 None."""
+    """한 시장의 Price·DtD·WtD·MtD·YtD + 롤링 1M·3M·6M·1Y·3Y·5Y. 값이 없으면 None."""
     a = _asof(series, upto)
     if a is None:
         return None

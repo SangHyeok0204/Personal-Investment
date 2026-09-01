@@ -4,9 +4,14 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getIndexStrip, type IndexStripItem, type PriceCatKey } from "@/lib/api";
 import { Topbar } from "@/components/layout/topbar";
-import { EtfFlowCard } from "@/components/stock-monitor/etf-flow-card";
-import { PriceTreeCard, type PriceSel } from "@/components/stock-monitor/price-tree-card";
+import { MarketSignalCard } from "@/components/stock-monitor/market-signal-card";
+import {
+  PriceTreeCard,
+  type PriceSel,
+  type PriceView,
+} from "@/components/stock-monitor/price-tree-card";
 import { PriceMetricChartCard } from "@/components/stock-monitor/price-metric-chart-card";
+import { PricePerfTableCard } from "@/components/stock-monitor/price-perf-table-card";
 import { PriceSummaryCard } from "@/components/stock-monitor/price-summary-card";
 import { EMDASH, moveColor } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
@@ -16,7 +21,8 @@ import { cn } from "@/lib/utils";
 // 화면 규격(사용자 지시 2026-08-28 전면 개편): 가로6×세로2 = 12등분.
 //   · 1번째 칸 위·아래 2칸   = 지표 리스트 (자산군 탭 + layer1/layer2 계층 트리)
 //   · 2~5번째 칸 위·아래 8칸 = 지표 추이 차트 (누적수익률 / 롤링 3M)
-//   · 상단 6번째 1칸         = ETF 순매수 모니터
+//                              ↔ 시장 성과표 (지표 리스트 헤더의 차트/표 토글로 교대)
+//   · 상단 6번째 1칸         = 시장 시그널 (2026-08-31 ETF 순매수에서 교체)
 //   · 아래 6번째 1칸         = 수익률 요약 표 (DtD~YtD + 롤링 1M·3M·6M·1Y)
 //
 // ★★2026-08-31 개편(사용자 지시): 달력 앵커 지표(DtD·WtD·MtD·YtD)의 **시계열을
@@ -90,6 +96,9 @@ export default function StockMonitorPage() {
   const [priceCat, setPriceCat] = useState<PriceCatKey>("equity");
   // 선택은 지수 하나(leaf) 또는 묶음(group) 둘 중 하나다 — 차트가 모드를 갈라 쓴다.
   const [priceSel, setPriceSel] = useState<PriceSel | null>(null);
+  // 가운데 4칸이 무엇을 그리는가(사용자 지시 2026-09-01). 토글은 지표 리스트 헤더에 있다.
+  //   chart = 고른 지수·묶음의 시계열 / table = 자산군 전체 성과표(회의자료 리포트 형태)
+  const [priceView, setPriceView] = useState<PriceView>("chart");
 
   // 지수 스트립 — 원천이 CHECK 에이전트의 INDEX_MONITOR.db 다.
   const { data: strip } = useQuery({
@@ -149,13 +158,35 @@ export default function StockMonitorPage() {
             }}
             selected={priceSel}
             onSelect={setPriceSel}
+            view={priceView}
+            onView={setPriceView}
           />
-          <PriceMetricChartCard sel={priceSel} cat={priceCat} />
+          {/* ★같은 칸을 두 카드가 번갈아 쓴다(둘 다 col-span-4 · row-span-2).
+              표 모드에서는 자산군 탭이 곧 표라서 지수를 안 골라도 화면이 차 있고,
+              목록 클릭은 그 행을 물들이는 역할만 한다. */}
+          {priceView === "chart" ? (
+            <PriceMetricChartCard sel={priceSel} cat={priceCat} />
+          ) : (
+            <PricePerfTableCard cat={priceCat} sel={priceSel} />
+          )}
 
-          {/* ETF 순매수 모니터 — 상단 6번째 1칸. 관심 ETF(주로 신규상장)의 개인 순매수.
-              원천은 CHECK 에이전트가 적재하는 ETF_FLOW_MONITOR.db — 적재 전에는 카드가
-              대기 문구를 띄운다. */}
-          <EtfFlowCard />
+          {/* 시장 시그널 — 상단 6번째 1칸. **ETF 순매수 모니터를 대체**(2026-08-31).
+              1단 결정론 룰(그 시장 자신의 분위수) → 2단 온톨로지 탐색(.ttl/rdflib)
+              → 3단 뉴스 근거. 문구는 2단이 만든다(LLM 안 부름).
+              ⚠️etf-flow-card.tsx 와 collector etf_flows.py·/etf-flows 는 남겨 뒀다 —
+                CHECK 호가 envelope 의 newEtfs 를 아직 그쪽이 소비하니 지우면 안 된다. */}
+          <MarketSignalCard
+            onSelect={(cat, sel) => {
+              // 카드를 누르면 가운데 차트를 그 자산으로 옮긴다(사용자 지시 2026-09-01).
+              // ★자산군 탭도 같이 옮겨야 왼쪽 목록이 그 시장을 품는다 — 탭이 어긋나면
+              //   차트만 바뀌고 목록에서는 선택 표시가 안 보인다.
+              setPriceCat(cat);
+              setPriceSel(sel);
+              // ★표 모드에 있어도 차트로 돌린다 — 시그널을 누르는 목적이 "정말
+              //   튀었는지 궤적으로 확인"이라, 표로 옮겨 주면 확인이 안 된다.
+              setPriceView("chart");
+            }}
+          />
 
           {/* 수익률 요약 표 — 아래 행 6번째 1칸('주목해야할 지수'가 있던 자리).
               차트에서 뺀 달력 앵커 지표(DtD~YtD)에 롤링 1M·3M·6M·1Y 를 더해 놓는다.

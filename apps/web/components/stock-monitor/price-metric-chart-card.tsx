@@ -94,14 +94,15 @@ function niceTicks(lo: number, hi: number, count: number): number[] {
 }
 
 // 값 표기 — 지수(100 기준)는 부호도 단위도 붙이지 않고, 변화율·bp 는 둘 다 붙인다.
-function fmtVal(v: number, suffix: string, signed: boolean): string {
-  return `${signed && v > 0 ? "+" : ""}${v.toFixed(1)}${suffix}`;
+function fmtVal(v: number, suffix: string, signed: boolean, decimals = 1): string {
+  return `${signed && v > 0 ? "+" : ""}${v.toFixed(decimals)}${suffix}`;
 }
 
 function Chart({
   lines,
   suffix,
   signed,
+  decimals,
   baseline,
   title,
   w,
@@ -110,7 +111,8 @@ function Chart({
   lines: Line[];
   suffix: string;
   signed: boolean;
-  baseline: number; // 기준선 — 지수 모드 100, 변화율·bp 모드 0
+  decimals: number;         // y축 눈금 소수 자릿수 — 금리(3.9~4.8)는 0자리면 다 "4"가 된다
+  baseline: number | null;  // 기준선 — 지수 100 / 변화율·bp 0 / **금리 수준은 없음**
   title: string;
   w: number;
   h: number;
@@ -126,8 +128,11 @@ function Chart({
     const vs = lines.flatMap((s) => s.points.map((p) => p[1]));
     // ★기준선을 y 범위에 **항상 포함**시킨다. 안 그러면 전 계열이 100 위에만 있을 때
     //   기준선이 화면 밖으로 밀려 "무엇 대비인지"가 사라진다.
-    const lo = Math.min(...vs, baseline);
-    const hi = Math.max(...vs, baseline);
+    // ★★금리 수준 모드는 기준선이 **없다**(baseline=null) — 커브를 겹쳐 그릴 때
+    //   계열마다 수준이 달라 공통 기준선이 성립하지 않는다. 0 을 억지로 넣으면
+    //   4.7% 짜리 선들이 화면 위쪽에 납작하게 눌린다.
+    const lo = baseline == null ? Math.min(...vs) : Math.min(...vs, baseline);
+    const hi = baseline == null ? Math.max(...vs) : Math.max(...vs, baseline);
     const pad = (hi - lo) * 0.06 || 1;
     const uniq = [...new Set(lines.flatMap((s) => s.points.map((p) => p[0])))].sort();
     return {
@@ -194,7 +199,7 @@ function Chart({
   };
 
   const hx = hoverX ? X(day(hoverX)) : 0;
-  const fmt = (v: number) => fmtVal(v, suffix, signed);
+  const fmt = (v: number) => fmtVal(v, suffix, signed, decimals);
 
   // 툴팁은 그 시점 값이 큰 순서로 — 계열이 11개면 순위 자체가 읽을 거리다.
   const hovered = hoverX
@@ -219,7 +224,7 @@ function Chart({
         {niceTicks(yLo, yHi, 4).map((v) => {
           const y = Y(v);
           if (y < PAD_T - 0.5 || y > py1 + 0.5) return null;
-          const isZero = Math.abs(v - baseline) < 1e-9;
+          const isZero = baseline != null && Math.abs(v - baseline) < 1e-9;
           return (
             <g key={v}>
               <line
@@ -238,22 +243,25 @@ function Chart({
                 textAnchor="end"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
-                {v.toFixed(0)}
+                {v.toFixed(decimals)}
               </text>
             </g>
           );
         })}
 
         {/* 기준선 — 눈금이 우연히 이 값을 비껴가도 항상 그린다. 지수 모드에서 100 은
-            "구간 시작"이라 이 선이 없으면 위/아래를 판단할 기준 자체가 사라진다. */}
-        <line
-          x1={PAD_L}
-          y1={Y(baseline)}
-          x2={PAD_L + plotW}
-          y2={Y(baseline)}
-          stroke={ZERO}
-          strokeWidth={1.4}
-        />
+            "구간 시작"이라 이 선이 없으면 위/아래를 판단할 기준 자체가 사라진다.
+            ★금리 수준 모드(baseline=null)에는 기준선이 없다. */}
+        {baseline != null ? (
+          <line
+            x1={PAD_L}
+            y1={Y(baseline)}
+            x2={PAD_L + plotW}
+            y2={Y(baseline)}
+            stroke={ZERO}
+            strokeWidth={1.4}
+          />
+        ) : null}
 
         {lines.map((s) => (
           <path
@@ -376,14 +384,17 @@ export function PriceMetricChartCard({
   const data = q.data;
 
   // ★★누적수익률은 **구간 시작 = 100 인 지수**로 그린다(사용자 지시 2026-08-31).
-  //   0 기준 %가 아니라 100 기준이라 부호(+)도 단위(%)도 붙이지 않는다 — "134.2" 는
-  //   구간 시작 대비 1.342배라는 뜻이다.
-  // ★단, **금리는 지수화하지 않는다.** 금리를 금리로 나눈 비율은 의미가 없어(4%→5%
-  //   를 125 라 부를 수 없다) 채권 탭의 누적수익률은 0 기준 **누적 bp 변화**로 남는다.
-  //   롤링 3M 도 변화량이라 언제나 0 기준이다.
-  const indexed = mode === "cum" && !data?.is_yield;
-  const suffix = indexed ? "" : data?.is_yield ? "bp" : "%";
-  const baseline = indexed ? 100 : 0;
+  //   0 기준 %가 아니라 100 기준이라 부호(+)도 단위(%)도 붙이지 않는다.
+  // ★★★**채권은 절대 수준을 그린다**(사용자 지시 2026-09-01). 금리는 수준 자체가
+  //   의미다 — "10Y 4.75%" 는 곧바로 읽히지만 "연초 대비 +58bp" 는 한 번 더 환산해야
+  //   한다. 커브(3M·2Y·5Y·10Y·30Y)를 겹쳐 그릴 때도 절대 수준이라야 **커브 모양**이
+  //   보인다. 리베이스하면 다섯 선이 전부 한 점에서 출발해 커브가 사라진다.
+  //   → 기준선도 없다(계열마다 수준이 달라 공통 기준이 성립하지 않는다).
+  const isY = !!data?.is_yield;
+  const levelMode = mode === "cum" && isY;            // 금리 수준(절대)
+  const indexed = mode === "cum" && !isY;             // 가격 지수(100 기준)
+  const suffix = levelMode ? "%" : indexed ? "" : isY ? "bp" : "%";
+  const baseline = levelMode ? null : indexed ? 100 : 0;
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -453,19 +464,28 @@ export function PriceMetricChartCard({
         continue;
       }
 
+      // ★금리는 **원값 그대로**(절대 수준). 가격은 구간 시작 = 100 지수.
+      if (isYield) {
+        out.push({ ...s, points: win });
+        continue;
+      }
       const base = win[0][1];
-      // 금리는 비율이 아니라 **누적 bp 변화**다 — 4%→5% 를 125 라 하면 안 된다.
-      if (!isYield && base === 0) continue;
+      if (base === 0) continue;
       out.push({
         ...s,
-        points: win.map(([d, v]) => [
-          d,
-          isYield ? (v - base) * 100 : (v / base) * 100,
-        ]) as [string, number][],
+        points: win.map(([d, v]) => [d, (v / base) * 100]) as [string, number][],
       });
     }
     return out;
   }, [raw, view, mode, data?.is_yield]);
+
+  // y축·툴팁 소수 자릿수. 금리(3.9~4.8)는 0자리면 눈금이 전부 "4"로 뭉갠다.
+  const decimals = useMemo(() => {
+    const vs = lines.flatMap((l) => l.points.map((p) => p[1]));
+    if (vs.length === 0) return 1;
+    const span = Math.max(...vs) - Math.min(...vs);
+    return span >= 50 ? 0 : span >= 5 ? 1 : 2;
+  }, [lines]);
 
   // 범례 숫자는 **그린 선의** 마지막 값이어야 한다 — 리베이스된 값과 다른 숫자를
   // 띄우면 범례가 차트를 배신한다. 그래서 원본이 아니라 lines 에서 찾는다.
@@ -486,12 +506,14 @@ export function PriceMetricChartCard({
       return next;
     });
 
-  const modeLabel = MODES.find((m) => m.key === mode)?.label ?? "";
-  const modeNote =
-    mode === "cum"
-      ? indexed
-        ? " (구간 시작 = 100)"
-        : ` (구간 시작 대비 누적, ${suffix})`
+  // ★채권에서 'cum' 은 누적수익률이 아니라 **금리 수준**이다 — 이름을 바꿔 준다.
+  const modeLabel = levelMode
+    ? "금리 수준"
+    : (MODES.find((m) => m.key === mode)?.label ?? "");
+  const modeNote = levelMode
+    ? " (절대 %)"
+    : mode === "cum"
+      ? " (구간 시작 = 100)"
       : ` (${suffix})`;
   const subtitle = `${data?.sub ? `${data.sub} · ` : ""}${modeLabel}${modeNote} · 일간`;
 
@@ -562,7 +584,8 @@ export function PriceMetricChartCard({
           <Chart
             lines={lines}
             suffix={suffix}
-            signed={!indexed}
+            signed={!indexed && !levelMode}
+            decimals={decimals}
             baseline={baseline}
             title={`${data?.label ?? ""} 지표 추이`}
             w={box.w}
@@ -598,7 +621,7 @@ export function PriceMetricChartCard({
                   className="inline-block h-[3px] w-4 shrink-0 translate-y-[-2px] rounded-full"
                   style={{ background: on ? MODE_COLOR[m.key] : "#c7cdd6" }}
                 />
-                {m.label}
+                {m.key === "cum" && isY ? "금리 수준" : m.label}
               </button>
             );
           })}
@@ -636,7 +659,7 @@ export function PriceMetricChartCard({
                   <span className="font-bold text-ink">{s.label}</span>
                   {last != null ? (
                     <span className="tabular-nums text-ink-muted">
-                      {fmtVal(last, suffix, !indexed)}
+                      {fmtVal(last, suffix, !indexed && !levelMode, decimals)}
                     </span>
                   ) : null}
                 </button>

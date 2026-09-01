@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     ai_key_data,
     ai_usage,
+    earnings,
+    etf_class,
     imports,
     inav,
     internal,
@@ -62,3 +64,5 @@ app.include_router(lan.router)
 app.include_router(stock_discussion.router)
 app.include_router(stock_monitor.router)
 app.include_router(ai_key_data.router)
+app.include_router(earnings.router)
+app.include_router(etf_class.router)

@@ -16,3 +16,7 @@ fastapi>=0.115
 uvicorn>=0.30
 # WRAP 데이장 가격 타깃 판단(batch.build_price_targets 지연 import) — 구시스템 핀과 동일.
 pandas_market_calendars>=5.4.0
+# [시장 시그널] 2단 온톨로지 탐색 — knowledge.ttl/markets.ttl 을 rdflib 로 판독.
+# 순수 파이썬이라 빌드 의존성 없음. SPARQL 은 안 쓰고 트리플 순회만 한다
+# (질의가 단순한데 SPARQL 파서를 태우면 요청당 수십 ms 가 그냥 나간다).
+rdflib>=7.1

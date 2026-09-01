@@ -1,0 +1,339 @@
+@prefix mk:   <http://ge.local/market#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+#############################################################################
+# [시장 시그널] 2단 온톨로지 — 손으로 쓴 암묵지 층 (2026-08-31 신설)
+#
+# ★★이 파일에는 **코드에서 나올 수 없는 것만** 넣는다.
+#   · 시장 인스턴스(87개)·자산군·상관계수는 build_graph.py 가 price_board 와 가격
+#     데이터에서 **생성**한다 → markets.ttl (이 파일과 별도, 매일 갱신).
+#   · 여기 있는 것은 "구리가 오르면 호주가 오른다" 같은 **운용역의 암묵지**다.
+#     데이터로 상관은 잴 수 있어도 '왜'는 못 재고, 방향(누가 누구를 미는가)도 못 잰다.
+#
+# ★상관계수를 여기 박지 않는 이유: 상관은 체제에 따라 변한다. 매일 다시 재서
+#   markets.ttl 로 굽고, 이 파일은 **변하지 않는 인과 구조**만 갖는다.
+#############################################################################
+
+# ── 스키마 ──────────────────────────────────────────────────────────────────
+mk:Market      a owl:Class ; rdfs:label "시장" .
+mk:AssetClass  a owl:Class ; rdfs:label "자산군" .
+mk:Region      a owl:Class ; rdfs:label "지역" .
+mk:PeerGroup   a owl:Class ; rdfs:label "동조 묶음" ;
+    rdfs:comment "같이 움직이는 게 정상인 묶음. 한 놈만 튀면 그게 특이점이다." .
+mk:Driver      a owl:Class ; rdfs:label "매크로 동인" .
+mk:Correlation a owl:Class ; rdfs:label "상관 관측" ;
+    rdfs:comment "reified — 값·창·기준일을 함께 들고 있어야 '언제 기준 상관인지'가 남는다." .
+mk:Hypothesis  a owl:Class ; rdfs:label "해석 가설" .
+
+mk:inAssetClass a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:AssetClass .
+mk:inRegion     a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:Region .
+mk:memberOf     a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:PeerGroup .
+mk:drivenBy     a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:Driver .
+mk:proxyFor     a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:Driver ;
+    rdfs:comment "그 동인을 가장 잘 대변하는 시장. 동인이 움직였는지 볼 때 이걸 본다." .
+
+mk:transmitsTo  a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:Market ;
+    rdfs:comment "A 가 움직이면 B 가 따라 움직인다(방향 있음). 상관과 달리 **인과 방향**을 담는다." .
+mk:invertedWith a owl:ObjectProperty ; rdfs:domain mk:Market ; rdfs:range mk:Market ;
+    rdfs:comment "구조적 역상관. 같은 방향으로 함께 움직이면 그 자체가 이상 신호다." .
+mk:invertedWith a owl:SymmetricProperty .
+
+mk:ticker   a owl:DatatypeProperty ; rdfs:domain mk:Market ; rdfs:range xsd:string .
+mk:lagDays  a owl:DatatypeProperty ; rdfs:domain mk:transmitsTo ; rdfs:range xsd:integer .
+mk:template a owl:DatatypeProperty ; rdfs:domain mk:Hypothesis ; rdfs:range xsd:string .
+
+# ── 자산군 ──────────────────────────────────────────────────────────────────
+mk:Equity a mk:AssetClass ; rdfs:label "주식" .
+mk:Bond   a mk:AssetClass ; rdfs:label "채권" .
+mk:Commodity a mk:AssetClass ; rdfs:label "원자재" .
+mk:FX     a mk:AssetClass ; rdfs:label "환" .
+mk:Crypto a mk:AssetClass ; rdfs:label "비트코인" .
+
+# ── 매크로 동인 ─────────────────────────────────────────────────────────────
+# ★proxyFor 가 붙은 시장이 그 동인의 '체온계'다. 가설을 세울 때 동인이 실제로
+#   움직였는지는 이 프록시 시장의 지표를 보고 판정한다(동인 자체는 값이 없다).
+mk:USRates      a mk:Driver ; rdfs:label "미국 금리" .
+mk:Dollar       a mk:Driver ; rdfs:label "달러" .
+mk:RiskAppetite a mk:Driver ; rdfs:label "위험선호" .
+mk:ChinaGrowth  a mk:Driver ; rdfs:label "중국 경기" .
+mk:OilSupply    a mk:Driver ; rdfs:label "유가" .
+mk:SemiCycle    a mk:Driver ; rdfs:label "반도체 사이클" .
+mk:JapanPolicy  a mk:Driver ; rdfs:label "일본 통화정책" .
+mk:Inflation    a mk:Driver ; rdfs:label "인플레이션" .
+
+# ── 동조 묶음 (같이 움직여야 정상) ──────────────────────────────────────────
+# ★1단이 한 묶음에서 여러 건을 뱉으면 2단은 그걸 **하나의 광범위 이동**으로 접는다.
+#   오늘(8/31) 실측: 크립토 5개(BTC·ETH·SOL·크립토지수·비트코인ETF)가 동시 발화했다.
+#   5건이 아니라 "암호화폐 전반 강세" 1건이 맞다.
+mk:PG_USLarge   a mk:PeerGroup ; rdfs:label "미국 대형주" .
+mk:PG_USBroad   a mk:PeerGroup ; rdfs:label "미국 전체" .
+mk:PG_Europe    a mk:PeerGroup ; rdfs:label "유럽" .
+mk:PG_Korea     a mk:PeerGroup ; rdfs:label "한국" .
+mk:PG_ChinaOns  a mk:PeerGroup ; rdfs:label "중국 본토" .
+mk:PG_HongKong  a mk:PeerGroup ; rdfs:label "홍콩" .
+mk:PG_Japan     a mk:PeerGroup ; rdfs:label "일본" .
+mk:PG_Crypto    a mk:PeerGroup ; rdfs:label "암호화폐" .
+mk:PG_Precious  a mk:PeerGroup ; rdfs:label "귀금속" .
+mk:PG_BaseMetal a mk:PeerGroup ; rdfs:label "산업금속" .
+mk:PG_Energy    a mk:PeerGroup ; rdfs:label "에너지" .
+mk:PG_USTsy     a mk:PeerGroup ; rdfs:label "미국채" .
+mk:PG_KTB       a mk:PeerGroup ; rdfs:label "국고채" .
+mk:PG_JGB       a mk:PeerGroup ; rdfs:label "일본국채" .
+mk:PG_CGB       a mk:PeerGroup ; rdfs:label "중국국채" .
+mk:PG_KRWPair   a mk:PeerGroup ; rdfs:label "원화 환율" .
+
+#############################################################################
+# 시장별 암묵지
+#   ticker 는 price_board 의 블룸버그 티커와 **정확히** 같아야 한다 —
+#   build_graph.py 가 이 값으로 markets.ttl 의 인스턴스와 접합한다.
+#############################################################################
+
+# ── 미국 주식 ───────────────────────────────────────────────────────────────
+mk:SPX  mk:ticker "SPX Index"  ; mk:memberOf mk:PG_USLarge, mk:PG_USBroad ;
+        mk:drivenBy mk:USRates, mk:RiskAppetite ; mk:proxyFor mk:RiskAppetite .
+mk:CCMP mk:ticker "CCMP Index" ; mk:memberOf mk:PG_USLarge, mk:PG_USBroad ;
+        mk:drivenBy mk:USRates, mk:SemiCycle .
+mk:NDX  mk:ticker "NDX Index"  ; mk:memberOf mk:PG_USLarge, mk:PG_USBroad ;
+        mk:drivenBy mk:USRates, mk:SemiCycle ;
+        rdfs:comment "장기 성장주 비중이 커 할인율(장기금리)에 가장 민감하다." .
+mk:INDU mk:ticker "INDU Index" ; mk:memberOf mk:PG_USLarge, mk:PG_USBroad .
+mk:RTY  mk:ticker "RTY Index"  ; mk:memberOf mk:PG_USBroad ;
+        mk:drivenBy mk:USRates, mk:RiskAppetite ;
+        rdfs:comment "소형주는 부채 만기가 짧아 단기금리·신용여건에 대형주보다 민감하다." .
+mk:SOX  mk:ticker "SOX Index"  ; mk:memberOf mk:PG_USBroad ;
+        mk:drivenBy mk:SemiCycle ; mk:proxyFor mk:SemiCycle .
+
+# ── 유럽 ────────────────────────────────────────────────────────────────────
+mk:SXXP mk:ticker "SXXP Index" ; mk:memberOf mk:PG_Europe .
+mk:SX5E mk:ticker "SX5E Index" ; mk:memberOf mk:PG_Europe .
+mk:MXEU mk:ticker "MXEU Index" ; mk:memberOf mk:PG_Europe .
+mk:UKX  mk:ticker "UKX Index"  ; mk:memberOf mk:PG_Europe ;
+        mk:drivenBy mk:OilSupply ;
+        rdfs:comment "에너지·소재 비중이 커 유럽 내에서 유가에 가장 민감하다." .
+mk:DAX  mk:ticker "DAX Index"  ; mk:memberOf mk:PG_Europe ;
+        mk:drivenBy mk:ChinaGrowth ;
+        rdfs:comment "수출 제조업 비중이 커 중국 수요에 민감하다." .
+mk:CAC  mk:ticker "CAC Index"  ; mk:memberOf mk:PG_Europe .
+mk:SMI  mk:ticker "SMI Index"  ; mk:memberOf mk:PG_Europe ;
+        rdfs:comment "제약·필수소비 비중이 커 유럽 내 방어주 성격. 위험회피 때 상대적으로 버틴다." .
+mk:AEX  mk:ticker "AEX Index"  ; mk:memberOf mk:PG_Europe ; mk:drivenBy mk:SemiCycle ;
+        rdfs:comment "ASML 비중이 압도적이라 반도체 사이클을 따라간다." .
+mk:OMX  mk:ticker "OMX Index"  ; mk:memberOf mk:PG_Europe .
+mk:FTSEMIB mk:ticker "FTSEMIB Index" ; mk:memberOf mk:PG_Europe ;
+        rdfs:comment "은행 비중이 커 역내 금리 스프레드에 민감하다." .
+mk:IBEX mk:ticker "IBEX Index" ; mk:memberOf mk:PG_Europe .
+
+# ── 일본·아시아 선진 ────────────────────────────────────────────────────────
+mk:NKY  mk:ticker "NKY Index"  ; mk:memberOf mk:PG_Japan ; mk:drivenBy mk:JapanPolicy ;
+        rdfs:comment "엔 약세가 수출 이익을 밀어 올려 **엔/달러와 같은 방향**으로 움직이는 구간이 길다." .
+mk:TPX  mk:ticker "TPX Index"  ; mk:memberOf mk:PG_Japan ; mk:drivenBy mk:JapanPolicy .
+mk:STI  mk:ticker "STI Index"  ; mk:memberOf mk:PG_Japan .
+mk:SPTSX mk:ticker "SPTSX Index" ; mk:drivenBy mk:OilSupply ;
+        rdfs:comment "에너지·소재 비중이 커 유가·구리를 따라간다." .
+mk:AS51 mk:ticker "AS51 Index" ; mk:drivenBy mk:ChinaGrowth ;
+        rdfs:comment "철광석 수출국이라 중국 건설 수요의 대리 지표가 된다." .
+
+# ── 한국 ────────────────────────────────────────────────────────────────────
+mk:KOSPI    mk:ticker "KOSPI Index"    ; mk:memberOf mk:PG_Korea ; mk:drivenBy mk:SemiCycle .
+mk:KOSPI200 mk:ticker "KOSPI2 Index"   ; mk:memberOf mk:PG_Korea ; mk:drivenBy mk:SemiCycle .
+mk:KOSDAQ   mk:ticker "KOSDAQ Index"   ; mk:memberOf mk:PG_Korea ; mk:drivenBy mk:RiskAppetite .
+mk:KOSDAQ150 mk:ticker "KOSDQ150 Index" ; mk:memberOf mk:PG_Korea ; mk:drivenBy mk:RiskAppetite .
+mk:KRX300   mk:ticker "KRX300 Index"   ; mk:memberOf mk:PG_Korea .
+
+# ── 중국·홍콩 ───────────────────────────────────────────────────────────────
+mk:SHSZ300 mk:ticker "SHSZ300 Index" ; mk:memberOf mk:PG_ChinaOns ;
+        mk:drivenBy mk:ChinaGrowth ; mk:proxyFor mk:ChinaGrowth .
+mk:SHCOMP  mk:ticker "SHCOMP Index"  ; mk:memberOf mk:PG_ChinaOns ; mk:drivenBy mk:ChinaGrowth .
+mk:STAR50  mk:ticker "STAR50 Index"  ; mk:memberOf mk:PG_ChinaOns ; mk:drivenBy mk:RiskAppetite .
+mk:SZ399006 mk:ticker "SZ399006 Index" ; mk:memberOf mk:PG_ChinaOns ; mk:drivenBy mk:RiskAppetite .
+mk:HSI    mk:ticker "HSI Index"    ; mk:memberOf mk:PG_HongKong ; mk:drivenBy mk:ChinaGrowth, mk:USRates ;
+        rdfs:comment "★페그(HKD-USD) 때문에 홍콩은 **미국 금리를 그대로 수입**한다. 본토와 달리 중국 경기와 미국 금리를 동시에 탄다." .
+mk:HSCEI  mk:ticker "HSCEI Index"  ; mk:memberOf mk:PG_HongKong ; mk:drivenBy mk:ChinaGrowth .
+mk:HSTECH mk:ticker "HSTECH Index" ; mk:memberOf mk:PG_HongKong ; mk:drivenBy mk:RiskAppetite, mk:USRates .
+
+# ── 기타 신흥 ───────────────────────────────────────────────────────────────
+mk:TWSE  mk:ticker "TWSE Index"  ; mk:drivenBy mk:SemiCycle .
+mk:NIFTY mk:ticker "NIFTY Index" ; mk:drivenBy mk:OilSupply ;
+        rdfs:comment "원유 순수입국이라 유가 급등이 경상수지·물가를 통해 악재로 전이된다(부호 반대)." .
+mk:VNINDEX mk:ticker "VNINDEX Index" .
+mk:JCI   mk:ticker "JCI Index"   ; mk:drivenBy mk:ChinaGrowth .
+mk:SASEIDX mk:ticker "SASEIDX Index" ; mk:drivenBy mk:OilSupply .
+mk:IBOV  mk:ticker "IBOV Index"  ; mk:drivenBy mk:ChinaGrowth, mk:Dollar ;
+        rdfs:comment "자원 수출 + 고금리 통화라 달러 강세에 이중으로 눌린다." .
+mk:MEXBOL mk:ticker "MEXBOL Index" ; mk:drivenBy mk:Dollar .
+
+# ── 벤치마크 ────────────────────────────────────────────────────────────────
+mk:MXWD mk:ticker "MXWD Index" ; rdfs:comment "전세계. 이게 같이 움직였으면 '그 시장 고유 재료'가 아니다." .
+mk:MXWO mk:ticker "MXWO Index" .
+mk:MXEF mk:ticker "MXEF Index" ; mk:drivenBy mk:Dollar .
+
+# ── 채권 ────────────────────────────────────────────────────────────────────
+mk:GB3  mk:ticker "GB3 Govt"  ; mk:memberOf mk:PG_USTsy ; mk:proxyFor mk:USRates .
+mk:GT2  mk:ticker "GT2 Govt"  ; mk:memberOf mk:PG_USTsy ;
+        rdfs:comment "★2년물은 **정책금리 기대**를 담는다. 여기가 튀면 연준 관련 재료일 확률이 높다." .
+mk:GT5  mk:ticker "GT5 Govt"  ; mk:memberOf mk:PG_USTsy .
+mk:GT10 mk:ticker "GT10 Govt" ; mk:memberOf mk:PG_USTsy ; mk:proxyFor mk:USRates ;
+        rdfs:comment "★10년물은 성장·인플레 기대와 텀프리미엄이 섞인다. 주식 할인율의 기준." .
+mk:GT30 mk:ticker "GT30 Govt" ; mk:memberOf mk:PG_USTsy ;
+        rdfs:comment "★30년물 단독 급등은 **재정·수급**(발행 부담) 신호인 경우가 많다 — 성장 기대와 분리해서 읽어야 한다." .
+mk:KTB2  mk:ticker "GTKRW2Y Govt"  ; mk:memberOf mk:PG_KTB .
+mk:KTB3  mk:ticker "GTKRW3Y Govt"  ; mk:memberOf mk:PG_KTB .
+mk:KTB5  mk:ticker "GTKRW5Y Govt"  ; mk:memberOf mk:PG_KTB .
+mk:KTB10 mk:ticker "GTKRW10Y Govt" ; mk:memberOf mk:PG_KTB .
+mk:JGB2  mk:ticker "GTJPY2Y Govt"  ; mk:memberOf mk:PG_JGB ; mk:drivenBy mk:JapanPolicy .
+mk:JGB5  mk:ticker "GTJPY5Y Govt"  ; mk:memberOf mk:PG_JGB ; mk:drivenBy mk:JapanPolicy .
+mk:JGB10 mk:ticker "GTJPY10Y Govt" ; mk:memberOf mk:PG_JGB ; mk:drivenBy mk:JapanPolicy ;
+        mk:proxyFor mk:JapanPolicy ;
+        rdfs:comment "★YCC 유산으로 정책 변화가 여기서 먼저 튄다. 일본 금리 급등은 **엔 캐리 청산**을 통해 전세계 위험자산으로 전이될 수 있다." .
+mk:JGB30 mk:ticker "GTJPY30Y Govt" ; mk:memberOf mk:PG_JGB ; mk:drivenBy mk:JapanPolicy .
+mk:CGB2  mk:ticker "GTCNY2Y Govt"  ; mk:memberOf mk:PG_CGB ; mk:drivenBy mk:ChinaGrowth .
+mk:CGB5  mk:ticker "GTCNY5Y Govt"  ; mk:memberOf mk:PG_CGB ; mk:drivenBy mk:ChinaGrowth .
+mk:CGB10 mk:ticker "GTCNY10Y Govt" ; mk:memberOf mk:PG_CGB ; mk:drivenBy mk:ChinaGrowth ;
+        rdfs:comment "★중국 금리 **하락**은 완화가 아니라 성장 실망(디플레 우려)의 신호인 구간이 길다 — 미국채와 해석이 반대다." .
+mk:CGB30 mk:ticker "GTCNY30Y Govt" ; mk:memberOf mk:PG_CGB ; mk:drivenBy mk:ChinaGrowth .
+
+# ── 원자재 ──────────────────────────────────────────────────────────────────
+mk:CL1 mk:ticker "CL1 COMB Comdty" ; mk:memberOf mk:PG_Energy ; mk:proxyFor mk:OilSupply .
+mk:CO1 mk:ticker "CO1 COMB Comdty" ; mk:memberOf mk:PG_Energy ; mk:drivenBy mk:OilSupply .
+mk:NG1 mk:ticker "NG1 COMB Comdty" ; mk:memberOf mk:PG_Energy ;
+        rdfs:comment "천연가스는 **날씨·지역 수급**이 지배해 다른 에너지와 따로 논다. 유가와 갈라져도 이상이 아니다." .
+mk:URA mk:ticker "U-U CN Equity" ;
+        rdfs:comment "우라늄은 원전 정책·공급 계약이 지배해 매크로 동조가 약하다." .
+mk:XAU mk:ticker "XAU Curncy" ; mk:memberOf mk:PG_Precious ;
+        mk:drivenBy mk:Dollar, mk:USRates, mk:Inflation ; mk:proxyFor mk:Inflation ;
+        rdfs:comment "★금은 실질금리(명목−기대인플레)의 역함수로 움직인다. 명목금리만 보고 판단하면 틀린다." .
+mk:XAG mk:ticker "XAG Curncy" ; mk:memberOf mk:PG_Precious, mk:PG_BaseMetal ;
+        rdfs:comment "은은 귀금속이자 산업금속이다 — 금을 따라가다가도 경기 국면에서 구리 쪽으로 붙는다." .
+mk:XPT mk:ticker "XPT Curncy" ; mk:memberOf mk:PG_Precious .
+mk:XPD mk:ticker "XPD Curncy" ; mk:memberOf mk:PG_Precious .
+mk:LMCADS mk:ticker "LMCADS03 Comdty" ; mk:memberOf mk:PG_BaseMetal ;
+        mk:drivenBy mk:ChinaGrowth ; mk:proxyFor mk:ChinaGrowth ;
+        rdfs:comment "'닥터 코퍼' — 세계 제조업 경기의 대리 지표." .
+mk:LMAHDS mk:ticker "LMAHDS03 Comdty" ; mk:memberOf mk:PG_BaseMetal ; mk:drivenBy mk:ChinaGrowth .
+mk:LMNIDS mk:ticker "LMNIDS03 Comdty" ; mk:memberOf mk:PG_BaseMetal .
+mk:LMZSDS mk:ticker "LMZSDS03 Comdty" ; mk:memberOf mk:PG_BaseMetal ; mk:drivenBy mk:ChinaGrowth .
+mk:SCO1 mk:ticker "SCO1 Comdty" ; mk:memberOf mk:PG_BaseMetal ; mk:drivenBy mk:ChinaGrowth ;
+        rdfs:comment "철광석은 중국 **건설/부동산**에 특히 붙는다 — 구리보다 좁은 신호다." .
+mk:LITH mk:ticker "L4CNVTTG SMMC Index" ;
+        rdfs:comment "탄산리튬은 전기차 수요·중국 공급이 지배한다. 매크로보다 산업 재료." .
+mk:BCOM mk:ticker "BCOM Index" ; mk:drivenBy mk:Inflation .
+
+# ── 환 ──────────────────────────────────────────────────────────────────────
+mk:DXY mk:ticker "DXY Curncy" ; mk:proxyFor mk:Dollar ;
+        rdfs:comment "★DXY 는 5년 반 동안 주간 |5%| 가 0건이다 — 고정 % 임계가 통하지 않는 대표 사례." .
+mk:USDKRW mk:ticker "USDKRW BGN Curncy" ; mk:memberOf mk:PG_KRWPair ; mk:drivenBy mk:Dollar ;
+        rdfs:comment "★원화 약세(USDKRW 상승)는 외국인 수급을 통해 한국 주식에 부담으로 전이된다." .
+mk:EURKRW mk:ticker "EURKRW BGN Curncy" ; mk:memberOf mk:PG_KRWPair .
+mk:JPYKRW mk:ticker "JPYKRW BGN Curncy" ; mk:memberOf mk:PG_KRWPair .
+mk:USDJPY mk:ticker "USDJPY BGN Curncy" ; mk:drivenBy mk:JapanPolicy, mk:USRates ;
+        rdfs:comment "★미일 금리차가 지배한다. 급락(엔 강세)은 **캐리 청산** 신호로 위험자산 전반에 파급된다." .
+
+# ── 암호화폐 ────────────────────────────────────────────────────────────────
+mk:BTC  mk:ticker "XBTUSD BGN Curncy" ; mk:memberOf mk:PG_Crypto ;
+        mk:drivenBy mk:RiskAppetite ; mk:proxyFor mk:RiskAppetite .
+mk:ETH  mk:ticker "XETUSD BGN Curncy" ; mk:memberOf mk:PG_Crypto ; mk:drivenBy mk:RiskAppetite .
+mk:SOL  mk:ticker "XSOUSD BGN Curncy" ; mk:memberOf mk:PG_Crypto ; mk:drivenBy mk:RiskAppetite .
+mk:XRP  mk:ticker "XRPUSD BGN Curncy" ; mk:memberOf mk:PG_Crypto ; mk:drivenBy mk:RiskAppetite .
+mk:BGCI mk:ticker "BGCI Index" ; mk:memberOf mk:PG_Crypto .
+mk:IBIT mk:ticker "IBIT US Equity" ; mk:memberOf mk:PG_Crypto ;
+        rdfs:comment "현물 ETF — BTC 와 거의 같은 것이다. 둘이 같이 걸리면 **한 건**으로 접어야 한다." .
+
+#############################################################################
+# 전이 경로 (방향 있음) — "A 가 움직였으면 B 도 움직였어야 한다"
+#
+# ★★2026-08-31 6회차: **손으로 쓴 이 목록을 2년치 실측으로 검증하고 고쳤다.**
+#   검증 방법 = 동시상관(같이 움직이나) + 시차상관 비대칭(누가 먼저인가).
+#   `transmitsTo` 는 graph.py 에서 "상류가 같은 기간에 움직였나"로 쓰이므로
+#   **동시상관이 1차 근거**이고, 시차 비대칭은 방향(누가 상류인가)을 정한다.
+#
+#   ── 강하게 확증된 것 ──
+#     SOX → 대만 가권   시차 +0.54 vs −0.01  ← 이 목록에서 가장 강한 전이.
+#                        미국 반도체 종가를 아시아가 다음 날 받는 구조 그대로다.
+#     SOX → KOSPI/200  시차 +0.39 vs −0.08
+#     USDKRW → KOSPI   시차 −0.25 vs −0.03  (역방향 = 원화 약세가 부담. 주석대로다)
+#     DXY → MSCI EM    시차 −0.22 vs +0.02  (역방향)
+#     구리 → 호주        시차 +0.20 vs +0.04
+#     BTC → IBIT/BGCI  동시 +0.90/+0.83
+#
+#   ── ★삭제한 것 (근거 없음) ──
+#     철광석 → 호주      동시 +0.03 · 시차 무신호 → 관계 자체가 안 보인다
+#     WTI → 캐나다 TSX   동시 −0.05 · 시차 무신호
+#     WTI → 사우디/FTSE  동시 **−0.13/−0.14** · 시차는 오히려 반대 방향.
+#                        "산유국이라 유가를 따라간다"는 내 가정이 이 기간엔 틀렸다.
+#                        ⚠️3회차 카드 "사우디 TASI: WTI 발 전이" 는 이 잘못된 간선
+#                          위에 세워진 것이었다.
+#     GT10 → 항셍테크    동시 −0.01 · 시차 반대 방향
+#
+#   ── ★뒤집은 것 ──
+#     JGB10 → USDJPY  →  **USDJPY → JGB10**
+#       실측 A→B −0.00 vs B→A **+0.22**. 엔이 금리를 끌지, 금리가 엔을 끌지 않는다.
+#
+#   ── 남겨 둔 것(동시상관이 근거) ──
+#     구리 → IBOV(+0.23) · DAX(+0.39) · DXY → 멕시코(−0.24)/브라질(−0.25) :
+#       시차 비대칭은 없지만 **같이 움직이는 건 분명하다**. transmitsTo 의 실제 용도가
+#       "상류가 같이 움직였나" 이므로 유지한다(방향 주장만 약하다).
+#     CSI300 → HSCEI/HSI : 동시 +0.51/+0.52 로 강하다. 다만 시차는 −0.19 로 **역부호**라
+#       "본토가 홍콩을 민다"는 단순한 그림은 아니다(자금 이동 성격).
+#############################################################################
+mk:SOX    mk:transmitsTo mk:TWSE, mk:KOSPI, mk:KOSPI200 .
+mk:GT10   mk:transmitsTo mk:NDX, mk:XAU .
+mk:GT2    mk:transmitsTo mk:RTY .
+mk:LMCADS mk:transmitsTo mk:AS51, mk:IBOV, mk:DAX .
+mk:SHSZ300 mk:transmitsTo mk:HSCEI, mk:HSI .
+mk:USDKRW mk:transmitsTo mk:KOSPI, mk:KOSPI200 .
+mk:USDJPY mk:transmitsTo mk:NKY, mk:TPX, mk:JGB10 .
+mk:JGB10  mk:transmitsTo mk:NKY .
+mk:DXY    mk:transmitsTo mk:MXEF, mk:IBOV, mk:MEXBOL .
+mk:BTC    mk:transmitsTo mk:IBIT, mk:BGCI .
+
+#############################################################################
+# 구조적 역상관 — 같은 방향으로 함께 움직이면 그 자체가 이상 신호다
+#   ★"평소 반대인 둘이 같이 갔다"는 건 개별 급등락보다 정보량이 크다.
+#     예: 달러와 금이 동시에 오르면 통상 리스크오프(현금+안전자산 동시 수요)다.
+#############################################################################
+# ★2026-08-31 6회차 실측 검증(2년, 일간):
+#     DXY ↔ 금        r=−0.40  유지
+#     DXY ↔ MSCI EM   r=−0.16  유지(약함)
+#     금  ↔ 미국채 10Y  r=−0.17  유지
+#     USDJPY ↔ JPYKRW r=−0.54  유지(사실상 기계적 역수)
+#     ★DXY ↔ BTC      r=**−0.05** → **삭제**. 이 기간엔 역상관이 아니다.
+#       "달러 약세 = 위험자산 강세"는 그럴듯하지만 데이터가 지지하지 않는다.
+#       InversionBreak 는 우선순위 5(최상)라, 근거 없는 쌍을 두면 **가장 센 가설이
+#       가장 약한 근거 위에** 서게 된다.
+mk:DXY  mk:invertedWith mk:XAU, mk:MXEF .
+mk:GT10 mk:invertedWith mk:XAU .
+mk:USDJPY mk:invertedWith mk:JPYKRW .
+
+#############################################################################
+# 해석 가설 템플릿 — 2단(graph.py)이 탐색 결과를 이 문장 틀에 꽂는다
+#   ★카드 문구는 **15자 내외**여야 한다(사용자 규격). 그래서 template 이 짧다.
+#   ★우선순위(priority)가 높은 가설이 먼저 채택된다 — 여러 개가 동시에 성립할 때
+#     "고유 재료"보다 "역상관 붕괴"가 정보량이 크기 때문이다.
+#############################################################################
+mk:H_InversionBreak a mk:Hypothesis ; rdfs:label "역상관 붕괴" ;
+    mk:template "{a}·{b} 동반 {dir}" ;
+    rdfs:comment "평소 반대로 가던 둘이 같은 방향. 리스크오프 또는 체제 전환 의심." ;
+    mk:priority 5 .
+mk:H_DriverLed a mk:Hypothesis ; rdfs:label "동인 주도" ;
+    mk:template "{driver} 영향" ;
+    rdfs:comment "그 시장의 동인 프록시가 같은 날 같은 방향으로 움직였다." ;
+    mk:priority 4 .
+mk:H_BroadMove a mk:Hypothesis ; rdfs:label "묶음 전반" ;
+    mk:template "{group} 전반 {dir}" ;
+    rdfs:comment "동조 묶음의 과반이 같이 움직였다 — 개별 재료가 아니다." ;
+    mk:priority 3 .
+mk:H_Transmission a mk:Hypothesis ; rdfs:label "전이" ;
+    mk:template "{src} 발 전이" ;
+    rdfs:comment "상류 시장이 먼저 움직였고 이 시장이 따라갔다." ;
+    mk:priority 3 .
+mk:H_Idiosyncratic a mk:Hypothesis ; rdfs:label "고유 재료" ;
+    mk:template "{m} 단독 {dir}" ;
+    rdfs:comment "묶음도 동인도 안 움직였다 — 그 시장만의 재료다. 뉴스 검색 가치가 가장 높다." ;
+    mk:priority 2 .
+mk:H_Divergence a mk:Hypothesis ; rdfs:label "묶음 내 역행" ;
+    mk:template "{group} 내 역행" ;
+    rdfs:comment "같은 묶음인데 부호가 갈렸다." ;
+    mk:priority 4 .

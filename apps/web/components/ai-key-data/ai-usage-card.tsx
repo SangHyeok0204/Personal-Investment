@@ -73,6 +73,10 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
   const { zoomed, toggle, zoomCls } = useCardZoom();
   const [tab, setTab] = useState<Tab>("openrouter");
   const [showRaw, setShowRaw] = useState(false);
+  // ★2026-09-01 사용자 지시 — OpenRouter 토큰 탭의 **기본은 전체 합계**다.
+  //   `showRaw` 를 같이 쓰면 npm 탭의 "raw 보기" 기본값까지 뒤집힌다(뜻이 다른 토글이다).
+  //   그래서 이 탭 전용 상태로 분리한다.
+  const [orTotal, setOrTotal] = useState(true);
 
   const orQ = useQuery<OpenRouterTokenUsage>({
     queryKey: ["ai-token-usage"],
@@ -119,8 +123,9 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
     // ★★2026-08-31 사용자 지시 — **모델별로 분리해서 그린다.** 서버가 이미 최근 창(30일)
     //   상위 10개 모델의 시계열(`models[].points`)을 주고 있었는데 화면이 총합만 그리고
     //   있었다. 총합 한 줄로는 "어느 모델이 끌어올렸는지"가 안 보인다.
-    // ⚠️총합(605일)과 모델별(30일)은 **구간이 다르다**. 같은 축에 겹치면 총합만 보이므로
-    //   토글로 갈라 둔다(`showRaw` 를 이 탭에서는 '총합 보기'로 쓴다).
+    // ⚠️총합(605일)과 벤더별(전 구간)은 계열 수가 크게 달라 같이 그리면 총합이 묻힌다.
+    //   토글(`orTotal`)로 갈라 둔다. **기본은 전체 합계**(2026-09-01 사용자 지시) —
+    //   먼저 "전체가 얼마나 늘었나"를 보고, 필요할 때 벤더별로 쪼개 본다.
     // ⚠️`points` 의 null 은 "그날 top-50 밖"이지 0이 아니다 — 차트가 선을 끊는다.
     if (d?.vendor_series?.length) {
       plotted = d.vendor_series.map((v) => ({
@@ -141,7 +146,7 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
           points: d.totals.daily_ma7,
         },
       ];
-      if (showRaw) plotted = raw;
+      if (orTotal) plotted = raw;
     }
     badges = (d?.vendors ?? [])
       .slice()
@@ -150,7 +155,7 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
       .map((v) => ({ key: v.key, label: v.name, value: fmtCompact(v.tokens) }));
     // ★★전수가 아니다(top-50 + other) — "점유율" 대신 실측 필드를 그대로 노출한다.
     if (d)
-      footnote = showRaw
+      footnote = orTotal
         ? `${d.coverage} · other ${d.other_share_pct.toFixed(1)}% · 전체 합계 ${d.totals.daily.length}일`
         : `벤더별 ${d.vendor_series?.length ?? 0}개 · 전 구간 · ${d.coverage} · 활성 모델 ${d.active_models_30d}개`;
   } else if (tab === "npm") {
@@ -293,7 +298,7 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
   // ★모델별(openrouter 기본)은 계열이 10개라 팔레트를 순환시킨다. raw/보정 토글이 걸린
   //   경우에만 "주역=파랑, 보조=옅은 회색" 규칙을 적용한다.
   colors =
-    tab === "openrouter" && !showRaw
+    tab === "openrouter" && !orTotal
       ? MODEL_PALETTE
       : tab !== "vscode"
         ? plotted.map((s) =>
@@ -336,11 +341,13 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
         {tab !== "vscode" && raw.length > 0 ? (
           <button
             type="button"
-            onClick={() => setShowRaw((v) => !v)}
+            onClick={() =>
+              tab === "openrouter" ? setOrTotal((v) => !v) : setShowRaw((v) => !v)
+            }
             className="shrink-0 rounded bg-white/15 px-1.5 py-0.5 text-[12px] font-bold text-white/85 transition-colors hover:bg-white/30"
           >
             {tab === "openrouter"
-              ? showRaw
+              ? orTotal
                 ? "벤더별 보기"
                 : "전체 합계 보기"
               : showRaw
@@ -426,7 +433,7 @@ export function AiUsageCard({ colSpan = 2 }: { colSpan?: number }) {
             /* 모델별은 10계열이라 헤더 가로 범례에 다 안 들어간다 — 차트 안에 그린다. */
             /* rect 범례도 같은 이유로 확대했을 때만(사용자 지시). 축소 상태에선
                반투명 판이 차트를 가리기만 한다. */
-            legend={zoomed && tab === "openrouter" && !showRaw}
+            legend={zoomed && tab === "openrouter" && !orTotal}
           />
         ) : null}
       </div>

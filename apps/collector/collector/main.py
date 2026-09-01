@@ -105,6 +105,18 @@ LP_EVAL_EXPORT_MIN = 16 * 60 + 30   # 16:30 KST
 # 풀링 시각을 지나는 순간 서야 해서, 파일이 그대로여도 이 주기로 다시 판정한다.
 TELEGRAM_NEWS_REFRESH_S = 120.0
 
+# [종목 모니터링 · 미국] 어닝 — 어닝모니터 마스터 원장 재판독 주기.
+# 평시 한 사이클은 stat 한 번(SMB 왕복 1회)이고, 무거운 xlsx 파싱은 mtime 이 바뀐
+# 판에서만 돈다. 미장 발표는 KST 새벽·저녁에 몰려 장중엔 바뀔 일이 없지만, 같은
+# 배선을 한국·중국 탭이 이어받을 것이라 주기는 처음부터 분 아래로 잡는다.
+EARNINGS_REFRESH_S = 30.0
+
+# [종목 모니터링 · 미국] 이슈 모니터 — stock_issue_alert 리포트 재판독 주기.
+# 상류는 KST 06:00 하루 한 번이라 어닝만큼 자주 볼 이유가 없다. 그래도 분 단위로 보는 건
+# '오늘 리포트가 몇 시에 뜨는지'가 들쭉날쭉해서다(06:07 ~ 07:43 실측). 한 사이클은
+# isfile 몇 번이고, 파싱은 파일이 바뀐 판에서만 돈다.
+STOCK_ISSUE_REFRESH_S = 120.0
+
 # KIS realtime WebSocket lane.
 WS_ROTATION_S = 30.0          # legacy --rotation-seconds default (when >40 targets)
 WS_RECONNECT_S = 5.0          # wait before re-establishing a dropped WS session
@@ -1158,6 +1170,52 @@ class Collector:
             if await self._sleep_or_stop(TELEGRAM_NEWS_REFRESH_S):
                 return
 
+    async def _earnings_loop(self) -> None:
+        """[종목 모니터링 · 미국] 어닝모니터 마스터 원장(보유종목정리.xlsx) 판독.
+
+        telegram-news 와 같은 꼴 — SMB 왕복이라 executor 로 내보내고, 기동 직후 1회를
+        먼저 돌려 화면이 첫 폴링에서 바로 채워지게 한다.
+        """
+        from collector import earnings_monitor as _em
+
+        earnings = _em.instance()
+        if not earnings.available():
+            # ★마운트가 없어도 **payload 는 한 장 만들어 두고** 루프만 접는다.
+            #   여기서 그냥 return 하면 serve() 가 None 을 내고 엔드포인트가 503 이 되는데,
+            #   화면에는 그게 "collector 에 못 닿았습니다"로 뜬다 — 컨테이너는 멀쩡하고
+            #   마운트 한 줄이 빠진 것뿐인데 엉뚱한 데를 보게 된다(컴퓨팅 지수 카드에서
+            #   실제로 그렇게 오진했다, 2026-08-27). 빈 payload + note 가 사실을 말한다.
+            _log(f"earnings: {_em.MASTER_PATH} 마운트 없음 — 루프 미가동")
+            earnings.refresh()
+            return
+        loop = asyncio.get_running_loop()
+        while not self.stop_event.is_set():
+            try:
+                await loop.run_in_executor(None, earnings.refresh)
+            except Exception as exc:  # noqa: BLE001 - 한 사이클 실패는 직전 판 유지
+                _log(f"earnings refresh failed: {exc!r}")
+            if await self._sleep_or_stop(EARNINGS_REFRESH_S):
+                return
+
+    async def _stock_issue_loop(self) -> None:
+        """[종목 모니터링 · 미국] stock_issue_alert 일간 이슈 리포트 판독."""
+        from collector import stock_issue as _si
+
+        issues = _si.instance()
+        if not issues.available():
+            # 어닝 루프와 같은 이유로 payload 는 한 장 만들어 둔다(503 은 오진을 부른다).
+            _log(f"stock-issue: {_si.ROOT} 마운트 없음 — 루프 미가동")
+            issues.refresh()
+            return
+        loop = asyncio.get_running_loop()
+        while not self.stop_event.is_set():
+            try:
+                await loop.run_in_executor(None, issues.refresh)
+            except Exception as exc:  # noqa: BLE001 - 한 사이클 실패는 직전 판 유지
+                _log(f"stock-issue refresh failed: {exc!r}")
+            if await self._sleep_or_stop(STOCK_ISSUE_REFRESH_S):
+                return
+
     # ── FastAPI / uvicorn ──────────────────────────────────────────────
     def _build_app(self) -> FastAPI:
         app = FastAPI(title="ETF iNAV collector", docs_url=None, redoc_url=None)
@@ -1271,6 +1329,20 @@ class Collector:
             except Exception as exc:  # noqa: BLE001
                 _log(f"etf-flows failed: {exc!r}")
                 return JSONResponse({"detail": "etf-flows error"}, status_code=503)
+
+        @app.get("/market-signal")
+        def market_signal():
+            # [시장 시그널] 1단 결정론 룰 → 2단 온톨로지(.ttl/rdflib) → 3단 뉴스.
+            #   ETF 순매수 카드를 대체한다(2026-08-31). 카드 문구는 2단이 만드는
+            #   summary("암호화폐 전반 강세")가 그대로 15자 요약이다 — LLM 안 부른다.
+            #   ★뉴스(Google RSS)까지 포함해 실측 5~7초. 화면 폴링은 10분이라 무해.
+            from collector.market_signal import pipeline as _ms
+
+            try:
+                return JSONResponse(_ms.build_market_signal())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"market-signal failed: {exc!r}")
+                return JSONResponse({"detail": "market-signal error"}, status_code=503)
 
         @app.get("/price-returns")
         def price_returns():
@@ -1622,6 +1694,36 @@ class Collector:
                 return Response(status_code=304, headers={"ETag": etag})
             return JSONResponse(payload, headers={"ETag": etag})
 
+        # ── [종목 모니터링 · 미국] 어닝 ───────────────────────────────────
+        # S: 어닝모니터 daily-server 가 ET 08:30/17:30 슬롯마다 굽는 마스터 원장에서
+        # 예정·결과 두 목록을 만들어 낸다. 계산·크롤·LLM 은 전부 그쪽 소관이고
+        # 여기는 읽기만 한다(telegram-news 와 같은 배선).
+        @app.get("/earnings")
+        def earnings(request: Request):
+            from collector import earnings_monitor as _em
+
+            payload, etag = _em.instance().serve()
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers={"ETag": etag})
+            return JSONResponse(payload, headers={"ETag": etag})
+
+        # ── [종목 모니터링 · 미국] 이슈 모니터 ────────────────────────────
+        # stock_issue_alert 가 KST 06:00 에 굽는 일간 리포트(analysis_data.json +
+        # 종목이슈분석.md)를 합쳐 낸다. 리포트가 없는 날이 이어지므로 '내용이 있는
+        # 가장 최근 것'을 내고 오늘 상태는 todayStatus 로 따로 알린다.
+        @app.get("/stock-issue")
+        def stock_issue(request: Request):
+            from collector import stock_issue as _si
+
+            payload, etag = _si.instance().serve()
+            if payload is None:
+                return JSONResponse({"detail": "not ready"}, status_code=503)
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers={"ETag": etag})
+            return JSONResponse(payload, headers={"ETag": etag})
+
         # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────
         # S:\GE\Wonjae\07_회의자료\정기미팅 (:ro) 의 성과보고 JSON 을 요일 규칙
         # (월=위클리 / 화~금=데일리)에 맞춰 골라 서빙. 오늘 작성분이 없으면 pending.
@@ -1722,6 +1824,31 @@ class Collector:
 
         # [누적 수익률 비교] S: 의 build_funds.py 가 만든 표준 시계열 JSON. 펀드가 몇 개로
         # 늘어나든 이 엔드포인트는 그대로다 — 엑셀 레이아웃 편차는 전부 S: 에서 흡수한다.
+        # [국내상장 ETF] 분류별 개인순매수·수익률 - 국내상장ETF 모니터링.xlsm value 시트.
+        #   축(구분/대분류/중분류/소분류/국가) 5개와 기간 9개를 **한 묶음에** 다 실어 보낸다.
+        #   집계식이 서버 한 곳에만 있게 하려는 것 - 화면이 축을 바꿔도 재요청이 없다.
+        #   판독할 때마다 그날 스냅샷을 sqlite 에 적재한다(기준일 멱등, read-through).
+        @app.get("/etf-class")
+        def etf_class():
+            from collector import etf_class as _ec
+
+            try:
+                return JSONResponse(_ec.build_snapshot())
+            except Exception as exc:  # noqa: BLE001
+                _log(f"etf-class failed: {exc!r}")
+                return JSONResponse({"detail": "etf-class error"}, status_code=503)
+
+        @app.get("/etf-class/history")
+        def etf_class_history(axis: str = "mid", days: int = 180):
+            # 일별 시계열. 워크북에 과거가 없어 적재를 시작한 날부터 자란다.
+            from collector import etf_class as _ec
+
+            try:
+                return JSONResponse(_ec.build_history(axis, days))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"etf-class/history failed: {exc!r}")
+                return JSONResponse({"detail": "etf-class history error"}, status_code=503)
+
         @app.get("/fund-series")
         def fund_series():
             from collector import fund_series as _fs
@@ -1799,6 +1926,8 @@ class Collector:
             asyncio.create_task(self._lp_eval_loop()),
             asyncio.create_task(self._lp_eval_daily_loop()),
             asyncio.create_task(self._telegram_news_loop()),
+            asyncio.create_task(self._earnings_loop()),
+            asyncio.create_task(self._stock_issue_loop()),
             asyncio.create_task(self._serve_api()),
         ]
         _log(f"loops started (api on {API_HOST}:{API_PORT})")

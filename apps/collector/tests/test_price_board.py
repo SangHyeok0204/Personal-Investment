@@ -217,3 +217,36 @@ def test_empty_input():
     out = pb.build_payload({}, "equity")
     assert out["rows"] == [] and out["series"] == [] and out["asof"] is None
     assert out["tree"] == []
+
+
+# ── 성과표(표 모드) 가 딛고 서 있는 두 가지 ─────────────────────────────────
+# 회의자료 리포트의 `table.perf-table` 을 대시보드로 옮기면서 생긴 요구사항이다.
+# 화면 쪽(price-perf-table-card.tsx)은 이 둘을 **가정하고** 그린다.
+
+def test_long_rolling_windows_exist_and_are_none_when_history_is_short():
+    # 성과표는 3Y·5Y 열을 갖는다(리포트와 같은 열 구성). 창이 데이터보다 길면
+    # 0% 로 우기지 않고 None 이어야 한다 — IBIT 처럼 2024년 상장 열이 실제로 그렇다.
+    s = _s([(date(2021, 1, 2) + timedelta(days=i), 100.0 + i * 0.1) for i in range(2069)])
+    r = pb.compute_row(s, date(2026, 9, 1), is_yield=False)
+    cur = r["price"]
+    ref3 = 100.0 + (date(2026, 9, 1) - timedelta(days=1095) - date(2021, 1, 2)).days * 0.1
+    assert r["r3y"] == pytest.approx((cur / ref3 - 1) * 100, rel=1e-9)
+    assert r["r5y"] is not None
+
+    short = _s([(date(2024, 1, 11) + timedelta(days=i), 50.0 + i) for i in range(600)])
+    rs = pb.compute_row(short, date(2026, 9, 1), is_yield=False)
+    assert rs["r1y"] is not None          # 1년치는 있다
+    assert rs["r3y"] is None and rs["r5y"] is None
+
+
+def test_group_rows_are_contiguous_so_the_table_can_merge_them():
+    # 성과표의 구분(Group) 열은 **같은 group 이 연달아 나온다**는 전제 위에서
+    # rowspan 으로 병합한다. 분류 상수에서 한 그룹이 두 군데로 흩어지면 병합이
+    # 엉뚱한 행을 덮어쓰는데, 화면만 봐서는 알아채기 어렵다.
+    for cat in pb.CATEGORIES:
+        seen, prev = [], object()
+        for l1, _l2, _label, _sub, _tk in cat["rows"]:
+            if l1 != prev:
+                assert l1 not in seen, f'{cat["key"]}: 그룹 {l1!r} 이 두 군데로 흩어져 있다'
+                seen.append(l1)
+                prev = l1
