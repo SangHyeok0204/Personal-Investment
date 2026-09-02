@@ -2,20 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays, Clock, Menu, RefreshCw, Search, User } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { Menu, RefreshCw, User } from "lucide-react";
 import { getMeetingFile } from "@/lib/api";
-import { MoversTicker } from "@/components/movers-ticker";
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 메인 화면 — 5박스 레이아웃 골격 (웹페이지 디자인 시안 사본.pdf).
-// GE 하우스 스타일(그레이 캔버스 + 흰색 카드 + 블루 포인트)로 구현한 빈 골격이며,
-// 각 박스의 콘텐츠 연동은 다음 단계다.
+// 메인 화면 — 회의 마운트(S:\GE\_Team\07_회의자료)의 문서 두 장을 위아래로 붙인
+// 단일 컬럼 — 주간 회의 운영 체계 · 미국주식 리서치 분장표.
+// ★2026-09-01 급등락 전광판 띠 · 상단 2박스(시장 요약/주요 지표) · 우측 위젯 레일(236px)
+//   을 걷어내 문서 폭을 최대로 확보(사용자 요청). 빈 골격이던 Box/InfoCard 와 날짜·시계
+//   헬퍼도 쓰는 곳이 없어져 같이 지웠다 — 되살릴 일이 있으면 git 이력에서.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
 // 하단 통합 박스의 원본 — S:\GE\_Team\07_회의자료\글로벌주식운용부 회의 체계_수정본.html.
 // 회의 마운트(/srv/legacy/meeting) 루트 바로 아래이므로 rel 은 파일명 그대로다.
@@ -25,38 +23,12 @@ const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 //   여기 한 줄만 고치면 된다 — 갱신 버튼도 이 상수를 그대로 다시 읽는다.
 const MEETING_DOC = "글로벌주식운용부 회의 체계_수정본.html";
 
-function formatDate(d: Date) {
-  return {
-    year: String(d.getFullYear()),
-    text: `${d.getMonth() + 1}월 ${d.getDate()}일, ${WEEKDAYS[d.getDay()]}요일`,
-  };
-}
-
-function formatClock(d: Date) {
-  let hour = d.getHours();
-  const ampm = hour < 12 ? "오전" : "오후";
-  hour %= 12;
-  if (hour === 0) hour = 12;
-  const minute = String(d.getMinutes()).padStart(2, "0");
-  return `${ampm} ${hour}:${minute}`;
-}
-
-/** 마운트 후에만 시계를 채워 SSR/CSR 불일치를 피한다. */
-function useNow() {
-  const [now, setNow] = useState<Date | null>(null);
-  useEffect(() => {
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
+// 회의 체계 바로 아래에 붙는 두 번째 문서 — 미국주식 리서치 분장표(A4 가로 1p).
+// 같은 회의 마운트 루트에 있고, 상단 '회의 체계 갱신' 버튼이 이 문서도 같이 다시 읽는다.
+const RESEARCH_DOC = "글로벌주식운용부_리서치분장.html";
 
 export default function HomePage() {
   const sidebar = useSidebar();
-  const now = useNow();
-  const date = now ? formatDate(now) : null;
-  const clock = now ? formatClock(now) : "—";
 
   // 하단 통합 박스 — 주간 회의 운영 체계 HTML 을 iframe(srcDoc)으로.
   // 회의 마운트(/srv/legacy/meeting) 하위 · 자체완결 HTML · 정적이라 재폴링 안 함.
@@ -66,6 +38,15 @@ export default function HomePage() {
     queryFn: () => getMeetingFile(MEETING_DOC),
     staleTime: 10 * 60_000,
   });
+
+  // 회의 체계 아래 문서 — 읽는 방식은 위와 같다(같은 마운트 · 같은 엔드포인트).
+  const researchQuery = useQuery({
+    queryKey: ["landingResearch", RESEARCH_DOC],
+    queryFn: () => getMeetingFile(RESEARCH_DOC),
+    staleTime: 10 * 60_000,
+  });
+
+  const docsFetching = meetingQuery.isFetching || researchQuery.isFetching;
 
   return (
     <div className="flex min-h-screen flex-col gap-4 p-4 xl:gap-5 xl:p-5">
@@ -84,20 +65,23 @@ export default function HomePage() {
           <Menu className="h-5 w-5" />
         </button>
         <div className="flex-1" />
-        {/* 회의 체계 갱신 — 하단 박스와 **같은 경로**(MEETING_DOC)를 다시 읽어 최신본으로
-            교체한다. refetch 는 staleTime 을 무시하고 항상 네트워크를 타고, getMeetingFile
-            은 `cache: "no-store"`, collector 는 캐시 없이 그때그때 디스크를 읽는다 —
-            세 층이 다 뚫려 있어야 부서가 방금 고친 내용이 바로 올라온다. */}
+        {/* 회의 체계 갱신 — 아래 두 문서(MEETING_DOC · RESEARCH_DOC)를 **같은 경로**로
+            다시 읽어 최신본으로 교체한다. refetch 는 staleTime 을 무시하고 항상 네트워크를
+            타고, getMeetingFile 은 `cache: "no-store"`, collector 는 캐시 없이 그때그때
+            디스크를 읽는다 — 세 층이 다 뚫려 있어야 부서가 방금 고친 내용이 바로 올라온다. */}
         <button
           type="button"
-          onClick={() => void meetingQuery.refetch()}
-          disabled={meetingQuery.isFetching}
+          onClick={() => {
+            void meetingQuery.refetch();
+            void researchQuery.refetch();
+          }}
+          disabled={docsFetching}
           className="flex items-center gap-1.5 rounded-lg border border-hairline bg-white px-3 py-1.5 text-xs font-bold text-ink-secondary transition-colors hover:bg-canvas-soft disabled:opacity-60"
         >
           <RefreshCw
             className={cn(
               "h-3.5 w-3.5",
-              meetingQuery.isFetching && "animate-spin",
+              docsFetching && "animate-spin",
             )}
           />
           회의 체계 갱신
@@ -126,61 +110,41 @@ export default function HomePage() {
         </span>
       </header>
 
-      {/* Top bar 바로 아래 — 급등락 전광판 (우→좌 마퀴, 움직임 없으면 미표시) */}
-      <MoversTicker />
-
-      {/* 본문: 좌측 박스 영역 + 우측 위젯 레일 */}
-      <div className="flex min-h-0 flex-1 gap-4 xl:gap-5">
-        {/* 좌측 — 상단 2박스 + 하단 통합 박스. min-h-0 필수: 없으면 자식(회의 박스)
-            콘텐츠 높이가 컬럼을 밀어 페이지가 y축으로 넘친다(flex 높이 봉쇄). */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 xl:gap-5">
-          <div className="grid h-[150px] shrink-0 grid-cols-2 gap-4 xl:gap-5">
-            <Box tone="blue" label="시장 요약" />
-            <Box tone="plain" label="주요 지표" />
-          </div>
-          {/* 하단 — 모니터링 A/B 통합 박스에 GE 회의 HTML 을 헤더 없이 꽉 채워 렌더.
-              sandbox 에서 allow-scripts 를 빼 문서 내장 편집 스크립트(<script id=edit-js>)를
-              비활성화 → 수정/저장 버튼·서식 툴바 안 뜨고 정적 리포트만 읽기전용으로 표시. */}
-          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
-            {meetingQuery.data ? (
-              <MeetingEmbed html={prepMeetingHtml(meetingQuery.data.html)} />
-            ) : (
-              <div className="flex min-h-0 flex-1 items-center justify-center text-xs font-semibold text-ink-faint">
-                {meetingQuery.isError
-                  ? "회의 자료를 불러오지 못했습니다"
-                  : "회의 자료 불러오는 중…"}
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* 우측 — 검색 / 날짜 / 시간 + 세로 박스 */}
-        <aside className="flex w-[236px] shrink-0 flex-col gap-4">
-          <div className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-hairline bg-canvas px-3.5 shadow-card">
-            <Search className="h-4 w-4 shrink-0 text-ink-muted" />
-            <input
-              placeholder="검색"
-              className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint"
+      {/* 본문 — 회의 마운트의 문서 두 장을 위아래로. 문서는 박스 폭에 맞춰 확대되므로
+          두 장을 합치면 한 화면을 넘는다: 각 박스는 내용 높이 그대로 두고 페이지가
+          스크롤한다(박스 안에서만 스크롤하면 문서가 반씩 잘려 읽기 나쁘다). */}
+      <div className="flex min-w-0 flex-1 flex-col gap-4 xl:gap-5">
+        {/* 주간 회의 운영 체계 */}
+        <section className="flex flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
+          {meetingQuery.data ? (
+            <DocEmbed
+              title="GE 회의"
+              html={prepMeetingHtml(meetingQuery.data.html)}
             />
-            <Menu className="h-4 w-4 shrink-0 text-ink-muted" />
-          </div>
-
-          <InfoCard icon={CalendarDays}>
-            <div className="text-xs font-extrabold text-ge-point">
-              {date?.year ?? "—"}
+          ) : (
+            <div className="flex h-40 items-center justify-center text-xs font-semibold text-ink-faint">
+              {meetingQuery.isError
+                ? "회의 자료를 불러오지 못했습니다"
+                : "회의 자료 불러오는 중…"}
             </div>
-            <div className="text-sm font-extrabold text-ge-navy">
-              {date?.text ?? "날짜 확인 중"}
+          )}
+        </section>
+
+        {/* 그 아래 — 미국주식 리서치 분장표 */}
+        <section className="flex flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
+          {researchQuery.data ? (
+            <DocEmbed
+              title="리서치 분장표"
+              html={prepResearchHtml(researchQuery.data.html)}
+            />
+          ) : (
+            <div className="flex h-40 items-center justify-center text-xs font-semibold text-ink-faint">
+              {researchQuery.isError
+                ? "리서치 분장표를 불러오지 못했습니다"
+                : "리서치 분장표 불러오는 중…"}
             </div>
-          </InfoCard>
-
-          <InfoCard icon={Clock}>
-            <div className="text-[15px] font-extrabold text-ge-navy">{clock}</div>
-          </InfoCard>
-
-          <Box tone="blue" label="퀀트 스코어보드" className="min-h-0 flex-1" />
-          <Box tone="plain" label="바로가기" className="h-[76px] shrink-0" />
-        </aside>
+          )}
+        </section>
       </div>
     </div>
   );
@@ -195,12 +159,23 @@ function prepMeetingHtml(html: string): string {
   return html.replace(/<div[^>]*class="footer"[^>]*>[\s\S]*?<\/div>/i, "");
 }
 
-// 회의 HTML 을 박스 가로폭에 꽉 맞춰(fit-to-width) 좌우 여백 없이 렌더한다. 문서를
-// 고정폭(A4 가로)으로 렌더한 뒤 박스 실폭/A4폭 배율로 transform scale. 세로가 넘치면
-// 박스 안에서만 스크롤(페이지는 좌측 컬럼 min-h-0 봉쇄로 한 화면 유지). 스케일된
-// 래퍼(=시각 크기)로 스크롤 영역을 정확히 잡는다(transform 만으론 안 생김). 실제
-// 콘텐츠 높이는 same-origin contentDocument 로 측정.
-function MeetingEmbed({ html }: { html: string }) {
+// 리서치 분장표도 원본은 그대로 두고 렌더본만 손댄다. 이 문서는 단독으로 열릴 때를
+// 전제로 회색 바닥(html background) 위에 그림자 얹은 종이처럼 그려진다 — 대시보드 카드
+// 안에서는 그 회색 액자가 이중 테두리로 보이므로 배경·바깥 여백·그림자만 눌러 꽉 채운다.
+function prepResearchHtml(html: string): string {
+  const override =
+    "<style>html{background:#fff!important}" +
+    ".sheet{margin:0 auto!important;box-shadow:none!important}</style>";
+  return html.replace(/<\/head>/i, override + "</head>");
+}
+
+// A4 가로 문서를 박스 가로폭에 꽉 맞춰(fit-to-width) 좌우 여백 없이 렌더한다. 문서를
+// 고정폭(A4 가로)으로 렌더한 뒤 박스 실폭/A4폭 배율로 transform scale 하고, 스케일된
+// 래퍼가 그 시각 높이를 그대로 차지한다(transform 만으론 레이아웃 높이가 안 생긴다).
+// 실제 콘텐츠 높이는 same-origin contentDocument 로 측정.
+// sandbox 에서 allow-scripts 를 빼 문서 내장 스크립트를 비활성화 — 편집/저장 바나 서식
+// 툴바 없이 정적 리포트로만 읽힌다(편집은 원본 파일을 직접 열어서).
+function DocEmbed({ title, html }: { title: string; html: string }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [box, setBox] = useState({ w: A4L_W, h: 700 });
@@ -228,19 +203,15 @@ function MeetingEmbed({ html }: { html: string }) {
     measure();
     window.setTimeout(measure, 400); // 웹폰트 로드 후 리플로우 재측정
   };
-  // 가로폭을 꽉 채운다(좌우 여백 제거) — 박스 실폭/A4폭 배율. 세로가 넘치면 박스
-  // 안에서만 스크롤(overflow-y-auto), 짧으면 하단은 문서 배경(흰색). 페이지는 flex
-  // 봉쇄(좌측 컬럼 min-h-0)로 한 화면 유지되고 이 박스만 내부 스크롤한다.
+  // 가로폭을 꽉 채운다(좌우 여백 제거) — 박스 실폭/A4폭 배율. 세로는 잘라내지 않고
+  // 스케일된 높이를 그대로 차지하므로, 넘치는 만큼은 페이지가 스크롤한다.
   const scale = box.w / A4L_W;
   return (
-    <div
-      ref={boxRef}
-      className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden bg-white"
-    >
+    <div ref={boxRef} className="w-full overflow-x-hidden bg-white">
       <div style={{ width: box.w, height: contentH * scale }}>
         <iframe
           ref={frameRef}
-          title="GE 회의"
+          title={title}
           srcDoc={html}
           sandbox="allow-same-origin"
           scrolling="no"
@@ -259,53 +230,3 @@ function MeetingEmbed({ html }: { html: string }) {
   );
 }
 
-/** 콘텐츠 박스 (children 없으면 빈 골격 문구). */
-function Box({
-  tone,
-  label,
-  className,
-  children,
-}: {
-  tone: "plain" | "blue";
-  label: string;
-  className?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <section
-      className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-2xl border shadow-card",
-        tone === "blue"
-          ? "border-ge-line-soft bg-ge-blue-bg"
-          : "border-hairline bg-canvas",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2 px-4 pt-4">
-        <span className="h-4 w-1.5 rounded-full bg-ge-point" />
-        <span className="text-[13px] font-extrabold text-ge-navy">{label}</span>
-      </div>
-      <div className="flex flex-1 items-center justify-center p-4 text-xs font-semibold text-ink-faint">
-        {children ?? "콘텐츠 준비 중"}
-      </div>
-    </section>
-  );
-}
-
-/** 검색 아래 날짜/시간 위젯. */
-function InfoCard({
-  icon: Icon,
-  children,
-}: {
-  icon: LucideIcon;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex shrink-0 items-center gap-3 rounded-xl border border-hairline bg-canvas px-3.5 py-3 shadow-card">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-ge-blue-bg">
-        <Icon className="h-[18px] w-[18px] text-ge-point" />
-      </span>
-      <div className="min-w-0 leading-tight">{children}</div>
-    </div>
-  );
-}

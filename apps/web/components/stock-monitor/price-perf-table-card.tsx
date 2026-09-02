@@ -56,6 +56,34 @@ const GROUP_HEAD: Partial<Record<PriceCatKey, [string, string]>> = {
 //   자체가 커브라, 수익률로 다시 세우면 커브 모양이 사라진다.
 const NO_SORT: PriceCatKey[] = ["bond"];
 
+// ── 제목 띠의 필터 탭 (사용자 지정 2026-09-02) ──────────────────────────────
+// ★탭 목록은 **계층이 섞여 있다** — 주식의 벤치마크·DM·EM 은 layer1 이고 한국·중국·
+//   미국은 그 아래 layer2 다. 운용역이 실제로 나눠 보는 단위가 그렇게 섞여 있어서
+//   (EM 전체도 보고 한국만도 본다), 계층을 맞추려고 목록을 비틀지 않는다.
+//   그래서 탭은 "어느 계층인가"가 아니라 **행을 고르는 술어**를 들고 있다.
+// ★비트이더는 계층이 아니라 **종목 지정**이다(암호화폐 행은 group 이 전부 빈 문자열).
+type FilterTab = { label: string; test?: (r: PriceBoardRow) => boolean };
+
+const ALL: FilterTab = { label: "전체" };
+const byGroup = (g: string): FilterTab => ({ label: g, test: (r) => r.group === g });
+const bySub = (s: string): FilterTab => ({ label: s, test: (r) => r.sub_group === s });
+const byKeys = (label: string, ...ks: string[]): FilterTab => ({
+  label,
+  test: (r) => ks.includes(r.key),
+});
+
+const FILTER_TABS: Record<PriceCatKey, FilterTab[]> = {
+  // 벤치마크·DM·EM = layer1 / 한국·중국·미국 = layer2
+  equity: [ALL, byGroup("벤치마크"), byGroup("DM"), byGroup("EM"),
+           bySub("한국"), bySub("중국"), bySub("미국")],
+  bond: [ALL, byGroup("미국"), byGroup("한국"), byGroup("일본"), byGroup("중국")],
+  commodity: [ALL, byGroup("에너지"), byGroup("귀금속"), byGroup("산업금속"),
+              byGroup("벤치마크")],
+  // 환은 5개뿐이라 나눌 것이 없다(사용자 지정) — 띠 모양을 맞추려고 전체 하나만 둔다.
+  fx: [ALL],
+  crypto: [ALL, byKeys("비트이더", "XBTUSD BGN Curncy", "XETUSD BGN Curncy")],
+};
+
 // ── 리포트 `wcolor()` 이식 ──────────────────────────────────────────────────
 // |값| 을 10 에서 자르고 연색→진색으로 보간한다. 채권은 값이 bp 라 10bp 만 넘으면
 // 곧바로 진한 색이 되는데, 그게 리포트의 동작이다(그대로 둔다).
@@ -92,9 +120,12 @@ function isHit(r: PriceBoardRow, sel: PriceSel | null): boolean {
 export function PricePerfTableCard({
   cat,
   sel,
+  onPick,
 }: {
   cat: PriceCatKey;
   sel: PriceSel | null;
+  // 행(시장)을 누르면 그 지수의 차트로 파고든다(사용자 지시 2026-09-02).
+  onPick: (key: string) => void;
 }) {
   // ★쿼리 키가 지표 리스트·요약 표와 같다 — 셋이 같은 응답을 나눠 쓴다.
   const { data, isLoading, isError } = useQuery<PriceBoard>({
@@ -110,11 +141,17 @@ export function PricePerfTableCard({
   // 정렬 상태 — 리포트와 같은 3단계(오름 → 내림 → 원래 순서). 원래 순서는 분류표
   // 순서(벤치마크→DM→EM, 만기 오름차순)라 되돌릴 값이 있다.
   const [sort, setSort] = useState<{ c: number; dir: 1 | -1 } | null>(null);
-  // 자산군이 바뀌면 정렬을 푼다 — 열 번호는 같아도 의미가 달라진다.
-  const [sortCat, setSortCat] = useState<PriceCatKey>(cat);
-  if (sortCat !== cat) {
-    setSortCat(cat);
+  // 제목 띠의 필터 탭 — 인덱스로 들고 있다(0 = 전체).
+  const [tab, setTab] = useState(0);
+  const tabs = FILTER_TABS[cat] ?? [ALL];
+  // ★자산군이 바뀌면 정렬과 필터를 **둘 다** 푼다. 탭 목록이 자산군마다 달라서
+  //   인덱스를 그대로 들고 넘어가면 엉뚱한 묶음이 걸린 채로 표가 열린다
+  //   (주식 3번 = EM → 채권 3번 = 일본). 정렬도 열 번호는 같아도 뜻이 달라진다.
+  const [shownCat, setShownCat] = useState<PriceCatKey>(cat);
+  if (shownCat !== cat) {
+    setShownCat(cat);
     setSort(null);
+    setTab(0);
   }
 
   const clickHead = (c: number) => {
@@ -124,8 +161,15 @@ export function PricePerfTableCard({
     );
   };
 
+  // ★순서가 중요하다: **거른 다음 세우고, 그 결과로 병합한다.** 뒤집으면 구분 열
+  //   rowspan 이 표에 없는 행까지 세어 병합 수가 어긋난다.
+  const shown = useMemo(() => {
+    const t = tabs[tab];
+    return t?.test ? rows.filter(t.test) : rows;
+  }, [rows, tabs, tab]);
+
   const view = useMemo(() => {
-    if (!sort) return rows;
+    if (!sort) return shown;
     const val = (r: PriceBoardRow): string | number | null => {
       // ★0열은 자산군에 따라 뜻이 다르다 — 구분 열이 있으면 group, 없으면(원자재·환·
       //   비트코인은 Market 한 칸을 colspan=2 로 쓴다) 화면에 보이는 시장명이다.
@@ -136,7 +180,7 @@ export function PricePerfTableCard({
       const col = VALUE_COLS.find((x) => x.c === sort.c);
       return col ? (r[col.key as ValueKey] as number | null) : null;
     };
-    return rows.slice().sort((a, b) => {
+    return shown.slice().sort((a, b) => {
       const x = val(a);
       const y = val(b);
       // 결측은 방향과 무관하게 항상 뒤로 — 리포트와 같다.
@@ -146,7 +190,7 @@ export function PricePerfTableCard({
       const d = typeof x === "string" ? x.localeCompare(y as string, "ko") : x - (y as number);
       return sort.dir === 1 ? d : -d;
     });
-  }, [rows, sort, head]);
+  }, [shown, sort, head]);
 
   // 구분 열 rowspan — 같은 group 이 연달아 나오는 만큼 묶는다.
   // ★정렬 중에는 묶지 않는다(리포트의 `unmerge()`). 행 순서가 바뀌면 묶음이 흩어져
@@ -168,19 +212,44 @@ export function PricePerfTableCard({
   return (
     // 차트 카드와 같은 칸(2~5번째 열 · 위아래 통) — 토글로 자리를 맞바꾼다.
     <section className="lg:col-span-4 lg:row-span-2 flex min-h-0 flex-col border-r border-hairline bg-canvas">
-      <header className="flex shrink-0 items-baseline gap-2 bg-ge-header px-3 py-1.5">
-        <h2 className="shrink-0 text-[15px] font-extrabold text-white">
-          시장 성과 · {data?.cat_label ?? ""}
-        </h2>
-        <span className="shrink-0 text-[11.5px] font-semibold text-white/70">
-          {rows.length}개 시장 · 가격/수익률
-        </span>
-        {sortable ? (
-          <span className="shrink-0 text-[11px] text-white/50">열 제목을 누르면 정렬</span>
-        ) : (
-          <span className="shrink-0 text-[11px] text-white/50">만기 순 고정</span>
-        )}
-        <span className="ml-auto shrink-0 text-[11.5px] tabular-nums text-white/60">
+      {/* ★`items-stretch` + 띠 자체의 세로 padding 제거 — 탭이 띠 높이를 꽉 채워야
+          해서다(사용자 지정). 대신 좌우 글자 블록이 각자 py 를 갖는다. 띠에 py 를
+          남겨 두면 버튼 위아래로 배경색 띠가 2px 씩 남는다. */}
+      <header className="flex shrink-0 items-stretch bg-ge-header">
+        <div className="flex shrink-0 items-baseline gap-2 py-1.5 pl-3 pr-2">
+          <h2 className="shrink-0 text-[15px] font-extrabold text-white">
+            시장 성과 · {data?.cat_label ?? ""}
+          </h2>
+          <span className="shrink-0 text-[11.5px] font-semibold text-white/70">
+            {shown.length === rows.length
+              ? `${rows.length}개 시장`
+              : `${shown.length} / ${rows.length}개 시장`}
+          </span>
+        </div>
+
+        {/* 필터 탭 — 버튼끼리 붙이고(gap 0) 사이는 세로 선으로만 가른다.
+            폭은 글자수를 따라가되 2글자(전체·DM·EM)가 너무 좁지 않게 바닥을 준다. */}
+        <div className="flex shrink-0 items-stretch divide-x divide-white/20 border-x border-white/20">
+          {tabs.map((t, i) => (
+            <button
+              key={t.label}
+              type="button"
+              onClick={() => setTab(i)}
+              aria-pressed={i === tab}
+              className={cn(
+                "flex min-w-[30px] items-center justify-center px-1.5",
+                "text-[11.5px] font-bold leading-none transition-colors",
+                i === tab
+                  ? "bg-white text-ge-header"
+                  : "bg-white/10 text-white/75 hover:bg-white/25",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <span className="ml-auto self-center shrink-0 pr-3 pl-2 text-[11.5px] tabular-nums text-white/60">
           {data?.asof ?? ""} · {isYield ? "bp" : "%"}
         </span>
       </header>
@@ -193,6 +262,13 @@ export function PricePerfTableCard({
         <Center
           msg={data?.note ?? "price_monitor.xlsx 판독 대기 중입니다."}
           tone={data?.note ? "text-amber-600" : undefined}
+        />
+      ) : shown.length === 0 ? (
+        // 시트에 그 묶음의 열이 아직 하나도 없을 때(신설 직후 등). 빈 표를 그리면
+        // "고장났나" 로 읽히므로 왜 비었는지 말한다.
+        <Center
+          msg={`'${tabs[tab]?.label}' 에 해당하는 시장이 시트에 아직 없습니다.`}
+          tone="text-amber-600"
         />
       ) : (
         <div className="pm-perf min-h-0 flex-1 overflow-auto p-2">
@@ -224,11 +300,21 @@ export function PricePerfTableCard({
                       key={r.key}
                       data-group={r.group || undefined}
                       className={cn(hit && "is-hit")}
+                      onClick={() => onPick(r.key)}
+                      title={`${r.label} 추이 차트 열기`}
                     >
                       {head ? (
                         <>
                           {span !== null ? (
-                            <td className="region-cell" data-c="0" rowSpan={span ?? 1}>
+                            // ★구분 셀은 클릭에서 뺀다. rowspan 으로 여러 행에 걸쳐
+                            //   있어서, 눌리면 '묶음 중 첫 시장'이라는 임의의 행이
+                            //   열린다 — 어느 행을 누른 건지 화면상 알 수 없다.
+                            <td
+                              className="region-cell"
+                              data-c="0"
+                              rowSpan={span ?? 1}
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               {r.group}
                             </td>
                           ) : null}
@@ -267,7 +353,10 @@ export function PricePerfTableCard({
           <div className="mt-1.5 px-0.5 text-[11px] leading-snug text-slate-400">
             형태는 주간가격모니터 리포트의 성과표 · 값은 왼쪽 목록·차트와 같은
             price_monitor.xlsx 판독분(기준일 {data?.asof ?? "—"})
-            {sel ? " · 왼쪽에서 고른 묶음이 표에서 강조됩니다" : ""}
+            {/* 제목 띠에 있던 안내를 여기로 내렸다 — 그 자리를 필터 탭이 가져갔다. */}
+            {sortable ? " · 열 제목을 누르면 정렬" : " · 만기 순 고정(정렬 없음)"}
+            {" · 행을 누르면 그 시장의 추이 차트"}
+            {sel?.kind === "group" ? " · 왼쪽에서 고른 묶음이 강조됩니다" : ""}
           </div>
         </div>
       )}
@@ -305,6 +394,16 @@ export function PricePerfTableCard({
 .pm-perf .perf-table tr.is-hit td{ background:#E7F0FB; }
 .pm-perf .perf-table tr.is-hit .region-cell{ background:#D8E7FA; }
 .pm-perf .perf-table tr.is-hit .mkt-name{ color:#243B5E; }
+/* 행 hover — 누르면 그 시장의 차트가 열린다는 신호(사용자 지시 2026-09-02).
+   ★강조된 행(.is-hit) 위에서도 hover 가 보여야 해서 선택자를 하나 더 쓴다.
+     안 그러면 .is-hit 쪽 명시도가 높아 hover 가 통째로 묻힌다. */
+.pm-perf .perf-table tbody tr{ cursor:pointer; }
+.pm-perf .perf-table tbody tr:hover td,
+.pm-perf .perf-table tbody tr.is-hit:hover td{ background:#DCE9FA; }
+.pm-perf .perf-table tbody tr:hover .mkt-name{ color:#243B5E; text-decoration:underline; }
+/* 구분 셀만 예외 — 여러 행이 공유하므로 한 행에 커서를 올렸다고 같이 물들면 거짓말이다. */
+.pm-perf .perf-table tbody tr:hover .region-cell{ background:#fff; cursor:default; }
+.pm-perf .perf-table tbody tr.is-hit:hover .region-cell{ background:#D8E7FA; }
 `}</style>
     </section>
   );

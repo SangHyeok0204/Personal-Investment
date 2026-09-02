@@ -23,15 +23,35 @@ async def get_etf_class(if_none_match: str | None = Header(default=None)) -> Res
     return await _proxy_collector("/etf-class", if_none_match, COLLECTOR_SLOW_TIMEOUT_S)
 
 
+@router.get("/new-listing")
+async def get_etf_new_listing(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """신규상장 세 갈래 — 성적표(daily_analysis txt) · 금일 상장(KRX) · 상장 임박(DART).
+
+    ⚠️SLOW 예산인 이유가 다른 엔드포인트와 다르다. 여기는 SMB 판독뿐 아니라 **KRX 목록
+      조회(1,167행)** 가 섞여 있다. collector 가 6시간 캐시를 두지만 캐시가 식은 첫
+      호출은 로그인+조회로 수 초가 걸린다.
+    """
+    return await _proxy_collector(
+        "/etf-new-listing", if_none_match, COLLECTOR_SLOW_TIMEOUT_S
+    )
+
+
 @router.get("/history")
 async def get_etf_class_history(
     axis: str = "mid",
-    days: int = 180,
+    metric: str = "net",
+    period: str = "3m",
+    days: int = 400,
     if_none_match: str | None = Header(default=None),
 ) -> Response:
-    """일별 시계열 — collector 가 쌓아 온 스냅샷 이력."""
+    """시점별 추이 — collector 가 쌓아 온 스냅샷 이력.
+
+    metric: net(개인 순매수) · ret(수익률) · mcap(시총) / period: d·1w·1m·3m·6m
+    """
     return await _proxy_collector(
-        f"/etf-class/history?axis={axis}&days={days}",
+        f"/etf-class/history?axis={axis}&metric={metric}&period={period}&days={days}",
         if_none_match,
         COLLECTOR_SLOW_TIMEOUT_S,
     )

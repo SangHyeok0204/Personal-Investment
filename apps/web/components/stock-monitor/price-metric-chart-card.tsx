@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronLeft } from "lucide-react";
 import {
   getPriceGroupSeries,
   getPriceMetricSeries,
@@ -343,9 +344,12 @@ const MODES: { key: PriceChartMode; label: string }[] = [
 export function PriceMetricChartCard({
   sel,
   cat,
+  onBack,
 }: {
   sel: PriceSel | null;
   cat: PriceCatKey;
+  // 성과표로 되돌아가는 유일한 길(사용자 지시 2026-09-02, 차트/표 토글 폐지).
+  onBack: () => void;
 }) {
   // 고른 모드. 기본 누적수익률 — 구간 승자를 바로 보여주는 화면이다(사용자 지시).
   const [mode, setMode] = useState<PriceChartMode>("cum");
@@ -522,7 +526,18 @@ export function PriceMetricChartCard({
     // 테두리는 오른쪽 한 줄만(카드끼리 맞붙는 배치 규칙, page.tsx 주석 참고).
     <section className="lg:col-span-4 lg:row-span-2 flex min-h-0 flex-col border-r border-hairline bg-canvas">
       {/* 제목 띠 — 강조색(ge-header). 배경이 어두우니 글자를 흰색 계열로 뒤집는다. */}
-      <header className="flex items-center gap-2 bg-ge-header px-3 py-1.5">
+      <header className="flex items-center gap-2 bg-ge-header py-1.5 pl-2 pr-3">
+        {/* ★되돌아가는 유일한 길이라 제목 **왼쪽**에 둔다 — 뒤로가기의 관례 자리다.
+            여기가 아니면 사용자는 표로 돌아오는 방법을 못 찾는다(토글이 없어졌다). */}
+        <button
+          type="button"
+          onClick={onBack}
+          title="성과표로 돌아가기"
+          className="flex shrink-0 items-center gap-1 rounded bg-white/15 px-2 py-[3px] text-[11.5px] font-bold text-white transition-colors hover:bg-white/30"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2.6} />
+          표
+        </button>
         <h2 className="shrink-0 text-[13px] font-extrabold text-white">
           {data?.label ?? "지표 추이"}
         </h2>

@@ -36,8 +36,11 @@ const navItems: NavItem[] = [
       { label: "iNAV 모니터", href: "/inav" },
       { label: "WRAP", href: "/wrap" },
       { label: "LP 평가", href: "/lp-eval" },
-      { label: "종목 모니터", href: "/stock-monitor" },
-      { label: "국내상장 ETF", href: "/etf-class" },
+      // ★2026-09-01 개명(사용자 지시): "종목 모니터" → "자산 가격/수익률".
+      //   아래 [종목 모니터링](개별 종목·미국/한국/중국)과 이름이 겹쳐 층위가 헷갈렸다 —
+      //   이 화면이 다루는 건 종목이 아니라 87개 **시장·지수**의 가격과 수익률이다.
+      //   경로(/stock-monitor)와 API 는 그대로 둔다 — 북마크가 깨지고 얻는 게 없다.
+      { label: "자산 가격/수익률", href: "/stock-monitor" },
       // 하위 페이지 `/ai-key-data/epoch` 는 2026-08-28 사용자 지시로 폐지 —
       // Epoch AI·ADP·FOMC내재확률이 전부 메인 카드(탭)로 편입됐다.
       { label: "AI Key Data", href: "/ai-key-data" },
@@ -45,10 +48,14 @@ const navItems: NavItem[] = [
   },
   {
     // 상품(펀드·ETF) 단위로 보는 자리 — 시장(지수)과 종목 사이의 층위다.
-    // 두 하위 모두 아직 화면이 없다. 원천은 이미 있다(펀드공시모니터 · ETF 순매수 lane).
+    // ETF 순매수/수익률은 2026-09-01 에 열었다(국내상장ETF 모니터링.xlsm value 시트).
+    // 펀드공시는 아직 화면이 없다 — 원천(펀드공시모니터)은 이미 있다.
     label: "상품 모니터링",
     icon: Boxes,
-    children: [{ label: "펀드공시" }, { label: "ETF 순매수/수익률" }],
+    children: [
+      { label: "펀드공시" },
+      { label: "ETF 순매수/수익률", href: "/etf-class" },
+    ],
   },
   {
     // 개별 종목을 시장별로 보는 자리. 미국부터 연다(어닝 + 이슈).

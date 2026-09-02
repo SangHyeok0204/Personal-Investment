@@ -27,10 +27,16 @@
 ★★절대 억원만 보면 순위가 늘 시장형/S&P500 이다(규모가 이긴다). 그래서 강도
   `net/시총`(%)을 같이 낸다 — 주간가격모니터가 "저점 대비 픽" 에서 배운 것과 같은 교훈.
 
-★HISTORICAL 두 갈래:
+★★워크북은 매일 **덮어쓰기**라 그 안에 과거가 없다. HISTORICAL 은 두 갈래로 만든다:
   1) 구간 분해 — 오늘 스냅샷 하나로 4구간을 만든다. **첫날부터 그려진다.**
-  2) 일별 누적 — 이 모듈이 스냅샷을 sqlite 에 적재해 쌓는다(read-through, 기준일 멱등).
-     워크북은 **덮어쓰기**라 과거가 없다. 그래서 오늘부터 쌓인다 — 화면이 그 사실을 말한다.
+  2) 시점별 추이 — 스냅샷을 sqlite 에 적재해 쌓는다(read-through + 배경 루프, 기준일 멱등).
+     원천 폴더의 백업본까지 훑어(`seed_archive`) 2026-04·05·06·08 의 7시점을 복원했다.
+     ★관측이 성기므로 "일별 누적"이 아니라 **각 시점에서 본 그 기간의 값**을 그린다 —
+       관측 하나가 이미 누적이라 날짜가 띄엄띄엄해도 정확하다. 일별이 쌓이면 저절로 촘촘해진다.
+
+★★워크북이 결측 대신 0 을 주는 자리가 있다(`_valid_return` 참조). CTD("RATE")는 창 시작에
+  종목이 없으면 0.0 이다 — 그대로 쓰면 "3개월간 0% 였다"는 거짓 문장이 되고 신규 대형
+  ETF 가 분류 평균을 0 으로 끌어내린다. 판독 직후 한 번 걸러서 화면·적재·이력이 같은 값을 본다.
 """
 from __future__ import annotations
 
@@ -74,8 +80,14 @@ COLS = {
     "ff_1m": (19, "FF_1m"),
     "ff_3m": (20, "FF_3m"),
     "ff_6m": (21, "FF_6m"),
+}
+# 나중에 생긴 열. 없어도 계산에 쓰이는 값이 아니라 **표시용 플래그**라 판독을 거부하지
+# 않는다 — 이걸 필수로 두면 2026-04·05 백업본이 통째로 버려지고 이력이 5개월 짧아진다.
+OPTIONAL_COLS = {
     "interest": (22, "관심ETF여부"),
 }
+# 그 열이 없는 워크북에서 쓸 기본값.
+OPTIONAL_DEFAULT = {"interest": False}
 _HORIZONS = ("1w", "1m", "3m", "6m")
 
 # 화면이 고르는 기간. 누적(창 그대로) 다섯 + 구간(누적 차이) 넷.
@@ -138,6 +150,74 @@ def _asof_date(raw) -> str | None:
         return None
 
 
+def _fold(label: str) -> str:
+    """분류 라벨의 **표기 차이**만 걷어낸 묶음 키. 뜻이 같은데 철자가 달라 갈리는 걸 막는다.
+
+    실측(2026-09-01, 스냅샷 7시점): 중분류 `MSCI KOREA`/`MSCI Korea`, 소분류
+    `Top10`/`TOP10`(한 워크북 안에서도 둘 다 나온다) · `AI SW 전반`/`AI SW전반` 등 14건.
+    접지 않으면 시계열이 두 줄로 갈리고 표에서도 같은 분류가 두 행이 된다.
+    ★표시는 접은 결과가 아니라 **원래 철자**로 한다 — 회의에서 쓰는 말이 바뀌면 안 된다.
+    """
+    return label.strip().casefold().replace(" ", "")
+
+
+def _listed_before(listed: str, window_start: str | None) -> bool:
+    """그 창이 시작될 때 이 ETF 가 이미 상장돼 있었나. 날짜가 없으면 판단하지 않는다(True)."""
+    if not window_start or not listed:
+        return True
+    return str(listed)[:10] <= window_start
+
+
+def _valid_return(v: float | None, listed: str, window_start: str | None) -> float | None:
+    """기간 수익률을 그대로 쓸지, '관측 없음'으로 볼지.
+
+    ★★워크북의 CTD("RATE") 는 창 시작 시점에 종목이 없으면 **0.0 을 돌려준다** — 결측이
+      아니라 0 이다. 그대로 두면 "이 분류는 3개월간 0% 였다"는 **거짓 문장**이 되고, 시총이
+      큰 신규 종목이 끼면 분류 평균을 통째로 0 쪽으로 끌어내린다.
+      실측(2026-08-31): 0.0 인 종목이 1주 0개 → 1달 8 → 3달 39 → 6달 100 으로 창 길이를
+      따라 단조 증가했고, 전부 상장일이 창 시작일보다 늦었다. 8/19 시점 '단일종목' 분류의
+      3개월 수익률 0.00% 가 바로 이 거짓값이었다(같은 종목들이 8/31 엔 -67%·-52%).
+    ★두 번째 조건(정확히 0.0 인데 상장은 빠름)은 거래정지·데이터 공백이다(예: ACE
+      러시아MSCI(합성) — 제재로 정지). 1주 이상 창에서 **정확히** 0.0000 은 실제 시세로는
+      나오지 않는다. 당일 등락률에는 이 규칙을 적용하지 않는다 — 보합은 흔하다.
+    """
+    if v is None:
+        return None
+    if not _listed_before(listed, window_start):
+        return None
+    if v == 0.0:
+        return None
+    return v
+
+
+def _weekdays_between(start: str | None, end: str | None) -> int:
+    """(start, end] 사이의 평일 수. 기간 유입을 **일평균**으로 환산할 때 쓰는 분모다.
+
+    ★왜 필요한가: 어제·1주·1개월 유입액을 한 축에 나란히 놓으면 1개월이 어제의 20배가
+      넘어 어제 막대가 안 보이고, 게다가 모든 분류가 똑같이 "1개월>1주>어제" 모양이라
+      비교할 게 없다. 일평균으로 나누면 세 막대가 같은 축에서 비교되고 "어제 유입이 평소
+      대비 센가"가 바로 읽힌다.
+    ★시작일은 제외한다 — FF 창의 시작일은 기준선이고 합계는 그 다음 거래일부터다
+      (실측: 1w 창 08/24~08/31 의 daily 리포트가 08/25·26·27·28·31 다섯 장).
+    ⚠️공휴일은 반영하지 않는다(주말만 뺀다). 한국 증시 휴장일이 연 10~15일이라 한 달 창에서
+      한두 날 어긋난다 — 막대 길이의 몇 %라 순위를 뒤집지 않지만, 화면이 근사임을 밝힌다.
+    """
+    if not start or not end:
+        return 0
+    try:
+        a = date.fromisoformat(start)
+        b = date.fromisoformat(end)
+    except ValueError:
+        return 0
+    n = 0
+    d = a + timedelta(days=1)
+    while d <= b:
+        if d.weekday() < 5:
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def _chain(outer: float | None, inner: float | None) -> float | None:
     """누적 수익률 둘 → 안쪽을 걷어낸 구간 수익률. (1+outer)/(1+inner)-1."""
     if outer is None:
@@ -169,7 +249,11 @@ def _rd(d: dict, nd: int) -> dict:
 
 # ── 워크북 판독 (mtime+size 캐시) ────────────────────────────────────────────
 
-_CACHE: dict = {"sig": None, "snap": None}
+# ★캐시 키에 **경로**가 들어가야 한다. 원래는 (mtime, size) 만 봤는데, `seed_archive` 가
+#   같은 함수로 백업본 여러 장을 훑으면서 캐시를 갈아 치운다. 그 사이 들어온 요청이 정본을
+#   달라고 했을 때 크기·시각이 우연히 겹치면 **다른 워크북의 스냅샷**을 정본으로 내놓게 된다.
+#   확률은 낮지만 그렇게 틀리면 화면 전체가 조용히 다른 날을 말한다.
+_CACHE: dict = {"key": None, "snap": None}
 
 
 def _read_snapshot(path: str = SRC_PATH) -> dict:
@@ -179,8 +263,8 @@ def _read_snapshot(path: str = SRC_PATH) -> dict:
     **전체를 거부**한다 — 열이 한 칸 밀린 채 계산하면 화면이 조용히 거짓말을 한다.
     """
     st = os.stat(path)
-    sig = (st.st_mtime_ns, st.st_size)
-    if _CACHE["sig"] == sig and _CACHE["snap"] is not None:
+    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    if _CACHE["key"] == key and _CACHE["snap"] is not None:
         return _CACHE["snap"]
 
     with open(path, "rb") as f:
@@ -201,6 +285,13 @@ def _read_snapshot(path: str = SRC_PATH) -> dict:
             got = _txt(hdr[idx] if idx < len(hdr) else None)
             if got != want:
                 raise ValueError(f"열 배치가 다릅니다: {idx + 1}번째 열이 {got!r} (기대 {want!r})")
+        # 선택 열은 있으면 읽고 없으면 건너뛴다(헤더가 맞을 때만 읽는다 —
+        # 자리만 보고 읽으면 나중에 다른 열이 그 자리에 오면 조용히 틀린다).
+        opt = {
+            key: idx
+            for key, (idx, want) in OPTIONAL_COLS.items()
+            if _txt(hdr[idx] if idx < len(hdr) else None) == want
+        }
 
         # 1·2행 15~22열 = MMT 4창(15~18) + FF 4창(19~22)의 시작일/끝일.
         # 지금 워크북은 두 벌이 같은 날짜라 한 벌만 화면에 쓴다. 그래도 대조는 한다 —
@@ -231,23 +322,37 @@ def _read_snapshot(path: str = SRC_PATH) -> dict:
                 v = r[idx] if idx < len(r) else None
                 if key in ("listed", "country", "gubun", "big", "mid", "small"):
                     rec[key] = _txt(v)
-                elif key == "interest":
-                    rec[key] = bool(_num(v))
                 else:
                     rec[key] = _num(v)
+            for key, idx in OPTIONAL_DEFAULT.items():
+                rec[key] = idx
+            if "interest" in opt:
+                rec["interest"] = bool(_num(r[opt["interest"]] if opt["interest"] < len(r) else None))
             etfs.append(rec)
     finally:
         wb.close()
+
+    # ★여기서 한 번 걸러 두면 화면·적재·이력이 전부 같은 값을 본다. 소비처마다 거르면
+    #   한 곳을 고칠 때 다른 곳이 옛 값을 계속 말한다.
+    masked = 0
+    for e in etfs:
+        for h in _HORIZONS:
+            k = "mmt_" + h
+            before = e[k]
+            e[k] = _valid_return(before, e["listed"], windows[h]["start"])
+            if before is not None and e[k] is None:
+                masked += 1
 
     snap = {
         "asof": asof,
         "windows": windows,
         "ff_windows": ff_windows,
         "window_mismatch": window_mismatch,
+        "masked_returns": masked,
         "etfs": etfs,
         "source_modified": datetime.fromtimestamp(st.st_mtime, _KST).strftime("%Y-%m-%d %H:%M"),
     }
-    _CACHE["sig"] = sig
+    _CACHE["key"] = key
     _CACHE["snap"] = snap
     return snap
 
@@ -344,6 +449,18 @@ def _finalize(b: dict) -> dict:
     return out
 
 
+def etf_group_key(e: dict, axis_key: str) -> str:
+    """ETF 한 줄이 그 축에서 속하는 분류 키. `_group` 과 **같은 식**이어야 한다.
+
+    ★화면이 이 계산을 다시 하지 않도록 payload 에 실어 보낸다. 예전엔 프런트가 같은 규칙을
+      한 벌 더 갖고 있었는데, 표기 접기(`_fold`)가 들어오면서 두 곳이 갈릴 수 있게 됐다 —
+      갈리면 분류를 눌러도 상세 표가 비고, 그게 "데이터가 없다"로 보여 오진을 부른다.
+    """
+    axis = _AXIS_BY_KEY[axis_key]
+    parts = [e.get(c) or "미분류" for c in axis["path"]] + [e.get(axis["col"]) or "미분류"]
+    return " / ".join(parts)
+
+
 def _group(etfs: list[dict], metrics: list[dict], axis_key: str) -> list[dict]:
     """한 축으로 묶는다. 라벨이 빈 종목은 '미분류' 로 모은다(조용히 버리지 않는다)."""
     axis = _AXIS_BY_KEY[axis_key]
@@ -352,11 +469,15 @@ def _group(etfs: list[dict], metrics: list[dict], axis_key: str) -> list[dict]:
     for e, m in zip(etfs, metrics):
         label = e.get(col) or "미분류"
         path = [e.get(c) or "미분류" for c in path_cols]
-        k = (*path, label)
+        # 묶는 건 접은 키로, 보이는 건 처음 만난 철자로. (`Top10`/`TOP10` 이 한 워크북
+        # 안에서도 둘 다 나온다 — 접지 않으면 같은 분류가 두 행이 된다.)
+        k = tuple(_fold(x) for x in (*path, label))
         b = buckets.get(k)
         if b is None:
             b = buckets[k] = _blank_bucket(label, path)
-            b["key"] = " / ".join(k)
+            b["key"] = " / ".join((*path, label))
+        # 대표 철자를 쓴 키를 ETF 에 되돌려 준다 — 접힌 쪽(`TOP10`)도 대표(`Top10`)를 가리킨다.
+        e.setdefault("_gkeys", {})[axis_key] = b["key"]
         _accumulate(b, e, m)
     rows = [_finalize(b) for b in buckets.values()]
     rows.sort(key=lambda r: -(r["net_cum"]["3m"] or 0.0))
@@ -384,6 +505,7 @@ def build_snapshot() -> dict:
         "etfs": [],
         "totals": None,
         "history_days": 0,
+        "masked_returns": 0,
     }
     try:
         snap = _read_snapshot()
@@ -399,15 +521,19 @@ def build_snapshot() -> dict:
     out["asof"] = snap["asof"]
     out["source_modified"] = snap["source_modified"]
     out["windows"] = snap["windows"]
+    out["masked_returns"] = snap.get("masked_returns", 0)
     for p in out["periods"]:
         w = snap["windows"].get(p["span"]) if p["span"] else None
         p["start"] = (w or {}).get("start") or snap["asof"]
         p["end"] = (w or {}).get("end") or snap["asof"]
+        # 당일은 거래일 1 일. 나머지는 창 안의 평일 수(주말만 제외).
+        p["days"] = 1 if p["span"] is None else max(_weekdays_between(p["start"], p["end"]), 1)
     for s in out["intervals"]:
         inner = snap["windows"].get(s["inner"]) if s["inner"] else None
         outer = snap["windows"].get(s["outer"]) or {}
         s["start"] = outer.get("start")
         s["end"] = (inner or {}).get("start") or outer.get("end")
+        s["days"] = max(_weekdays_between(s["start"], s["end"]), 1)
 
     if snap.get("window_mismatch"):
         out["note"] = (
@@ -422,12 +548,17 @@ def build_snapshot() -> dict:
     out["etfs"] = [
         {
             "code": e["code"], "name": e["name"],
+            # 상장일 — 화면의 '신규 상장' 칸이 쓴다. 셀이 날짜형이면 시:분이 붙어 오므로
+            # 앞 10자만 남긴다(YYYY-MM-DD).
+            "listed": (e["listed"] or "")[:10],
             "country": e["country"], "gubun": e["gubun"],
             "big": e["big"], "mid": e["mid"], "small": e["small"],
             "mcap": _r(e["mcap"], 1), "amt": _r(e["amt"], 1), "price": e["price"],
             "interest": e["interest"],
             "net_cum": _rd(m["net_cum"], 3), "net_iv": _rd(m["net_iv"], 3),
             "ret_cum": _rd(m["ret_cum"], 6), "ret_iv": _rd(m["ret_iv"], 6),
+            # AXES 순서대로의 분류 키. 화면은 이걸로 조인한다(규칙을 두 곳에 두지 않는다).
+            "gkeys": [(e.get("_gkeys") or {}).get(a["key"], "") for a in AXES],
         }
         for e, m in zip(etfs, metrics)
     ]
@@ -447,7 +578,13 @@ def build_snapshot() -> dict:
 
 # ── 일별 누적 (read-through 적재) ────────────────────────────────────────────
 
+# ★적재된 값은 **판독 규칙까지 굳은 결과물**이다(예: MMT 무효값 마스킹). 규칙을 고치면
+#   이미 쌓인 행은 옛 규칙이라 화면이 시점마다 다른 말을 한다. 그래서 버전을 두고,
+#   달라지면 통째로 버리고 다시 굽는다 — 원천(워크북·백업본)이 남아 있어 복구가 싸다.
+SCHEMA_VERSION = "2"
+
 _DDL = """
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS snapshot (
   asof     TEXT NOT NULL,
   code     TEXT NOT NULL,
@@ -472,6 +609,11 @@ def _connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=10)
     con.executescript(_DDL)
+    row = con.execute("SELECT v FROM meta WHERE k='schema'").fetchone()
+    if row is None or row[0] != SCHEMA_VERSION:
+        con.execute("DELETE FROM snapshot")
+        con.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('schema',?)", (SCHEMA_VERSION,))
+        con.commit()
     return con
 
 
@@ -509,17 +651,110 @@ def ingest(snap: dict | None = None) -> int:
         con.close()
 
 
-def build_history(axis: str = DEFAULT_AXIS, days: int = 180) -> dict:
-    """일별 시계열 — 분류별 당일 개인순매수와 그 누적, 시총가중 등락률.
 
-    ★워크북에 과거가 없으므로 이 계열은 적재를 시작한 날부터 자란다. 며칠 안 되는 구간을
-      선처럼 이어 그리면 없는 추세를 만들어 보이므로 화면이 점 개수를 밝힌다.
+# ── 과거 스냅샷 복원 ─────────────────────────────────────────────────────────
+# 원천 폴더에는 운용역이 남긴 백업본이 몇 장 있다. 스키마가 같은 것만 골라 한 번 적재하면
+# 이력이 오늘 하루에서 몇 달로 늘어난다. ★성기다는 사실 자체를 화면이 말해야 하므로 여기서
+# 보간하지 않는다 — 그날 실제로 있었던 관측만 넣는다.
+# ⚠️백업 폴더에는 SpaceX자금유입·중국AI 같은 남의 파일도 있어 확장자만으로는 못 고른다.
+ARCHIVE_DIRS = ["", "Backup", "회의자료백업"]
+ARCHIVE_NAME_HINT = "모니터링"
+
+
+def _archive_paths() -> list[str]:
+    root = os.path.dirname(SRC_PATH)
+    out: list[str] = []
+    for sub in ARCHIVE_DIRS:
+        d = os.path.join(root, sub) if sub else root
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            if not n.lower().endswith((".xlsm", ".xlsx")):
+                continue
+            if ARCHIVE_NAME_HINT not in n or n.startswith("~$"):
+                continue
+            out.append(os.path.join(d, n))
+    return out
+
+
+def seed_archive() -> dict:
+    """백업 워크북 중 아직 없는 기준일을 적재하고 요약을 돌려준다.
+
+    열 배치가 다른 옛 사본(_v2·_vvv)은 _read_snapshot 이 거부하므로 여기서 따로 거를 게
+    없다 — **거부된 이유를 세어서 알린다**(조용히 빠지면 왜 이력이 짧은지 알 수 없다).
+    """
+    con = _connect()
+    try:
+        have = {r[0] for r in con.execute("SELECT DISTINCT asof FROM snapshot")}
+    finally:
+        con.close()
+
+    added, skipped = [], []
+    for path in _archive_paths():
+        _CACHE["key"] = None          # 캐시는 정본 한 장을 위한 것 — 훑을 땐 비운다
+        try:
+            snap = _read_snapshot(path)
+        except Exception as exc:  # noqa: BLE001
+            skipped.append(f"{os.path.basename(path)}: {exc}")
+            continue
+        if not snap["asof"] or snap["asof"] in have:
+            continue
+        ingest(snap)
+        have.add(snap["asof"])
+        added.append(snap["asof"])
+    _CACHE["key"] = None              # 정본이 다시 읽히도록 캐시를 비운 채 끝낸다
+    con = _connect()
+    try:
+        (days,) = con.execute("SELECT COUNT(DISTINCT asof) FROM snapshot").fetchone()
+    finally:
+        con.close()
+    return {"added": sorted(added), "skipped": skipped, "days": int(days or 0)}
+
+
+# ── 시점별 추이 ──────────────────────────────────────────────────────────────
+# ★★2026-09-01 개편. 처음엔 "일별 누적 순매수"였는데, 그건 **날마다 관측이 있어야만** 말이
+#   되는 그림이다. 복원한 과거는 성긴 스냅샷(4·5·6·8월)이라 그 위에 누적선을 그으면 빠진
+#   날의 자금이 0 인 것처럼 보인다 — 없는 사실을 그리는 셈이다.
+#   그래서 축을 바꿨다: **각 시점에서 본 그 기간의 값**을 그린다. 5/15 의 3개월 누적,
+#   6/8 의 3개월 누적, … 처럼 관측 하나가 이미 누적이라 성겨도 정확하다. 일별 스냅샷이
+#   쌓일수록 같은 그림이 저절로 촘촘해진다.
+HISTORY_METRICS = [
+    {"key": "net", "label": "개인 순매수", "unit": "억"},
+    {"key": "ret", "label": "수익률", "unit": "%"},
+    {"key": "mcap", "label": "시총", "unit": "억"},
+]
+# (지표, 기간) → sqlite 열. 시총은 기간이 없다(그 시점의 값 하나뿐).
+_HIST_COL = {
+    ("net", "d"): "net", ("net", "1w"): "ff_1w", ("net", "1m"): "ff_1m",
+    ("net", "3m"): "ff_3m", ("net", "6m"): "ff_6m",
+    ("ret", "d"): "chg", ("ret", "1w"): "mmt_1w", ("ret", "1m"): "mmt_1m",
+    ("ret", "3m"): "mmt_3m", ("ret", "6m"): "mmt_6m",
+}
+
+
+def build_history(
+    axis: str = DEFAULT_AXIS,
+    metric: str = "net",
+    period: str = "3m",
+    days: int = 400,
+) -> dict:
+    """시점별 추이 — 적재된 스냅샷마다 분류별 값을 하나씩.
+
+    ★수익률은 **그 시점 스냅샷 자신의 시총**으로 가중한다. 표(build_snapshot)는 한 시점만
+      다뤄 오늘 시총을 쓸 수밖에 없지만, 여기는 과거 시총이 실제로 있으므로 근사가 아니다.
     """
     axis_key = axis if axis in _AXIS_BY_KEY else DEFAULT_AXIS
-    col = _AXIS_BY_KEY[axis_key]["col"]
+    col_group = _AXIS_BY_KEY[axis_key]["col"]
+    metric = metric if any(m["key"] == metric for m in HISTORY_METRICS) else "net"
+    period = period if period in _PERIOD_KEYS else "3m"
     out = {
         "generated_at": datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S"),
         "axis": axis_key,
+        "metric": metric,
+        "period": period,
+        "metrics": [dict(m) for m in HISTORY_METRICS],
         "dates": [],
         "series": [],
         "note": None,
@@ -529,15 +764,25 @@ def build_history(axis: str = DEFAULT_AXIS, days: int = 180) -> dict:
     except OSError as exc:
         out["note"] = f"이력 저장소를 열지 못했습니다 — {exc}"
         return out
+
+    since = (date.today() - timedelta(days=days)).isoformat()
+    grp = f"COALESCE(NULLIF({col_group},''),'미분류')"
+    vcol = "mcap" if metric == "mcap" else _HIST_COL[(metric, period)]
+    if metric == "ret":
+        # 결측 종목의 시총은 분모에서 빼야 그 분류만 0 쪽으로 끌려가지 않는다.
+        sql = (
+            f"SELECT asof, {grp} AS g, "
+            f"SUM(COALESCE({vcol},0)*COALESCE(mcap,0)), "
+            f"SUM(CASE WHEN {vcol} IS NULL THEN 0 ELSE COALESCE(mcap,0) END) "
+            "FROM snapshot WHERE asof >= ? GROUP BY asof, g ORDER BY asof"
+        )
+    else:
+        sql = (
+            f"SELECT asof, {grp} AS g, SUM(COALESCE({vcol},0)), NULL "
+            "FROM snapshot WHERE asof >= ? GROUP BY asof, g ORDER BY asof"
+        )
     try:
-        rows = con.execute(
-            f"SELECT asof, COALESCE(NULLIF({col},''),'미분류') AS g, "
-            "SUM(COALESCE(net,0)) AS net, "
-            "SUM(COALESCE(chg,0)*COALESCE(mcap,0)) AS rw, "
-            "SUM(CASE WHEN chg IS NULL THEN 0 ELSE COALESCE(mcap,0) END) AS rwd "
-            "FROM snapshot WHERE asof >= ? GROUP BY asof, g ORDER BY asof",
-            ((date.today() - timedelta(days=days)).isoformat(),),
-        ).fetchall()
+        rows = con.execute(sql, (since,)).fetchall()
     finally:
         con.close()
 
@@ -545,29 +790,42 @@ def build_history(axis: str = DEFAULT_AXIS, days: int = 180) -> dict:
         out["note"] = "아직 쌓인 스냅샷이 없습니다."
         return out
 
+    # ★묶기는 **접은 키**로 한다. SQL 의 GROUP BY 로는 `MSCI KOREA`/`MSCI Korea` 가 두 줄이
+    #   되어 한 분류의 시계열이 4월에서 끊기고 8월에 새로 시작한 것처럼 보인다.
+    #   표시 철자는 **가장 최근 시점의 것**을 쓴다(지금 회의에서 쓰는 말).
     dates = sorted({r[0] for r in rows})
     idx = {d: i for i, d in enumerate(dates)}
-    per: dict[str, dict] = {}
-    for asof, g, net, rw, rwd in rows:
-        s = per.setdefault(g, {"net": [None] * len(dates), "ret": [None] * len(dates)})
+    acc: dict[str, dict] = {}
+    for asof, g, a, b in rows:
+        k = _fold(g)
+        e = acc.get(k)
+        if e is None:
+            e = acc[k] = {"label": g, "num": [0.0] * len(dates),
+                          "den": [0.0] * len(dates), "seen": [False] * len(dates)}
         i = idx[asof]
-        s["net"][i] = net
-        s["ret"][i] = (rw / rwd) if rwd else None
+        e["label"] = g          # rows 가 asof 오름차순이라 마지막이 최신 철자다
+        e["num"][i] += a or 0.0
+        e["den"][i] += (b or 0.0) if metric == "ret" else 0.0
+        e["seen"][i] = True
 
     series = []
-    for g, s in per.items():
-        run, cum = 0.0, []
-        for v in s["net"]:
-            run += v or 0.0
-            cum.append(round(run, 3))
+    for k, e in acc.items():
+        vals: list[float | None] = []
+        for i in range(len(dates)):
+            if not e["seen"][i]:
+                vals.append(None)
+            elif metric == "ret":
+                vals.append(_r(e["num"][i] / e["den"][i], 6) if e["den"][i] else None)
+            else:
+                vals.append(_r(e["num"][i], 3))
         series.append({
-            "key": g, "label": g,
-            "net": [None if v is None else round(v, 3) for v in s["net"]],
-            "cum": cum,
-            "ret": [None if v is None else round(v, 6) for v in s["ret"]],
-            "total": round(run, 3),
+            "key": k,
+            "label": e["label"],
+            "values": vals,
+            # 정렬 기준 = 가장 최근 관측. 마지막 값이 곧 지금 상태다.
+            "last": next((v for v in reversed(vals) if v is not None), None),
         })
-    series.sort(key=lambda x: -x["total"])
+    series.sort(key=lambda x: -(x["last"] or 0))
     out["dates"] = dates
     out["series"] = series
     return out

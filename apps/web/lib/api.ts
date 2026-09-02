@@ -2433,6 +2433,9 @@ export interface EtfPeriodSpec {
   span: string | null;
   start: string | null;
   end: string | null;
+  /** 창 안의 거래일 수(주말 제외·공휴일 미반영). 유입액을 일평균으로 나눌 때 쓴다 —
+   *  총액을 한 축에 놓으면 1개월이 어제의 20배가 넘어 어제 막대가 안 보인다. */
+  days: number;
 }
 export interface EtfIntervalSpec {
   key: EtfIvKey;
@@ -2441,6 +2444,7 @@ export interface EtfIntervalSpec {
   inner: string | null;
   start: string | null;
   end: string | null;
+  days: number;
 }
 type ByPeriod = Record<EtfPeriodKey, number | null>;
 type ByIv = Record<EtfIvKey, number | null>;
@@ -2462,8 +2466,14 @@ export interface EtfGroupRow {
   ratio_iv: ByIv;
 }
 export interface EtfRow {
+  /** AXES 순서(구분·대분류·중분류·소분류·투자국가)의 분류 키. 서버가 실제로 넣은
+   *  묶음의 키다 — 화면은 이걸로 조인한다. 같은 규칙을 프런트에 한 벌 더 두면
+   *  표기 접기(`Top10`/`TOP10`) 같은 게 들어올 때 두 곳이 갈린다. */
+  gkeys: string[];
   code: string;
   name: string;
+  /** 상장일 'YYYY-MM-DD'. '신규 상장' 칸이 쓴다. */
+  listed: string;
   country: string;
   gubun: string;
   big: string;
@@ -2491,81 +2501,86 @@ export interface EtfClassPayload {
   etfs: EtfRow[];
   totals: EtfGroupRow | null;
   history_days: number; // 적재된 스냅샷 일수
+  /** 워크북이 결측 대신 0 을 준 기간 수익률을 몇 개나 걸렀는지(창 시작 전 상장 등). */
+  masked_returns: number;
 }
 export function getEtfClass(): Promise<EtfClassPayload> {
   return request<EtfClassPayload>("/api/v1/etf-class");
 }
 
-export interface EtfHistorySeries {
-  key: string;
-  label: string;
-  net: (number | null)[]; // 그날 개인순매수(억)
-  cum: number[]; // 적재 시작일부터의 누적(억)
-  ret: (number | null)[]; // 시총가중 등락률(소수)
-  total: number;
-}
-export interface EtfHistoryPayload {
-  generated_at: string;
-  axis: EtfAxisKey;
-  dates: string[];
-  series: EtfHistorySeries[];
-  note: string | null;
-}
-export function getEtfClassHistory(
-  axis: EtfAxisKey,
-  days = 180,
-): Promise<EtfHistoryPayload> {
-  return request<EtfHistoryPayload>(
-    `/api/v1/etf-class/history?axis=${axis}&days=${days}`,
-  );
-}
+/* 시점별 추이(`/api/v1/etf-class/history`)는 2026-09-01 사용자 지시로 **화면에서 뺐다**.
+   collector 쪽 적재와 엔드포인트는 남겨 뒀다 — 원천 워크북이 매일 덮어쓰기라 지금 안 쌓으면
+   그 날짜는 영영 복구할 수 없기 때문이다. 다시 그릴 일이 생기면 클라이언트만 붙이면 된다. */
 
-// ── [종목 모니터링 · 미국] 이슈 모니터 ──────────────────────────────────────
-// 같은 상류(어닝모니터)의 `stock_issue_alert` 가 KST 06:00 에 하루 한 번 굽는다:
-// Reddit 버즈 급등 종목을 시총 tier 별 임계로 걸러 주가를 붙이고, claude CLI 가 종목마다
-// 분석 3줄(핵심 이슈 / 구조적 영향 / 투자 시사점)·이슈 사유 태그·근거 출처를 만든다.
-//
-// ★★리포트는 **매일 나오지 않는다** — 필터를 통과한 종목이 없으면 그날은 아예 없다
-//   (2026-08-27~31 닷새 연속). 그래서 payload 는 '내용이 있는 가장 최근 리포트'(asOf·
-//   ageDays)와 '오늘 슬롯 상태'(todayStatus)를 **따로** 싣는다. 화면은 둘 다 밝혀야
-//   사용자가 며칠 전 것을 오늘 것으로 오해하지 않는다.
-export interface StockIssueAnalysis {
-  issue?: string; // 핵심 이슈 — 무슨 일이 있었나
-  structural?: string; // 구조적 영향 — 해자·구조에 무슨 뜻인가
-  implication?: string; // 투자 시사점
-}
-export interface StockIssueItem {
-  ticker: string;
+/* ── [국내상장 ETF] 신규상장 세 갈래 ────────────────────────────────────────
+   원천이 넷이고 주인이 달라 collector 가 가져다 붙인다(etf_new_listing.py 주석 참조).
+   ★DART 는 확정 상장일을 주지 않는다 — 예상 **범위**만 준다. 그래서 확정(`listing`,
+     KRX LIST_DD)과 예정(`upcoming`, DART est_listing)이 따로 온다. 섞으면 "오늘 상장"
+     이라 써 놓고 다음 주에 상장하는 일이 생긴다. */
+export interface EtfListingHolding {
   name: string;
-  description: string | null; // 기업 한 줄 설명
-  marketCap: string | null; // "$97.8B"
-  priceChange: number | null; // 일일 수익률 %
-  monthlyChange: number | null; // 최근 1개월 수익률 %
-  mentionChange: number | null; // Reddit 언급 변화 %
-  sentiment: number | null; // -1 ~ +1
-  weekly: boolean; // 주간 버즈 기준인가(아니면 24h)
-  triggeredOn: string | null; // 촉발일 YYYY-MM-DD 또는 "미확인"
-  tags: string[]; // 이슈 사유 (실적 이슈 · 공급망 이슈 …)
-  sourceUrl: string | null; // 근거 출처 (죽은 링크는 상류가 비워서 준다)
-  analysis: StockIssueAnalysis;
+  weight: number | null;
 }
-export interface StockIssuePayload {
-  generatedAt: string | null; // 리포트 파일 mtime
-  readAt: string;
-  available: boolean; // 리포트 폴더를 읽을 수 있었는가
-  asOf: string | null; // 표시 중인 리포트 날짜
-  ageDays: number | null; // 오늘로부터 며칠 전
-  collectedAt: string | null; // 상류가 수집한 시각
-  today: string; // KST 오늘
-  todayStatus: "ready" | "empty" | "pending";
-  todayMessage: string | null; // empty 일 때 상류가 남긴 한 줄
-  target: string | null; // "Reddit 버즈 급등 + 주가 급변동"
-  filter: string | null; // 필터 기준 한 줄
-  lookbackDays: number;
-  reportDir: string;
+/** 성적표 한 줄 — daily_analysis/YYYYMMDD_신규상장.txt. 금액 단위는 억원.
+ *  `ret` 는 txt 에 없어 워크북 등락률을 이름으로 붙인 값(소수)이다. */
+export interface EtfListingReportRow {
+  rank: number;
+  name: string;
+  /** 상장일 기준(txt). 아래 realtime 의 같은 이름 값과 **시점이 다르다**. */
+  trade_value: number | null;
+  net_buy: number | null;
+  ret: number | null;
+  /** 아래 셋은 서버가 이름으로 이어 붙인 KRX·CHECK 값. 못 찾으면 빈 값/null. */
+  ticker: string;
+  fee: number | null;
+  realtime: EtfListingRealtime | null;
+}
+/** CHECK 호가 envelope 의 newEtfs. ⚠️단위가 섞여 있다 —
+ *  trade_value·market_cap·indiv_net 은 **억원**, volume 은 **주**, change 는 **%**. */
+export interface EtfListingRealtime {
+  price: number | null;
+  change: number | null;
+  trade_value: number | null;
+  volume: number | null;
+  market_cap: number | null;
+  indiv_net: number | null;
+  listed: string;
+}
+export interface EtfListingRow {
+  name: string;
+  ticker: string;
+  isin: string;
+  company: string;
+  /** 총보수(%) — KRX ETF_TOT_FEE. 펀드공시모니터 캐시의 fee 는 비어 있어 KRX 에서 받는다. */
+  fee: number | null;
+  benchmark: string;
+  asset_class: string;
+  holdings: EtfListingHolding[];
+  /** CHECK 관심목록 밖의 종목은 null (실측: MIDAS 머니마켓액티브). */
+  realtime: EtfListingRealtime | null;
+}
+export interface EtfUpcomingRow {
+  rcept_no: string;
+  name: string;
+  company: string;
+  est_from: string;
+  est_to: string;
+  is_amend: boolean;
+  holdings: EtfListingHolding[];
+  holdings_src: string;
+}
+export interface EtfNewListingPayload {
+  generated_at: string;
+  today: string;
   note: string | null;
-  stocks: StockIssueItem[];
+  /** CHECK envelope 이 언제 것인가. 낡으면(5분 초과) 화면이 '실시간' 이라 쓰지 않는다 —
+   *  장 마감·CHECK PC 정지 뒤의 마지막 값을 실시간이라 보여주면 그 자체가 틀린 말이다. */
+  realtime_asof: string | null;
+  realtime_stale: boolean;
+  report: { date: string | null; is_today: boolean; rows: EtfListingReportRow[] };
+  listing: { date: string | null; is_today: boolean; rows: EtfListingRow[] };
+  upcoming: EtfUpcomingRow[];
 }
-export function getUsStockIssues(): Promise<StockIssuePayload> {
-  return request<StockIssuePayload>("/api/v1/earnings/us/issues");
+export function getEtfNewListing(): Promise<EtfNewListingPayload> {
+  return request<EtfNewListingPayload>("/api/v1/etf-class/new-listing");
 }

@@ -12,13 +12,21 @@ export function fmtEok(v: number | null | undefined, signed = true): string {
   const a = Math.abs(v);
   if (a >= 10000) return `${s}${(a / 10000).toFixed(1)}조`;
   if (a >= 1) return `${s}${Math.round(a).toLocaleString("en-US")}억`;
+  // ★표기 자릿수까지 내려오면 0 인 값은 부호를 떼어 "0" 으로 쓴다. `+0.0억` 은
+  //   "0 인데 들어왔다"는 모순된 인상을 주고, 축 눈금에서는 그냥 읽을 게 없다.
+  if (a < 0.05) return "0";
   return `${s}${a.toFixed(1)}억`;
 }
 
-/** 소수 수익률(0.0153) → "+1.53%". */
+/** 소수 수익률(0.0153) → "+1.53%".
+ *  ★반올림 결과가 0 이면 부호를 떼어 낸다 — `-0.0%` 는 읽는 사람을 멈칫하게 하는데
+ *    그 멈칫에 값어치가 없다(원래 값이 -0.0001 인지 -0.04 인지 어차피 안 보인다). */
 export function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return EMDASH;
-  return `${v > 0 ? "+" : ""}${(v * 100).toFixed(digits)}%`;
+  const p = v * 100;
+  const txt = p.toFixed(digits);
+  if (Number(txt) === 0) return `${(0).toFixed(digits)}%`;
+  return `${p > 0 ? "+" : ""}${txt}%`;
 }
 
 /** 이미 % 단위인 값(시총 대비 강도) → "+7.73%". */

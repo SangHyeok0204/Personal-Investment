@@ -17,9 +17,3 @@ router = APIRouter(prefix="/api/v1/earnings", tags=["earnings"])
 @router.get("/us")
 async def earnings_us(if_none_match: str | None = Header(default=None)) -> Response:
     return await _proxy_collector("/earnings", if_none_match)
-
-
-@router.get("/us/issues")
-async def stock_issues_us(if_none_match: str | None = Header(default=None)) -> Response:
-    """이슈 모니터 — 같은 상류(어닝모니터)의 stock_issue_alert 일간 리포트."""
-    return await _proxy_collector("/stock-issue", if_none_match)

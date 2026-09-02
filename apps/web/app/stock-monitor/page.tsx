@@ -16,12 +16,15 @@ import { PriceSummaryCard } from "@/components/stock-monitor/price-summary-card"
 import { EMDASH, moveColor } from "@/components/stock-monitor/format";
 import { cn } from "@/lib/utils";
 
-// [종목 모니터] — 시장 모니터링 하위(iNAV·WRAP·LP평가와 동급).
+// [자산 가격/수익률] — 시장 모니터링 하위(iNAV·WRAP·LP평가와 동급).
+// ★2026-09-01 개명(사용자 지시). 구 이름은 "종목 모니터" 였는데, 사이드바의
+//   [종목 모니터링](개별 종목)과 겹쳐 층위가 헷갈렸다. 경로·API·컴포넌트 폴더
+//   이름(stock-monitor)은 그대로다 — 화면 이름만 바뀌었다.
 //
 // 화면 규격(사용자 지시 2026-08-28 전면 개편): 가로6×세로2 = 12등분.
 //   · 1번째 칸 위·아래 2칸   = 지표 리스트 (자산군 탭 + layer1/layer2 계층 트리)
-//   · 2~5번째 칸 위·아래 8칸 = 지표 추이 차트 (누적수익률 / 롤링 3M)
-//                              ↔ 시장 성과표 (지표 리스트 헤더의 차트/표 토글로 교대)
+//   · 2~5번째 칸 위·아래 8칸 = **시장 성과표**(기본) → 행을 누르면 지표 추이 차트
+//                              → 차트 헤더의 [← 표] 로 복귀 (2026-09-02 토글 폐지)
 //   · 상단 6번째 1칸         = 시장 시그널 (2026-08-31 ETF 순매수에서 교체)
 //   · 아래 6번째 1칸         = 수익률 요약 표 (DtD~YtD + 롤링 1M·3M·6M·1Y)
 //
@@ -96,9 +99,19 @@ export default function StockMonitorPage() {
   const [priceCat, setPriceCat] = useState<PriceCatKey>("equity");
   // 선택은 지수 하나(leaf) 또는 묶음(group) 둘 중 하나다 — 차트가 모드를 갈라 쓴다.
   const [priceSel, setPriceSel] = useState<PriceSel | null>(null);
-  // 가운데 4칸이 무엇을 그리는가(사용자 지시 2026-09-01). 토글은 지표 리스트 헤더에 있다.
-  //   chart = 고른 지수·묶음의 시계열 / table = 자산군 전체 성과표(회의자료 리포트 형태)
-  const [priceView, setPriceView] = useState<PriceView>("chart");
+  // 가운데 4칸이 무엇을 그리는가.
+  // ★★2026-09-02 개편(사용자 지시): **표가 기본**이고 토글은 없앴다. 흐름이 한
+  //   방향이다 — 표에서 시장을 눌러 차트로 파고들고, 차트 헤더의 [← 표] 로 돌아온다.
+  //   종전 토글은 "보고 있는 것"과 "고른 것"이 따로 놀았다(표를 보다 차트로 갈면
+  //   아무것도 안 골라 빈 화면이 떴다).
+  const [priceView, setPriceView] = useState<PriceView>("table");
+
+  // 지수 하나(leaf)를 고르는 모든 경로가 차트를 연다 — 표의 행, 목록의 지수,
+  // 시장 시그널 카드. 묶음(group)은 표에 머무르며 그 행들을 물들이기만 한다.
+  const pickLeaf = (key: string) => {
+    setPriceSel({ kind: "leaf", key });
+    setPriceView("chart");
+  };
 
   // 지수 스트립 — 원천이 CHECK 에이전트의 INDEX_MONITOR.db 다.
   const { data: strip } = useQuery({
@@ -115,8 +128,8 @@ export default function StockMonitorPage() {
     //   flex 컬럼으로 잡는다 — 톱바는 제 높이만 먹고 나머지를 그리드가 가져간다.
     <div className="flex h-screen flex-col">
       <Topbar
-        title="종목 모니터"
-        subtitle="시장 모니터링 · 미장 실시간 체결 급등락 / 이상현상"
+        title="자산 가격/수익률"
+        subtitle="시장 모니터링 · 87개 시장 일별 가격/수익률 · 시장 시그널"
       />
 
       {/* ★PageContainer 를 쓰지 않는다. 기본형은 `mx-auto max-w-5xl px-8 py-10` 이라
@@ -154,20 +167,29 @@ export default function StockMonitorPage() {
             cat={priceCat}
             onCat={(c) => {
               setPriceCat(c);
-              setPriceSel(null); // 자산군이 바뀌면 선택을 비워 그 군의 첫 지수로 떨어뜨린다
+              setPriceSel(null);
+              // ★자산군을 바꾸면 표로 돌아온다. 차트에 남겨 두면 방금 비운 선택
+              //   때문에 빈 화면이 뜬다 — 자산군 탭은 "그 군의 표를 연다"는 뜻이다.
+              setPriceView("table");
             }}
             selected={priceSel}
-            onSelect={setPriceSel}
+            onSelect={(s) => {
+              setPriceSel(s);
+              // 지수 하나면 차트로, 묶음이면 표에 머문다.
+              if (s.kind === "leaf") setPriceView("chart");
+            }}
             view={priceView}
-            onView={setPriceView}
           />
           {/* ★같은 칸을 두 카드가 번갈아 쓴다(둘 다 col-span-4 · row-span-2).
-              표 모드에서는 자산군 탭이 곧 표라서 지수를 안 골라도 화면이 차 있고,
-              목록 클릭은 그 행을 물들이는 역할만 한다. */}
+              기본은 표 — 자산군 탭이 곧 표라 아무것도 안 골라도 화면이 차 있다. */}
           {priceView === "chart" ? (
-            <PriceMetricChartCard sel={priceSel} cat={priceCat} />
+            <PriceMetricChartCard
+              sel={priceSel}
+              cat={priceCat}
+              onBack={() => setPriceView("table")}
+            />
           ) : (
-            <PricePerfTableCard cat={priceCat} sel={priceSel} />
+            <PricePerfTableCard cat={priceCat} sel={priceSel} onPick={pickLeaf} />
           )}
 
           {/* 시장 시그널 — 상단 6번째 1칸. **ETF 순매수 모니터를 대체**(2026-08-31).

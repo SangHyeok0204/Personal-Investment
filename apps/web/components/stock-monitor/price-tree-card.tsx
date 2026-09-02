@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, LineChart, Table2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import {
   getPriceBoard,
   type PriceBoard,
@@ -37,11 +37,16 @@ export type PriceSel =
   | { kind: "leaf"; key: string }
   | { kind: "group"; l1: string; l2: string; label: string };
 
-// 오른쪽 큰 칸이 무엇을 그리는가(사용자 지시 2026-09-01). 토글은 이 카드의 자산군 탭
-// 오른쪽에 둔다 — 고르는 곳과 보는 곳이 떨어져 있으면 눈이 왕복한다.
-//  · chart = 지금까지의 동작. 지수·묶음을 누르면 오른쪽에 그 시계열이 그려진다.
-//  · table = 회의자료 리포트의 성과표. 자산군 탭이 곧 표이고, 목록 클릭은 그 행을
-//            **물들이기만** 한다(표가 이미 전 시장을 보여 주므로 그릴 것이 없다).
+// 오른쪽 큰 칸이 무엇을 그리는가.
+//  · table = **기본값**. 회의자료 리포트의 성과표. 자산군 탭이 곧 표다.
+//  · chart = 지수 **하나**를 고르면 열린다. 되돌아가는 길은 차트 헤더의 [← 표].
+//
+// ★★2026-09-02 개편(사용자 지시): 토글을 없앴다. 종전에는 두 화면을 아이콘으로
+//   갈아탔는데, 그러면 "무엇을 보고 있나"와 "무엇을 골랐나"가 따로 놀았다
+//   (표를 보다 차트로 갈면 아무것도 안 골라 빈 화면이 뜨는 식). 지금은 한 방향
+//   흐름이다 — **표에서 시장을 눌러 파고들고, [← 표] 로 되돌아온다.**
+// ★그래서 이 목록의 클릭도 갈린다: **지수(leaf)를 누르면 차트가 열리고**,
+//   묶음(node)을 누르면 표에서 그 행들이 물든다(표를 보고 있을 때).
 export type PriceView = "chart" | "table";
 
 function tone(v: number | null): string {
@@ -221,14 +226,12 @@ export function PriceTreeCard({
   selected,
   onSelect,
   view,
-  onView,
 }: {
   cat: PriceCatKey;
   onCat: (c: PriceCatKey) => void;
   selected: PriceSel | null;
   onSelect: (sel: PriceSel) => void;
   view: PriceView;
-  onView: (v: PriceView) => void;
 }) {
   const { data, isLoading, isError } = useQuery<PriceBoard>({
     queryKey: ["price-board", cat],
@@ -268,54 +271,25 @@ export function PriceTreeCard({
             </span>
           ) : null}
         </div>
-        {/* 자산군 탭 + (차트/표) 토글. 탭은 5개라 좁은 1칸에서 두 줄로 접히므로
-            토글은 같은 줄이 아니라 **오른쪽 끝에 세로 가운데**로 붙인다(items-center)
-            — 탭이 한 줄이든 두 줄이든 토글 위치가 흔들리지 않는다. */}
-        <div className="flex items-center gap-1.5">
-          <div className="flex min-w-0 flex-1 flex-wrap gap-0.5">
-            {cats.map((c) => (
-              <button
-                key={c.key}
-                type="button"
-                onClick={() => onCat(c.key)}
-                className={cn(
-                  "rounded px-2 py-[3px] text-[12.5px] font-bold transition-colors",
-                  cat === c.key
-                    ? "bg-white text-ge-header"
-                    : "bg-white/15 text-white/75 hover:bg-white/30",
-                )}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-          {/* 아이콘 두 개짜리 세그먼트. 글자를 안 쓰는 이유는 폭이다 — 1칸 헤더에
-              '차트'·'표' 를 적으면 자산군 탭이 세 줄로 밀린다. */}
-          <div className="flex shrink-0 overflow-hidden rounded border border-white/25">
-            {(
-              [
-                { v: "chart" as const, Icon: LineChart, title: "차트 — 고른 지수·묶음의 시계열" },
-                { v: "table" as const, Icon: Table2, title: "표 — 자산군 전체 성과표" },
-              ]
-            ).map(({ v, Icon, title }) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => onView(v)}
-                title={title}
-                aria-label={title}
-                aria-pressed={view === v}
-                className={cn(
-                  "flex h-[24px] w-[28px] items-center justify-center transition-colors",
-                  view === v
-                    ? "bg-white text-ge-header"
-                    : "bg-white/10 text-white/70 hover:bg-white/25",
-                )}
-              >
-                <Icon className="h-[15px] w-[15px]" strokeWidth={2.4} />
-              </button>
-            ))}
-          </div>
+        {/* ★2026-09-02 (차트/표) 토글 제거(사용자 지시). 표가 기본이고, 차트는
+            "지수 하나를 고르면 열리는 것" 이 됐다 — 토글로 갈아타는 게 아니라
+            표에서 파고들어 가는 흐름이다. 되돌아가는 길은 차트 헤더의 [← 표] 뿐이다. */}
+        <div className="flex flex-wrap gap-0.5">
+          {cats.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => onCat(c.key)}
+              className={cn(
+                "rounded px-2 py-[3px] text-[12.5px] font-bold transition-colors",
+                cat === c.key
+                  ? "bg-white text-ge-header"
+                  : "bg-white/15 text-white/75 hover:bg-white/30",
+              )}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
       </header>
 

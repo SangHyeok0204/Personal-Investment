@@ -111,11 +111,19 @@ TELEGRAM_NEWS_REFRESH_S = 120.0
 # 배선을 한국·중국 탭이 이어받을 것이라 주기는 처음부터 분 아래로 잡는다.
 EARNINGS_REFRESH_S = 30.0
 
-# [종목 모니터링 · 미국] 이슈 모니터 — stock_issue_alert 리포트 재판독 주기.
-# 상류는 KST 06:00 하루 한 번이라 어닝만큼 자주 볼 이유가 없다. 그래도 분 단위로 보는 건
-# '오늘 리포트가 몇 시에 뜨는지'가 들쭉날쭉해서다(06:07 ~ 07:43 실측). 한 사이클은
-# isfile 몇 번이고, 파싱은 파일이 바뀐 판에서만 돈다.
-STOCK_ISSUE_REFRESH_S = 120.0
+# [국내상장 ETF] 워크북 스냅샷 적재 주기.
+# 원천은 하루 한 번(장 마감 뒤 ~16시) 갱신되므로 자주 볼 이유가 없다. 그래도 30분인 건
+# 갱신 시각이 들쭉날쭉하고(8/31 16:14, 8/28 16:01 실측), 무엇보다 **그날치를 놓치면
+# 이력에 영영 구멍이 남기** 때문이다 — 워크북이 덮어쓰기라 나중에 주워 담을 수 없다.
+# 한 사이클은 이미 넣은 기준일이면 stat + sqlite 조회 한 번으로 끝난다.
+ETF_CLASS_INGEST_S = 1800.0
+
+# [국내상장 ETF · 신규상장] KRX 상장 목록 재조회 주기.
+# ★"자정마다 금일 신규상장을 판단" 하려면 자정 이후 **첫 조회가 새 목록**이어야 한다
+#   (사용자 지시 2026-09-02). 실제 재조회는 `refresh_daily` 가 날짜가 넘어갔을 때만
+#   하므로, 이 주기는 "자정을 얼마나 늦게 알아채는가" 의 상한이다. 30분이면 00:30 안에
+#   안다. 그 외 시간에는 stat 한 번 값이라 비용이 없다.
+ETF_NEW_LISTING_S = 1800.0
 
 # KIS realtime WebSocket lane.
 WS_ROTATION_S = 30.0          # legacy --rotation-seconds default (when >40 targets)
@@ -1197,23 +1205,68 @@ class Collector:
             if await self._sleep_or_stop(EARNINGS_REFRESH_S):
                 return
 
-    async def _stock_issue_loop(self) -> None:
-        """[종목 모니터링 · 미국] stock_issue_alert 일간 이슈 리포트 판독."""
-        from collector import stock_issue as _si
+    async def _etf_new_listing_loop(self) -> None:
+        """[국내상장 ETF · 신규상장] 날짜가 넘어가면 KRX 상장 목록을 다시 받는다.
 
-        issues = _si.instance()
-        if not issues.available():
-            # 어닝 루프와 같은 이유로 payload 는 한 장 만들어 둔다(503 은 오진을 부른다).
-            _log(f"stock-issue: {_si.ROOT} 마운트 없음 — 루프 미가동")
-            issues.refresh()
-            return
+        ★요청이 올 때만 받으면(read-through) 아무도 화면을 안 연 아침에는 "금일 신규상장"
+          판단이 아예 없다. 그렇다고 매 요청마다 받을 수도 없다 — 1,167행 조회에 로그인이
+          붙는다. 그래서 날짜가 바뀐 판에서만 한 번 받는다(`refresh_daily` 가 판단).
+        KRX 조회는 네트워크라 executor 로 내보낸다.
+        """
+        from collector import etf_new_listing as _nl
+
         loop = asyncio.get_running_loop()
         while not self.stop_event.is_set():
             try:
-                await loop.run_in_executor(None, issues.refresh)
-            except Exception as exc:  # noqa: BLE001 - 한 사이클 실패는 직전 판 유지
-                _log(f"stock-issue refresh failed: {exc!r}")
-            if await self._sleep_or_stop(STOCK_ISSUE_REFRESH_S):
+                got = await loop.run_in_executor(None, _nl.refresh_daily)
+                if got["refreshed"]:
+                    names = got["listed_today"] or []
+                    _log(
+                        f"etf-new-listing: KRX 목록 갱신 {got['day']} "
+                        f"({got['count']}종목) · 금일 상장 {len(names)}건"
+                        + (f" — {names}" if names else "")
+                    )
+                if got.get("error"):
+                    _log(f"etf-new-listing: {got['error']}")
+            except Exception as exc:  # noqa: BLE001 - 한 판 실패는 다음 판에 다시 시도
+                _log(f"etf-new-listing refresh failed: {exc!r}")
+            if await self._sleep_or_stop(ETF_NEW_LISTING_S):
+                return
+
+    async def _etf_class_loop(self) -> None:
+        """[국내상장 ETF] 워크북 스냅샷을 하루 한 번 이상 적재한다.
+
+        ★★엔드포인트에도 read-through 적재가 붙어 있지만, 그것만으로는 **아무도 페이지를
+          안 연 날이 이력에 구멍으로 남는다**. 이력이 이 화면의 절반(HISTORICAL)이라
+          사람의 방문에 기대면 안 된다. 그래서 여기서 주기적으로 한 번 더 판독한다.
+        기준일 멱등이라 몇 번을 돌려도 하루치는 한 번만 들어간다.
+        판독은 SMB 왕복이라 earnings·telegram 과 같이 executor 로 내보낸다.
+        """
+        from collector import etf_class as _ec
+
+        loop = asyncio.get_running_loop()
+        # 기동 때 한 번, 원천 폴더의 백업 워크북에서 과거 기준일을 복원한다. 이미 있는
+        # 날짜는 건너뛰므로 재기동해도 값이 흔들리지 않는다. 스키마가 다른 옛 사본은
+        # 판독이 거부하고, 그 이유를 로그로 남긴다(조용히 빠지면 이력이 왜 짧은지 모른다).
+        try:
+            seeded = await loop.run_in_executor(None, _ec.seed_archive)
+            if seeded["added"]:
+                _log(f"etf-class: 백업에서 복원 {seeded['added']} (보유 {seeded['days']}일)")
+            for why in seeded["skipped"]:
+                _log(f"etf-class: 백업 건너뜀 — {why}")
+        except Exception as exc:  # noqa: BLE001 - 복원 실패가 오늘치 적재를 막지 않는다
+            _log(f"etf-class seed_archive failed: {exc!r}")
+
+        while not self.stop_event.is_set():
+            try:
+                days = await loop.run_in_executor(None, _ec.ingest, None)
+                _log(f"etf-class: 스냅샷 적재 확인 (보유 {days}일)")
+            except FileNotFoundError:
+                # 마운트가 빠졌을 뿐이다 — 루프를 접지 않는다(마운트가 돌아오면 낫는다).
+                _log(f"etf-class: 원천 워크북 없음 — {_ec.SRC_PATH}")
+            except Exception as exc:  # noqa: BLE001 - 한 사이클 실패는 다음 판에 다시 시도
+                _log(f"etf-class ingest failed: {exc!r}")
+            if await self._sleep_or_stop(ETF_CLASS_INGEST_S):
                 return
 
     # ── FastAPI / uvicorn ──────────────────────────────────────────────
@@ -1709,21 +1762,6 @@ class Collector:
                 return Response(status_code=304, headers={"ETag": etag})
             return JSONResponse(payload, headers={"ETag": etag})
 
-        # ── [종목 모니터링 · 미국] 이슈 모니터 ────────────────────────────
-        # stock_issue_alert 가 KST 06:00 에 굽는 일간 리포트(analysis_data.json +
-        # 종목이슈분석.md)를 합쳐 낸다. 리포트가 없는 날이 이어지므로 '내용이 있는
-        # 가장 최근 것'을 내고 오늘 상태는 todayStatus 로 따로 알린다.
-        @app.get("/stock-issue")
-        def stock_issue(request: Request):
-            from collector import stock_issue as _si
-
-            payload, etag = _si.instance().serve()
-            if payload is None:
-                return JSONResponse({"detail": "not ready"}, status_code=503)
-            if request.headers.get("if-none-match") == etag:
-                return Response(status_code=304, headers={"ETag": etag})
-            return JSONResponse(payload, headers={"ETag": etag})
-
         # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────
         # S:\GE\Wonjae\07_회의자료\정기미팅 (:ro) 의 성과보고 JSON 을 요일 규칙
         # (월=위클리 / 화~금=데일리)에 맞춰 골라 서빙. 오늘 작성분이 없으면 pending.
@@ -1838,13 +1876,36 @@ class Collector:
                 _log(f"etf-class failed: {exc!r}")
                 return JSONResponse({"detail": "etf-class error"}, status_code=503)
 
+        # [국내상장 ETF] 신규상장 세 갈래 — 성적표(txt) · 금일 상장(KRX) · 상장 임박(DART).
+        #   원천이 넷이고 주인이 달라서 etf_new_listing 이 가져다 붙이기만 한다.
+        #   성적표 txt 에 수익률이 없어 워크북 등락률을 이름으로 붙여 넘긴다.
+        @app.get("/etf-new-listing")
+        def etf_new_listing():
+            from collector import etf_class as _ec
+            from collector import etf_new_listing as _nl
+
+            try:
+                rets = {}
+                try:
+                    snap = _ec._read_snapshot()
+                    rets = {e["name"]: e["chg"] for e in snap["etfs"] if e.get("name")}
+                except Exception:  # noqa: BLE001 - 워크북이 없어도 성적표는 나가야 한다
+                    rets = {}
+                return JSONResponse(_nl.build(state.hoga(), rets))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"etf-new-listing failed: {exc!r}")
+                return JSONResponse({"detail": "etf-new-listing error"}, status_code=503)
+
         @app.get("/etf-class/history")
-        def etf_class_history(axis: str = "mid", days: int = 180):
-            # 일별 시계열. 워크북에 과거가 없어 적재를 시작한 날부터 자란다.
+        def etf_class_history(
+            axis: str = "mid", metric: str = "net", period: str = "3m", days: int = 400
+        ):
+            # 시점별 추이. 관측이 성길 수 있어 "일별 누적"이 아니라 각 시점에서 본
+            # 그 기간의 값을 낸다(etf_class.build_history 주석 참조).
             from collector import etf_class as _ec
 
             try:
-                return JSONResponse(_ec.build_history(axis, days))
+                return JSONResponse(_ec.build_history(axis, metric, period, days))
             except Exception as exc:  # noqa: BLE001
                 _log(f"etf-class/history failed: {exc!r}")
                 return JSONResponse({"detail": "etf-class history error"}, status_code=503)
@@ -1927,7 +1988,8 @@ class Collector:
             asyncio.create_task(self._lp_eval_daily_loop()),
             asyncio.create_task(self._telegram_news_loop()),
             asyncio.create_task(self._earnings_loop()),
-            asyncio.create_task(self._stock_issue_loop()),
+            asyncio.create_task(self._etf_class_loop()),
+            asyncio.create_task(self._etf_new_listing_loop()),
             asyncio.create_task(self._serve_api()),
         ]
         _log(f"loops started (api on {API_HOST}:{API_PORT})")

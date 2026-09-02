@@ -127,3 +127,112 @@ def test_blank_classification_becomes_its_own_bucket_not_a_silent_drop():
     rows = ec._group(etfs, [ec._etf_metrics(e) for e in etfs], "mid")
     assert {r["label"] for r in rows} == {"미분류", "코스피"}
     assert sum(r["n"] for r in rows) == 2
+
+
+# ── 3) 워크북이 결측 대신 0 을 주는 자리 ────────────────────────────────────
+
+def test_period_return_before_listing_is_missing_not_zero():
+    """★워크북 CTD("RATE")는 창 시작에 종목이 없으면 0.0 을 준다 — 결측이 아니다.
+
+    그대로 두면 "이 분류는 3개월간 0% 였다"는 거짓 문장이 되고, 신규 대형 ETF 가 끼면
+    분류 평균을 통째로 0 쪽으로 끌어내린다(2026-08-19 '단일종목' 3개월 0.00% 가 그 사례).
+    """
+    # 창(2026-05-31~) 이후에 상장 → 그 창의 수익률은 없는 것이다
+    assert ec._valid_return(0.0, "2026-06-20", "2026-05-31") is None
+    # 창 전부터 있었는데 정확히 0.0 → 거래정지·데이터 공백. 실제 시세로는 안 나온다.
+    assert ec._valid_return(0.0, "2017-03-21", "2026-05-31") is None
+    # 값이 있으면 상장이 늦어도 그대로 쓴다? 아니다 — 창을 못 채운 수익률은 비교 불가.
+    assert ec._valid_return(0.05, "2026-06-20", "2026-05-31") is None
+    # 정상
+    assert ec._valid_return(0.05, "2020-01-01", "2026-05-31") == 0.05
+    # 창 날짜를 모르면 판단하지 않는다(값을 버리지 않는다)
+    assert ec._valid_return(0.05, "", None) == 0.05
+
+
+def test_masked_return_is_dropped_from_the_group_average_not_counted_as_zero():
+    etfs = [
+        _etf(code="OLD", mcap=1000.0, chg=0.10, mmt_3m=0.10, listed="2020-01-01"),
+        _etf(code="NEW", mcap=9000.0, chg=0.10, mmt_3m=None, listed="2026-08-01"),
+    ]
+    rows = ec._group(etfs, [ec._etf_metrics(e) for e in etfs], "mid")
+    (row,) = rows
+    # 9000 짜리가 0 으로 들어왔다면 0.01 이 됐을 자리
+    assert row["ret_cum"]["3m"] == pytest.approx(0.10)
+
+
+# ── 4) 분류 라벨 표기 접기 ──────────────────────────────────────────────────
+
+def test_labels_that_differ_only_in_spelling_are_one_group():
+    """`Top10`/`TOP10` 은 한 워크북 안에서도 둘 다 나온다(2026-08-31 실측)."""
+    etfs = [
+        _etf(code="A", small="Top10", mcap=1000.0, net=10.0),
+        _etf(code="B", small="TOP10", mcap=1000.0, net=20.0),
+        _etf(code="C", small="탑텐", mcap=1000.0, net=5.0),
+    ]
+    rows = ec._group(etfs, [ec._etf_metrics(e) for e in etfs], "small")
+    assert len(rows) == 2
+    top = [r for r in rows if r["n"] == 2][0]
+    assert top["net_cum"]["d"] == pytest.approx(30.0)
+    # 표시는 접은 결과가 아니라 처음 만난 원래 철자로
+    assert top["label"] == "Top10"
+
+
+def test_each_etf_carries_the_group_key_it_was_actually_put_in():
+    """화면은 이 키로 조인한다 — 접힌 쪽도 대표 철자 키를 가리켜야 상세 표가 안 빈다."""
+    etfs = [
+        _etf(code="A", small="Top10"),
+        _etf(code="B", small="TOP10"),
+    ]
+    metrics = [ec._etf_metrics(e) for e in etfs]
+    rows = ec._group(etfs, metrics, "small")
+    (row,) = rows
+    assert etfs[0]["_gkeys"]["small"] == row["key"]
+    assert etfs[1]["_gkeys"]["small"] == row["key"]
+
+
+# ── 5) 워크북 판독 캐시 ─────────────────────────────────────────────────────
+
+def test_read_cache_is_keyed_by_path_not_just_mtime_and_size(tmp_path, monkeypatch):
+    """★`seed_archive` 가 같은 함수로 백업본 여러 장을 훑는다. 캐시 키에 경로가 없으면
+    크기·시각이 우연히 겹친 다른 워크북의 스냅샷을 정본으로 내놓을 수 있고, 그러면
+    화면 전체가 조용히 다른 날을 말한다."""
+    calls = []
+
+    def fake_stat(path):
+        calls.append(path)
+        class S:  # 두 파일이 mtime·size 가 **같은** 상황을 일부러 만든다
+            st_mtime_ns = 1
+            st_size = 100
+        return S()
+
+    monkeypatch.setattr(ec.os, "stat", fake_stat)
+    ec._CACHE["key"] = (os.path.abspath("/a/first.xlsm"), 1, 100)
+    ec._CACHE["snap"] = {"asof": "2026-01-01", "etfs": []}
+
+    # 같은 경로 → 캐시 적중
+    assert ec._read_snapshot("/a/first.xlsm")["asof"] == "2026-01-01"
+
+    # 다른 경로인데 mtime·size 가 같다 → **적중하면 안 된다**. 실제 판독으로 넘어가
+    # 파일이 없어 터지는 것이 정답이다(엉뚱한 스냅샷을 내놓는 것보다 낫다).
+    with pytest.raises(Exception):
+        ec._read_snapshot("/a/second.xlsm")
+
+    ec._CACHE["key"] = None
+    ec._CACHE["snap"] = None
+
+
+# ── 6) 일평균 환산 분모 ─────────────────────────────────────────────────────
+
+def test_weekday_count_excludes_the_window_start_and_weekends():
+    """FF 창의 시작일은 기준선이라 합계에 안 들어간다 — 분모에서도 빼야 한다.
+
+    실측: 1주 창 08/24(월)~08/31(월) 의 daily 리포트는 08/25·26·27·28·31 다섯 장.
+    """
+    assert ec._weekdays_between("2026-08-24", "2026-08-31") == 5
+    # 1개월 창 07/31(금)~08/31(월) → 08/03 ~ 08/31 의 평일
+    assert ec._weekdays_between("2026-07-31", "2026-08-31") == 21
+    # 주말만 걸친 창
+    assert ec._weekdays_between("2026-08-28", "2026-08-31") == 1
+    # 날짜가 없거나 뒤집히면 0 (호출부가 max(...,1) 로 막는다)
+    assert ec._weekdays_between(None, "2026-08-31") == 0
+    assert ec._weekdays_between("2026-08-31", "2026-08-24") == 0
