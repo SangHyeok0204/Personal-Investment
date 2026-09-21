@@ -3167,6 +3167,33 @@ export function importHoldingsToWatchlist(): Promise<WatchlistList> {
   });
 }
 
+// ── 시장 모니터 ──────────────────────────────────────────────────────────────
+
+export interface MarketRow {
+  symbol: string;
+  name: string;
+  category: string;
+  /** price(비율) · rate(bp) · level(포인트) — 단위가 다르다. */
+  kind: "price" | "rate" | "level";
+  note: string | null;
+  price: string | null;
+  currency: string | null;
+  as_of: string | null;
+  changes: Record<string, string | null>;
+}
+
+export interface MarketMonitor {
+  rows: MarketRow[];
+  categories: string[];
+  periods: string[];
+  missing: string[];
+  missing_sources: string[];
+}
+
+export function getMarketMonitor(): Promise<MarketMonitor> {
+  return request<MarketMonitor>("/api/v1/market/monitor");
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

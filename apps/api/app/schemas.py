@@ -634,6 +634,38 @@ class WatchlistListOut(BaseModel):
     fetched: int
 
 
+# ── 시장 모니터 ──────────────────────────────────────────────────────────────
+
+class MarketRowOut(BaseModel):
+    """시장 지표 한 줄.
+
+    ⚠️`changes` 의 단위는 `kind` 에 따라 다르다.
+      · price → **비율**(0.0123 = +1.23%)
+      · rate  → **bp**(10.0 = +10bp). 금리 4.96 → 5.06 은 "+2%" 가 아니다.
+      화면은 kind 를 보고 단위를 붙여야 한다.
+    """
+
+    symbol: str
+    name: str
+    category: str
+    kind: str
+    note: str | None
+    price: Decimal | None
+    currency: str | None
+    as_of: date | None
+    changes: dict[str, Decimal | None]
+
+
+class MarketMonitorOut(BaseModel):
+    rows: list[MarketRowOut]
+    categories: list[str]
+    periods: list[str]
+    # 이번 조회에서 못 받은 지표. 숨기지 않는다.
+    missing: list[str]
+    # 아예 출처가 없어 비워 둔 항목(블룸버그 전용 등). 화면 각주로 띄운다.
+    missing_sources: list[str]
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

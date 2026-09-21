@@ -157,14 +157,23 @@ export const navItems: NavItem[] = [
       {
         label: "관심종목",
         href: "/watchlist",
-        status: "placeholder",
-        hint: "내가 보는 종목 보드",
+        status: "live",
+        hint: "실시간 시세 · 목표가 · 52주 위치",
       },
       {
-        label: "자산 가격/수익률",
-        href: "/stock-monitor",
+        label: "시장 지표",
+        href: "/market",
         status: "live",
-        hint: "시장·지수 가격과 수익률",
+        hint: "지수 · 금리 · 환율 · 원자재 · 크립토",
+      },
+      {
+        // ⚠️원본 GE 의 collector(KOSPI200 분봉 DB 등)를 프록시하는 화면이다.
+        //   이 환경에는 collector 가 없어서 **503** 이다. "live" 로 두면 메뉴가
+        //   거짓말을 한다 — 실제 상태로 내린다.
+        label: "자산 가격/수익률 (구)",
+        href: "/stock-monitor",
+        status: "placeholder",
+        hint: "collector 필요 — 현재 미가동",
       },
       { label: "매크로", href: "/macro", status: "live", hint: "금리 · 환율 · 원자재" },
       { label: "AI Key Data", href: "/ai-key-data", status: "live" },
