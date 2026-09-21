@@ -1272,3 +1272,62 @@ class TaxOut(BaseModel):
     years: list[int]
     current: TaxYearOut | None
     notes: list[str]
+
+
+# ── 공시 (SEC EDGAR) ─────────────────────────────────────────────────────────
+
+class FilingOut(BaseModel):
+    """공시 한 건.
+
+    ⚠️`items` 는 8-K 에만 있다. "8-K 2.02" 는 아무 뜻도 전달하지 못하므로
+      `item_labels` 로 사람 말을 같이 보낸다("실적 발표").
+    """
+
+    ticker: str
+    company: str | None
+    form: str
+    form_label: str
+    category: str
+    filed_date: date
+    report_date: date | None
+    items: list[str]
+    item_labels: list[str]
+    url: str
+
+
+class FilingTickerOut(BaseModel):
+    """종목별 조회 결과.
+
+    ⚠️`ok=False`(못 받았다)와 `filings=[]`(받았는데 없다)는 **다른 상태**다.
+      ETF 는 실패가 아니라 개별 공시 대상이 아니다 — `reason` 으로 구분한다.
+    """
+
+    ticker: str
+    name: str | None
+    cik: str | None
+    ok: bool
+    reason: str | None
+    filing_count: int
+    insider_count: int
+    #: 상한에 걸려 잘렸는지. 잘렸으면 화면이 그 사실을 말해야 한다.
+    truncated: bool
+
+
+class FilingsOut(BaseModel):
+    """보유 종목 공시.
+
+    ⚠️`source_ok=False` 면 화면이 "공시가 없습니다"라고 말하면 안 된다.
+    """
+
+    filings: list[FilingOut]
+    tickers: list[FilingTickerOut]
+    categories: list[str]
+    window_days: int
+    insider_window_days: int
+    #: 내부자 서식(3/4/5/144)은 개별로 싣지 않고 센다. 실측 NVDA 최근 1001건 중
+    #: 803건이 임원 서류라, 나열하면 나머지가 안 보인다.
+    insider_total: int
+    covered_count: int
+    not_covered_count: int
+    source_ok: bool
+    user_agent_is_default: bool

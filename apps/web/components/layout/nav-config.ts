@@ -214,7 +214,13 @@ export const navItems: NavItem[] = [
         hint: "반도체 · AI 개념 정리",
       },
       { label: "미국 어닝/이슈", href: "/stock/us", status: "live" },
-      { label: "공시", status: "planned", hint: "DART · SEC" },
+      {
+        label: "공시",
+        href: "/research/filings",
+        status: "live",
+        // DART 는 넣지 않았다 — 보유 17종목이 전부 미국 주식이라 대상이 없다.
+        hint: "보유 종목 SEC 공시 · 8-K 항목별",
+      },
     ],
   },
   {

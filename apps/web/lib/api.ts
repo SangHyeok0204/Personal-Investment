@@ -3619,6 +3619,55 @@ export function getTradingCosts(
   );
 }
 
+// ── 공시 (SEC EDGAR) ─────────────────────────────────────────────────────────
+// ★키가 필요 없다. ⚠️내부자 서식(3/4/5/144)은 **건수로만** 온다 — 실측 NVDA
+//   최근 1001건 중 803건이 임원 서류라 나열하면 나머지가 안 보인다.
+
+export interface Filing {
+  ticker: string;
+  company: string | null;
+  form: string;
+  form_label: string;
+  category: string;
+  filed_date: string;
+  report_date: string | null;
+  /** 8-K 항목 코드. 그 자체로는 뜻이 없다. */
+  items: string[];
+  /** 항목 코드의 한국어 이름("2.02" → "실적 발표"). */
+  item_labels: string[];
+  url: string;
+}
+
+export interface FilingTicker {
+  ticker: string;
+  name: string | null;
+  cik: string | null;
+  /** ⚠️`ok=false`(못 받았다)와 `filing_count=0`(없다)은 다른 상태다. */
+  ok: boolean;
+  reason: string | null;
+  filing_count: number;
+  insider_count: number;
+  truncated: boolean;
+}
+
+export interface Filings {
+  filings: Filing[];
+  tickers: FilingTicker[];
+  categories: string[];
+  window_days: number;
+  insider_window_days: number;
+  insider_total: number;
+  covered_count: number;
+  not_covered_count: number;
+  /** false 면 화면이 "공시가 없습니다"라고 말하면 안 된다. */
+  source_ok: boolean;
+  user_agent_is_default: boolean;
+}
+
+export function getFilings(accountId?: string | null): Promise<Filings> {
+  return request<Filings>(`/api/v1/portfolio/filings${accountQuery(accountId)}`);
+}
+
 // ── 세금 (해외주식 양도소득 · 배당소득) ──────────────────────────────────────
 // ⚠️**신고 자료가 아니다.** 그리고 여기서만 환차를 양도차익에 더한다 —
 //   세법의 양도차익은 원화 기준 양도가액 − 취득가액이라 환율이 과세 대상이다.

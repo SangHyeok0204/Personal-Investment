@@ -152,7 +152,8 @@ http://localhost:8000/docs (Swagger UI)
 # API — ★포트는 8000 을 쓴다
 cd apps/api
 DATABASE_URL="postgresql+psycopg://<user>@localhost:5432/investment" \
-  ../../.venv/bin/python -m uvicorn app.main:app --port 8000 --reload
+  ../../.venv/bin/python -m uvicorn app.main:app --port 8000 --reload \
+    --reload-dir . --reload-dir ../worker
 
 # 웹 (별도 터미널)
 cd apps/web && npm run dev
@@ -163,6 +164,12 @@ cd apps/web && npm run dev
 포트를 바꾸면 dev 는 환경변수로 넘길 수 있어도 프로덕션 빌드는 조용히 8000 을
 가리킨 채 나온다(실제로 그런 번들이 나왔다).
 ⚠️`8010` 은 `tools/perf-brief-runner` 가 쓰는 포트다. API 를 거기 올리면 충돌한다.
+
+⚠️**`--reload-dir ../worker` 를 빼지 말 것.** API 는 시세·공시 소스를
+`apps/worker/prices/` 에서 import 하는데, `--reload` 는 기본적으로 실행 디렉터리
+(`apps/api`)만 감시한다. 그래서 worker 쪽을 고치면 **코드는 바뀌었는데 API 는
+옛날 것을 들고 있다.** 세 번 겪고 나서야 원인을 찾았다 — 증상이 "고친 게 반영이
+안 된다"라서 캐시나 빌드를 먼저 의심하게 된다.
 
 ⚠️**앱은 `investment`, 테스트는 `investment_test` 다. 절대 같은 DB 를 쓰지 말 것.**
 pytest 의 `db` 픽스처는 매 테스트마다 `TRUNCATE ... CASCADE` 를 돈다. 앱을

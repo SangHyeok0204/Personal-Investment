@@ -12,8 +12,12 @@
 곱하지 않는다 — 수집 시점 환율과 조회 시점 환율이 다르면 종목별 수치와 합계가
 어긋나고, 그 차이는 화면에서 "합이 안 맞는다"로 보인다.
 """
+import sys
+import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
@@ -25,6 +29,12 @@ from app.core import position_timeline as pt
 from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
+
+# 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
+_WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
+if str(_WORKER_DIR) not in sys.path:
+    sys.path.insert(0, str(_WORKER_DIR))
+from prices import filings as filings_source  # noqa: E402
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
@@ -66,6 +76,9 @@ from app.schemas import (
     InclusionWeightPointOut,
     LiveQuoteOut,
     LiveQuotesOut,
+    FilingOut,
+    FilingTickerOut,
+    FilingsOut,
     MonthlyCashflowOut,
     MonthlyCashflowRowOut,
     TaxOut,
@@ -2436,3 +2449,142 @@ def get_tax(
         ),
         notes=_TAX_NOTES,
     )
+
+
+# ── 공시 (SEC EDGAR) ─────────────────────────────────────────────────────────
+
+# 공시는 초 단위로 바뀌지 않고, 보유 종목 수만큼 SEC 를 두드려야 한다. 1시간 캐시.
+FILINGS_TTL_SECONDS = 3600.0
+FILINGS_WINDOW_DAYS = 180
+FILINGS_INSIDER_WINDOW_DAYS = 90
+
+_filings_lock = threading.Lock()
+_filings_cache: dict[tuple[str, ...], tuple[float, FilingsOut]] = {}
+
+
+def _build_filings(tickers: list[str], names: dict[str, str]) -> FilingsOut:
+    results = filings_source.fetch_filings(
+        tickers,
+        days=FILINGS_WINDOW_DAYS,
+        insider_days=FILINGS_INSIDER_WINDOW_DAYS,
+    )
+
+    rows: list[FilingOut] = []
+    summary: list[FilingTickerOut] = []
+    for r in results:
+        for f in r.filings:
+            rows.append(
+                FilingOut(
+                    ticker=f.ticker,
+                    # 화면에 쓰는 이름은 우리 DB 의 한글 종목명이다. SEC 의 영문
+                    # 법인명은 상세에서만 쓴다("NVIDIA CORP"보다 "엔비디아"가 읽힌다).
+                    company=names.get(f.ticker) or f.company,
+                    form=f.form,
+                    form_label=f.form_label,
+                    category=f.category,
+                    filed_date=f.filed_date,
+                    report_date=f.report_date,
+                    items=f.items,
+                    item_labels=f.item_labels,
+                    url=f.url,
+                )
+            )
+        summary.append(
+            FilingTickerOut(
+                ticker=r.ticker,
+                name=names.get(r.ticker),
+                cik=r.cik,
+                ok=r.ok,
+                reason=r.reason,
+                filing_count=len(r.filings),
+                insider_count=r.insider_count,
+                truncated=r.truncated,
+            )
+        )
+
+    rows.sort(key=lambda f: (f.filed_date, f.ticker), reverse=True)
+    summary.sort(key=lambda t: (-t.filing_count, t.ticker))
+
+    # ⚠️'실패'와 '대상 아님'을 같이 세지 않는다. covered 는 실제로 조회된 종목이다.
+    covered = [t for t in summary if t.ok and t.cik is not None]
+    not_covered = [t for t in summary if t.cik is None]
+
+    return FilingsOut(
+        filings=rows,
+        tickers=summary,
+        # 표시 순서를 서버가 정한다 — 읽을 순서대로다(실적 → 수시 → 지분 → 기타).
+        categories=[
+            filings_source.CATEGORY_RESULTS,
+            filings_source.CATEGORY_EVENT,
+            filings_source.CATEGORY_OWNERSHIP,
+            filings_source.CATEGORY_OTHER,
+        ],
+        window_days=FILINGS_WINDOW_DAYS,
+        insider_window_days=FILINGS_INSIDER_WINDOW_DAYS,
+        insider_total=sum(t.insider_count for t in summary),
+        covered_count=len(covered),
+        not_covered_count=len(not_covered),
+        # CIK 를 하나도 못 받았으면 SEC 자체가 안 된 것이다 — "공시 없음"이 아니다.
+        source_ok=any(t.cik is not None for t in summary) if summary else False,
+        user_agent_is_default=filings_source.user_agent()
+        == filings_source._DEFAULT_UA,
+    )
+
+
+@router.get("/filings", response_model=FilingsOut)
+def get_filings(
+    account_id: uuid.UUID | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> FilingsOut:
+    """보유 종목의 SEC 공시 — 무엇을 신고했나.
+
+    ★**키가 필요 없다.** 다만 SEC 는 연락처가 담긴 User-Agent 를 요구한다
+      (`www.sec.gov` 는 일반 UA 에 403). `.env` 의 `SEC_USER_AGENT` 로 바꿀 수
+      있고, 안 넣으면 앱 이름만으로 요청한다 — 사용자 이메일을 말없이 보내지 않는다.
+
+    ★**내부자 서식을 나열하지 않는다.** 실측(NVDA 최근 1001건): Form 4 가 556건,
+      Form 144 가 247건으로 803건이 임원 서류다. 읽을 만한 건 8-K 62 · 10-Q 19 ·
+      10-K 6 뿐이다. 그대로 쏟으면 중요한 공시가 묻히므로 **건수로만** 낸다.
+
+    ⚠️ETF 는 SEC 개별 공시 대상이 **아니다**(신탁 단위로 낸다). 보유 17종목 중
+      8개가 ETF 라, 이걸 "공시 없음"으로 적으면 거짓말이 된다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return FilingsOut(
+            filings=[], tickers=[], categories=[], window_days=FILINGS_WINDOW_DAYS,
+            insider_window_days=FILINGS_INSIDER_WINDOW_DAYS, insider_total=0,
+            covered_count=0, not_covered_count=0, source_ok=False,
+            user_agent_is_default=filings_source.user_agent()
+            == filings_source._DEFAULT_UA,
+        )
+
+    holdings = db.execute(
+        select(Asset.ticker, Asset.name)
+        .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+        .distinct()
+    ).all()
+    tickers = sorted({t for t, _ in holdings if t})
+    names = {t: n for t, n in holdings if t}
+    if not tickers:
+        return FilingsOut(
+            filings=[], tickers=[], categories=[], window_days=FILINGS_WINDOW_DAYS,
+            insider_window_days=FILINGS_INSIDER_WINDOW_DAYS, insider_total=0,
+            covered_count=0, not_covered_count=0, source_ok=False,
+            user_agent_is_default=filings_source.user_agent()
+            == filings_source._DEFAULT_UA,
+        )
+
+    key = tuple(tickers)
+    now = time.monotonic()
+    with _filings_lock:
+        hit = _filings_cache.get(key)
+        if not refresh and hit is not None and now - hit[0] < FILINGS_TTL_SECONDS:
+            return hit[1]
+
+    built = _build_filings(tickers, names)
+    with _filings_lock:
+        _filings_cache[key] = (time.monotonic(), built)
+    return built
