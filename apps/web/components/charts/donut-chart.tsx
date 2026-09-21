@@ -100,7 +100,8 @@ export function DonutChart({
   const legend = drawn.slice(0, maxLegend);
 
   return (
-    <div className="flex flex-wrap items-center gap-5">
+    // 좁으면 범례가 도넛 아래로 내려간다(@container 없이 flex-wrap 으로).
+    <div className="flex flex-wrap items-center justify-center gap-4">
       <div className="relative shrink-0" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           {drawn.map((s) => (
@@ -150,7 +151,7 @@ export function DonutChart({
         </div>
       </div>
 
-      <ul className="min-w-[180px] flex-1 space-y-1.5">
+      <ul className="min-w-[150px] flex-1 space-y-1">
         {legend.map((s) => (
           <li key={s.key}>
             <button
@@ -159,7 +160,7 @@ export function DonutChart({
               onMouseEnter={() => setHover(s.key)}
               onMouseLeave={() => setHover(null)}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                "flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors",
                 onSliceClick ? "hover:bg-canvas-soft" : "cursor-default",
                 hover === s.key && "bg-canvas-soft",
               )}
@@ -168,15 +169,15 @@ export function DonutChart({
                 className="h-2.5 w-2.5 shrink-0 rounded-full"
                 style={{ background: s.color }}
               />
-              <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-ge-navy">
+              <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-ge-navy">
                 {s.label}
               </span>
-              <span className="shrink-0 text-[12px] font-bold tabular-nums text-ink-secondary">
+              <span className="shrink-0 text-[11px] font-bold tabular-nums text-ink-secondary">
                 {s.pct.toFixed(1)}%
               </span>
             </button>
             {s.caption && (
-              <span className="ml-[30px] block text-[10px] font-semibold text-ink-faint">
+              <span className="ml-[26px] block text-[10px] font-semibold text-ink-muted">
                 {s.caption}
               </span>
             )}

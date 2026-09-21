@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { PlugZap } from "lucide-react";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +101,7 @@ export function StatTile({
           : undefined
       }
       className={cn(
-        "group relative rounded-2xl border border-hairline bg-canvas p-4 shadow-card",
+        "group relative rounded-2xl border border-hairline bg-canvas px-3.5 py-3 shadow-card",
         interactive &&
           "cursor-pointer transition-all hover:border-ge-point/40 hover:shadow-panel focus:outline-none focus-visible:border-ge-point",
       )}
@@ -110,17 +111,23 @@ export function StatTile({
       </div>
       <div
         className={cn(
-          "mt-1.5 text-[24px] font-extrabold tabular-nums leading-none",
+          "mt-1 text-[22px] font-extrabold",
           // 국내 관행: 상승/이익 = 빨강, 하락/손실 = 파랑.
           resolved === "up" && "text-bid",
           resolved === "down" && "text-ask",
           (resolved == null || resolved === "neutral") && "text-ge-navy",
         )}
       >
-        {shown}
+        {/* 값이 바뀌면 자릿수가 굴러 올라간다(5초 갱신이 눈에 보이게).
+            "…"·"—" 처럼 굴릴 자리가 없는 값은 그냥 그린다. */}
+        {shown === "…" || shown === "—" ? (
+          <span className="tabular-nums leading-none">{shown}</span>
+        ) : (
+          <AnimatedNumber value={shown} lineHeight={26} />
+        )}
       </div>
       {hint && (
-        <div className="mt-1.5 text-[11px] font-medium text-ink-faint">{hint}</div>
+        <div className="mt-1 truncate text-[11px] font-medium text-ink-muted">{hint}</div>
       )}
       {/* 누를 수 있다는 걸 호버에서만 알린다 — 평소엔 숫자가 주인공이다. */}
       {interactive && actionHint && (
@@ -144,21 +151,27 @@ export function StubCard({
   subtitle,
   children,
   className,
+  /** 헤더 오른쪽에 붙는 컨트롤(축 전환 칩 등). 제목 줄을 낭비하지 않는다. */
+  action,
+  /** 본문이 넘치면 카드 안에서만 스크롤한다(페이지는 그대로). */
+  scrollBody = false,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   className?: string;
+  action?: ReactNode;
+  scrollBody?: boolean;
 }) {
   return (
     <section
       className={cn(
-        "flex flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card",
+        "flex min-h-0 flex-col overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card",
         className,
       )}
     >
-      <header className="flex items-baseline gap-2 bg-ge-header px-4 py-2.5">
-        <h2 className="text-[13px] font-extrabold tracking-tight text-white">
+      <header className="flex shrink-0 items-center gap-2 bg-ge-header px-4 py-2">
+        <h2 className="shrink-0 text-[13px] font-extrabold tracking-tight text-white">
           {title}
         </h2>
         {subtitle && (
@@ -166,8 +179,16 @@ export function StubCard({
             {subtitle}
           </span>
         )}
+        {action && <div className="ml-auto shrink-0">{action}</div>}
       </header>
-      <div className="flex-1 p-4">{children}</div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 p-3.5",
+          scrollBody && "overflow-y-auto",
+        )}
+      >
+        {children}
+      </div>
     </section>
   );
 }

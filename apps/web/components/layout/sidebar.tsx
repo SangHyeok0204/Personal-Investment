@@ -148,18 +148,15 @@ export function Sidebar() {
                 </button>
               )}
 
-              {/* 버튼 또는 이 패널에 커서/포커스가 있으면 열리고(스르륵 슬라이드),
-                  둘 다 벗어나면 즉시 닫힌다(닫힘 duration-0). pl-2 가 버튼↔패널 hover 간격을 잇는다. */}
-              {item.children && (
-                <div
-                  className={cn(
-                    "absolute left-full top-0 z-50 pl-2 transition-all ease-out",
-                    open
-                      ? "pointer-events-auto translate-x-0 opacity-100 duration-200"
-                      : "pointer-events-none -translate-x-2 opacity-0 duration-0",
-                  )}
-                >
-                  <div className="min-w-[214px] rounded-2xl bg-white p-3 shadow-[0_16px_36px_rgba(36,59,94,0.26)] ring-1 ring-hairline">
+              {/* 버튼 또는 이 패널에 커서/포커스가 있으면 열린다. pl-2 가 버튼↔패널 hover 간격을 잇는다.
+                  ⚠️**열렸을 때만 렌더한다.** 항상 그려 두고 opacity-0 으로 숨기면,
+                    `absolute` 라도 조상(nav)의 스크롤 영역은 그대로 늘어난다.
+                    실제로 nav 내용은 522px 인데 scrollHeight 가 747px 이 되어
+                    보이지도 않는 메뉴 때문에 페이지에 세로 스크롤이 생겼었다
+                    (2026-09-21). 등장 효과는 `.flyout-enter` keyframe 이 대신한다. */}
+              {item.children && open && (
+                <div className="absolute left-full top-0 z-50 pl-2">
+                  <div className="flyout-enter min-w-[214px] rounded-2xl bg-white p-3 shadow-[0_16px_36px_rgba(36,59,94,0.26)] ring-1 ring-hairline">
                     <div className="mb-1.5 flex items-center gap-2 px-2 pb-1.5">
                       <Icon className="h-4 w-4 text-ge-point" strokeWidth={2.6} />
                       <span className="text-[11px] font-bold tracking-wide text-ge-point">

@@ -88,3 +88,29 @@
     opacity: 0.5;
   }
 }
+
+/* ── 사이드바 플라이아웃 진입 애니메이션 ──────────────────────────────────────
+   ★플라이아웃은 **열렸을 때만 DOM 에 있다**(2026-09-21). 예전에는 항상 그려 두고
+     opacity-0 으로 숨겼는데, `absolute` 요소는 숨겨져 있어도 조상의 스크롤 영역을
+     늘린다 — nav 실제 내용이 522px 인데 scrollHeight 가 747px 이 되어
+     **보이지도 않는 메뉴 때문에 페이지 전체에 세로 스크롤이 생겼다**.
+     조건부 렌더로 바꾸면 그 문제가 사라지는 대신 CSS transition 이 안 걸리므로,
+     여기 keyframe 으로 등장 효과를 대신한다(닫힘은 원래도 즉시였다). */
+.flyout-enter {
+  animation: flyout-enter 0.18s ease-out;
+}
+@keyframes flyout-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flyout-enter {
+    animation: none;
+  }
+}
