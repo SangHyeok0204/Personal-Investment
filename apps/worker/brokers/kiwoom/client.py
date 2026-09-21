@@ -17,6 +17,12 @@ ACNT_PATH = "/api/dostk/acnt"  # 국내 계좌계 공통 경로 (reference §4.1
 _CONTENT_TYPE = "application/json;charset=UTF-8"
 _MIN_INTERVAL_SECONDS = 0.25  # >=250ms between TR calls (contract §4)
 _BACKOFF_SECONDS = (1, 2, 4)  # retry x3 on 429/return_code=5 (contract §4)
+# ★2026-09-21: 전송 계층 재시도. 호출이 많아지면(배당은 종목별 조회라 수십 번)
+#   서버가 keep-alive 커넥션을 끊거나 응답이 늦어 httpx 가 예외를 던진다
+#   (실측: RemoteProtocolError "Server disconnected", ReadTimeout).
+#   재시도가 없으면 **한 번만 끊겨도 동기화 전체가 죽는다.** 멱등한 조회라
+#   다시 부르는 데 부작용이 없다.
+_TRANSPORT_BACKOFF_SECONDS = (0.5, 2, 5)
 _RATE_LIMIT_RETURN_CODE = 5  # reference §3.4 [TV]
 _MAX_PAGES = 50  # safety cap for the paging loop
 
@@ -93,9 +99,21 @@ class KiwoomClient:
             "Content-Type": _CONTENT_TYPE,
         }
         attempt = 0
+        transport_attempt = 0
         while True:
             self._throttle()
-            response = self._http.post(url, headers=headers, json=body)
+            try:
+                response = self._http.post(url, headers=headers, json=body)
+            except httpx.TransportError as exc:
+                # 커넥션이 끊겼거나 응답이 늦었다. 조회는 멱등하니 다시 부른다.
+                if transport_attempt >= len(_TRANSPORT_BACKOFF_SECONDS):
+                    raise KiwoomApiError(
+                        -1,
+                        f"{api_id}: 전송 실패로 재시도 소진 ({type(exc).__name__})",
+                    ) from exc
+                self._sleep(_TRANSPORT_BACKOFF_SECONDS[transport_attempt])
+                transport_attempt += 1
+                continue
 
             if response.status_code == 429:
                 if attempt < len(_BACKOFF_SECONDS):

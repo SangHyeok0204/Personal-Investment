@@ -2972,3 +2972,41 @@ export function registerCredentials(body: {
 export function runBrokerageSync(): Promise<SyncResult> {
   return request<SyncResult>("/api/v1/brokerage/sync", { method: "POST" });
 }
+
+// ── 배당 ────────────────────────────────────────────────────────────────────
+// 금액은 증권사가 준 **원화**다. 이 TR(usa21730)은 외화 원금액을 주지 않는다.
+
+export interface DividendItem {
+  id: string;
+  pay_date: string;
+  ticker: string;
+  asset_name: string | null;
+  sector: string | null;
+  amount_krw: string;
+  currency: string;
+}
+
+export interface DividendList {
+  items: DividendItem[];
+  total: number;
+  total_amount_krw: string | null;
+  monthly: { month: string; amount_krw: string; count: number }[];
+  by_ticker: {
+    ticker: string;
+    asset_name: string | null;
+    amount_krw: string;
+    count: number;
+  }[];
+  first_pay_date: string | null;
+  last_pay_date: string | null;
+}
+
+export function getDividends(
+  accountId?: string | null,
+  days = 365,
+): Promise<DividendList> {
+  const q = accountQuery(accountId);
+  return request<DividendList>(
+    `/api/v1/portfolio/dividends${q ? `${q}&` : "?"}days=${days}`,
+  );
+}

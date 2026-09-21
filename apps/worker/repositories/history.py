@@ -118,6 +118,31 @@ _REALIZED_UPSERT = text(
     """
 )
 
+_DIVIDEND_UPSERT = text(
+    """
+    INSERT INTO dividends (
+        id, account_id, asset_id, ticker, asset_name, pay_date, amount_krw,
+        currency, source_job_id
+    ) VALUES (
+        :id, :account_id, :asset_id, :ticker, :asset_name, :pay_date, :amount_krw,
+        :currency, :source_job_id
+    )
+    ON CONFLICT (account_id, pay_date, ticker) DO UPDATE SET
+        asset_id = EXCLUDED.asset_id,
+        asset_name = EXCLUDED.asset_name,
+        amount_krw = EXCLUDED.amount_krw,
+        currency = EXCLUDED.currency,
+        source_job_id = EXCLUDED.source_job_id,
+        updated_at = now()
+    """
+)
+
+#: 증권사 거래소 코드 캐시. 한 번 찾으면 다음 동기화에서 헛호출이 줄어든다.
+_SET_EXCHANGE_CODE = text(
+    "UPDATE assets SET broker_exchange_code = :code, updated_at = now() "
+    "WHERE ticker = :ticker AND broker_exchange_code IS DISTINCT FROM :code"
+)
+
 _FIND_ASSET = text(
     "SELECT id FROM assets WHERE ticker = :ticker ORDER BY created_at LIMIT 1"
 )
@@ -220,3 +245,63 @@ def upsert_realized_pnl(conn, account_id, rows, source_job_id=None):
             },
         )
     return len(rows)
+
+
+def upsert_dividends(conn, account_id, rows, source_job_id=None):
+    """배당 적재 + 찾아낸 거래소 코드 캐시."""
+    cache: dict = {}
+    for row in rows:
+        conn.execute(
+            _DIVIDEND_UPSERT,
+            {
+                "id": uuid.uuid4(),
+                "account_id": account_id,
+                "asset_id": _asset_id_for(conn, row.ticker, cache),
+                "ticker": row.ticker,
+                "asset_name": row.name,
+                "pay_date": row.pay_date,
+                "amount_krw": row.amount_krw,
+                "currency": row.currency,
+                "source_job_id": source_job_id,
+            },
+        )
+    return len(rows)
+
+
+def remember_exchange_codes(conn, rows) -> int:
+    """종목별 거래소 코드를 assets 에 남긴다. 다음 조회에서 탐색을 건너뛴다."""
+    seen = {}
+    for row in rows:
+        code = getattr(row, "broker_exchange_code", None)
+        if code and row.ticker not in seen:
+            seen[row.ticker] = code
+    for ticker, code in seen.items():
+        conn.execute(_SET_EXCHANGE_CODE, {"code": code, "ticker": ticker})
+    return len(seen)
+
+
+def tickers_for_dividends(conn, account_id):
+    """배당을 조회할 종목 목록 — 현재 보유 + 과거 체결 종목 전부.
+
+    이미 판 종목도 그 해에 배당을 받았을 수 있다. 보유만 보면 이력이 빈다.
+    """
+    # ⚠️assets 에서만 뽑으면 **이미 판 종목이 빠진다** — assets 행은 보유 포지션에서만
+    #   만들어지기 때문이다. 실측에서 SGOV(전량 매도)가 통째로 빠져 배당이 20건 중
+    #   10건만 들어왔다. 체결 테이블에서 티커를 직접 모으고, 거래소 코드는 있으면 붙인다.
+    rows = conn.execute(
+        text(
+            "WITH held AS ( "
+            "  SELECT a.ticker FROM assets a "
+            "  JOIN current_positions p ON p.asset_id = a.id AND p.account_id = :acc "
+            "), traded AS ( "
+            "  SELECT DISTINCT ticker FROM trades WHERE account_id = :acc "
+            "), all_tickers AS ( "
+            "  SELECT ticker FROM held UNION SELECT ticker FROM traded "
+            ") "
+            "SELECT t.ticker, max(a.broker_exchange_code) "
+            "FROM all_tickers t LEFT JOIN assets a ON a.ticker = t.ticker "
+            "GROUP BY t.ticker ORDER BY t.ticker"
+        ),
+        {"acc": account_id},
+    ).all()
+    return [(r[0], r[1]) for r in rows]

@@ -423,7 +423,9 @@ def run(engine, job_id, payload, storage_dir, log_job):
         #   전부 upsert 라 같은 기간을 다시 돌려도 행이 늘지 않는다.
         #   ⚠️여기서 실패해도 **잔고 동기화는 이미 커밋돼 있다.** 이력은 보조 정보라
         #     실패를 이유로 잔고까지 되돌리지 않는다 — 대신 경고로 남긴다.
-        history_counts = {"trades": 0, "daily_performance": 0, "realized_pnl": 0}
+        history_counts = {
+            "trades": 0, "daily_performance": 0, "realized_pnl": 0, "dividends": 0,
+        }
         try:
             history_start = now.date() - timedelta(days=HISTORY_DAYS)
             adapter_cls = get_adapter_class("KIWOOM")
@@ -440,6 +442,10 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     realized = adapter.fetch_realized_pnl(
                         account_ref, history_start, now.date()
                     )
+                    # ★체결을 **먼저** 저장한다. 배당 조회 대상(현재 보유 + 과거 체결
+                    #   종목)을 DB 에서 뽑는데, 체결을 나중에 쓰면 첫 동기화에서
+                    #   이미 판 종목이 통째로 빠진다 — 실측에서 SGOV 등이 빠져
+                    #   배당이 20건 중 10건만 들어왔다(예외 없음).
                     with engine.begin() as conn:
                         history_counts["trades"] += history_repo.upsert_trades(
                             conn, account_id, trades, job_id
@@ -452,11 +458,28 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         history_counts["realized_pnl"] += history_repo.upsert_realized_pnl(
                             conn, account_id, realized, job_id
                         )
+
+                    # 배당은 종목별 조회라(usa21730 이 stk_cd 필수) 대상을 먼저 정한다.
+                    # 이미 판 종목도 그 해에 배당을 받았을 수 있으므로 체결까지 본다.
+                    with engine.begin() as conn:
+                        dividend_targets = history_repo.tickers_for_dividends(
+                            conn, account_id
+                        )
+                    dividends = adapter.fetch_dividends(
+                        account_ref, dividend_targets, history_start, now.date()
+                    )
+                    with engine.begin() as conn:
+                        history_counts["dividends"] += history_repo.upsert_dividends(
+                            conn, account_id, dividends, job_id
+                        )
+                        # 찾아낸 거래소 코드를 남겨 다음 동기화의 탐색을 줄인다.
+                        history_repo.remember_exchange_codes(conn, dividends)
             log_job(
                 engine, job_id, "INFO", "sync_history",
                 f"Synced {history_counts['trades']} trade(s), "
                 f"{history_counts['daily_performance']} daily perf row(s), "
-                f"{history_counts['realized_pnl']} realized row(s)",
+                f"{history_counts['realized_pnl']} realized row(s), "
+                f"{history_counts['dividends']} dividend(s)",
             )
         except Exception as exc:  # noqa: BLE001 - 잔고는 지키고 경고만 남긴다
             log_job(

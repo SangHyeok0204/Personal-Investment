@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -33,6 +33,7 @@ from app.models import (
     Trade,
     AccountDailyPerformance,
     RealizedPnl,
+    Dividend,
 )
 from app.schemas import (
     AccountListOut,
@@ -54,6 +55,10 @@ from app.schemas import (
     PerformanceSeriesOut,
     RealizedPnlListOut,
     RealizedPnlOut,
+    DividendListOut,
+    DividendOut,
+    DividendMonthOut,
+    DividendByTickerOut,
 )
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
@@ -757,4 +762,90 @@ def list_realized_pnl(
         loss_count=losses,
         first_sell_date=min((i.sell_date for i in items), default=None),
         last_sell_date=max((i.sell_date for i in items), default=None),
+    )
+
+
+# ── 배당 ────────────────────────────────────────────────────────────────────
+
+@router.get("/dividends", response_model=DividendListOut)
+def list_dividends(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(365, ge=1, le=3650),
+    db: Session = Depends(get_db),
+) -> DividendListOut:
+    """배당 수령 이력 — 최근순 + 월별/종목별 집계.
+
+    금액은 증권사가 준 **원화**다. 이 TR(usa21730)은 외화 원금액을 주지 않아
+    우리가 환산해 만들지 않는다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return DividendListOut(
+            items=[], total=0, total_amount_krw=None, monthly=[], by_ticker=[],
+            first_pay_date=None, last_pay_date=None,
+        )
+
+    since = date.today() - timedelta(days=days)
+    conditions = [Dividend.account_id.in_(account_ids), Dividend.pay_date >= since]
+
+    rows = db.execute(
+        select(Dividend, Asset.sector)
+        .outerjoin(Asset, Asset.id == Dividend.asset_id)
+        .where(*conditions)
+        .order_by(Dividend.pay_date.desc(), Dividend.ticker)
+    ).all()
+
+    items = [
+        DividendOut(
+            id=row.id,
+            pay_date=row.pay_date,
+            ticker=row.ticker,
+            asset_name=row.asset_name,
+            sector=sector,
+            amount_krw=row.amount_krw,
+            currency=row.currency,
+        )
+        for row, sector in rows
+    ]
+
+    # 월별 — 배당은 분기·월 주기가 뚜렷해서 월 단위가 읽기 좋다.
+    # ⚠️to_char 의 포맷을 파이썬 문자열로 주면 **바인드 파라미터**가 되어 Postgres 가
+    #   SELECT 절과 GROUP BY 절의 식을 같은 것으로 못 본다("must appear in the
+    #   GROUP BY clause"). 식을 한 번만 만들어 재사용하고 포맷은 리터럴로 둔다.
+    month_expr = func.to_char(Dividend.pay_date, literal_column("'YYYY-MM'"))
+    month_rows = db.execute(
+        select(month_expr, func.sum(Dividend.amount_krw), func.count())
+        .where(*conditions)
+        .group_by(month_expr)
+        .order_by(month_expr)
+    ).all()
+
+    ticker_rows = db.execute(
+        select(
+            Dividend.ticker,
+            func.max(Dividend.asset_name),
+            func.sum(Dividend.amount_krw),
+            func.count(),
+        )
+        .where(*conditions)
+        .group_by(Dividend.ticker)
+        .order_by(func.sum(Dividend.amount_krw).desc())
+    ).all()
+
+    return DividendListOut(
+        items=items,
+        total=len(items),
+        total_amount_krw=_sum([i.amount_krw for i in items]),
+        monthly=[
+            DividendMonthOut(month=m, amount_krw=amount, count=count)
+            for m, amount, count in month_rows
+        ],
+        by_ticker=[
+            DividendByTickerOut(
+                ticker=t, asset_name=name, amount_krw=amount, count=count
+            )
+            for t, name, amount, count in ticker_rows
+        ],
+        first_pay_date=min((i.pay_date for i in items), default=None),
+        last_pay_date=max((i.pay_date for i in items), default=None),
     )

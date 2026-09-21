@@ -156,6 +156,19 @@ class RealizedPnlRow:
     exchange: str | None = None
 
 
+@dataclass(frozen=True)
+class DividendRow:
+    """배당 수령 한 건. 금액은 증권사가 준 **원화** 값이다."""
+
+    pay_date: date
+    ticker: str
+    name: str | None
+    amount_krw: Decimal
+    currency: str = "KRW"
+    #: 이 종목이 어느 거래소로 조회됐는지(ND/NY/NA). 다음 조회에서 재탐색을 줄인다.
+    broker_exchange_code: str | None = None
+
+
 class BrokerAdapter:
     """증권사 하나에 대한 읽기 어댑터.
 
@@ -202,4 +215,17 @@ class BrokerAdapter:
         self, account: AccountRef, start: date, end: date
     ) -> list[RealizedPnlRow]:
         """실현손익(매도 확정분)."""
+        raise NotImplementedError
+
+    def fetch_dividends(
+        self,
+        account: AccountRef,
+        tickers: list[tuple[str, str | None]],
+        start: date,
+        end: date,
+    ) -> list[DividendRow]:
+        """배당 수령 이력.
+
+        tickers: (종목코드, 증권사 거래소코드 or None). 코드를 모르면 구현체가 찾는다.
+        """
         raise NotImplementedError

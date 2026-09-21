@@ -542,3 +542,81 @@ def test_realized_empty_without_accounts(client):
     body = client.get("/api/v1/portfolio/realized").json()
     assert body["total"] == 0
     assert body["pnl_krw"] is None
+
+
+# ── 배당 ────────────────────────────────────────────────────────────────────
+
+def _add_dividend(db, account_id, **kw):
+    from app.models import Dividend
+    from datetime import date as _date
+
+    defaults = dict(
+        id=uuid.uuid4(), account_id=account_id, ticker="SCHD",
+        asset_name="SCHWAB STRATEGIC", pay_date=_date(2026, 6, 30),
+        amount_krw=Decimal("31107"), currency="KRW",
+    )
+    defaults.update(kw)
+    row = Dividend(**defaults)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_dividends_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/dividends").json()
+    assert body["total"] == 0
+    assert body["total_amount_krw"] is None
+    assert body["monthly"] == []
+
+
+def test_dividends_aggregate_by_month_and_ticker(client, db, kiwoom):
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_dividend(db, account_id, ticker="SCHD", pay_date=_date(2026, 6, 30),
+                  amount_krw=Decimal("31107"))
+    _add_dividend(db, account_id, ticker="SGOV", pay_date=_date(2026, 6, 5),
+                  amount_krw=Decimal("39835"))
+    _add_dividend(db, account_id, ticker="SGOV", pay_date=_date(2026, 7, 8),
+                  amount_krw=Decimal("31601"))
+
+    body = client.get("/api/v1/portfolio/dividends?days=3000").json()
+    assert body["total"] == 3
+    assert Decimal(body["total_amount_krw"]) == Decimal("102543")
+
+    monthly = {m["month"]: m for m in body["monthly"]}
+    # 6월은 두 건이 합쳐져야 한다.
+    assert Decimal(monthly["2026-06"]["amount_krw"]) == Decimal("70942")
+    assert monthly["2026-06"]["count"] == 2
+    assert Decimal(monthly["2026-07"]["amount_krw"]) == Decimal("31601")
+
+    by_ticker = {t["ticker"]: t for t in body["by_ticker"]}
+    # 금액 큰 순 — SGOV 가 위
+    assert body["by_ticker"][0]["ticker"] == "SGOV"
+    assert Decimal(by_ticker["SGOV"]["amount_krw"]) == Decimal("71436")
+    assert by_ticker["SGOV"]["count"] == 2
+
+
+def test_dividends_newest_first_and_carry_sector(client, db, kiwoom):
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_dividend(db, account_id, ticker="005930", pay_date=_date(2026, 5, 1),
+                  asset_id=kiwoom["samsung"].id)
+    _add_dividend(db, account_id, ticker="SGOV", pay_date=_date(2026, 8, 7))
+
+    body = client.get("/api/v1/portfolio/dividends?days=3000").json()
+    assert [i["ticker"] for i in body["items"]] == ["SGOV", "005930"]
+    # 마스터가 없는 종목은 섹터가 비어도 목록에는 남는다.
+    assert body["items"][0]["sector"] is None
+
+
+def test_dividends_respect_day_window(client, db, kiwoom):
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    _add_dividend(db, account_id, ticker="OLD", pay_date=_date.today() - _td(days=400))
+    _add_dividend(db, account_id, ticker="NEW", pay_date=_date.today())
+
+    assert client.get("/api/v1/portfolio/dividends?days=365").json()["total"] == 1
+    assert client.get("/api/v1/portfolio/dividends?days=3000").json()["total"] == 2

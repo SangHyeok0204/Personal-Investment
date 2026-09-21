@@ -420,3 +420,40 @@ class RealizedPnlListOut(BaseModel):
     loss_count: int
     first_sell_date: date | None
     last_sell_date: date | None
+
+
+# ── 배당 ────────────────────────────────────────────────────────────────────
+
+class DividendOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    pay_date: date
+    ticker: str
+    asset_name: str | None
+    sector: str | None
+    amount_krw: Decimal
+    currency: str
+
+
+class DividendMonthOut(BaseModel):
+    month: str
+    amount_krw: Decimal
+    count: int
+
+
+class DividendByTickerOut(BaseModel):
+    ticker: str
+    asset_name: str | None
+    amount_krw: Decimal
+    count: int
+
+
+class DividendListOut(BaseModel):
+    items: list[DividendOut]
+    total: int
+    total_amount_krw: Decimal | None
+    monthly: list[DividendMonthOut]
+    by_ticker: list[DividendByTickerOut]
+    first_pay_date: date | None
+    last_pay_date: date | None

@@ -298,6 +298,9 @@ class Asset(Base):
     industry: Mapped[str | None] = mapped_column(String, nullable=True)
     # SEED / MANUAL / 외부출처. 자동 분류가 사람이 고친 값을 덮지 않게 하는 표식.
     sector_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 증권사가 쓰는 거래소 코드(키움 ND/NY/NA). 우리 분류(country/market)와 다른 축이라
+    # 별도로 둔다 — 배당 조회(usa21730)가 이 값을 **필수**로 요구한다.
+    broker_exchange_code: Mapped[str | None] = mapped_column(String, nullable=True)
     classified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -554,4 +557,40 @@ class RealizedPnl(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "sell_date", "ticker", name="uq_realized_account_date_ticker"),
         Index("ix_realized_account_date", "account_id", "sell_date"),
+    )
+
+
+class Dividend(Base):
+    """배당 수령 한 건 (alembic 0009, 키움 usa21730 의 dvid_amt).
+
+    ⚠️배당 전용 TR 이 없다 — 일별 종목수익률 응답에 섞여 온다. 배당이 0 인 날이
+      대부분이라 0 인 행은 저장하지 않는다.
+    ⚠️금액은 증권사가 **원화**로 준다. 외화 원금액은 이 TR 이 주지 않는다.
+    """
+
+    __tablename__ = "dividends"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True
+    )
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    pay_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount_krw: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'KRW'"))
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "pay_date", "ticker", name="uq_dividends_account_date_ticker"),
+        Index("ix_dividends_account_date", "account_id", "pay_date"),
     )

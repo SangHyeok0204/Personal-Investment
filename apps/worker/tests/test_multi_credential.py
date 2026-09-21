@@ -28,9 +28,11 @@ from brokers.registry import get_adapter_class, supported_brokers
 
 
 class _Resp:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, headers=None):
         self._payload = payload
         self.status_code = status
+        # TR 응답은 페이징 정보를 헤더에서도 읽는다(cont-yn/next-key).
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -286,3 +288,71 @@ def test_position_keeps_broker_supplied_krw_values():
     assert row.market_value_local == Decimal("2472.70")
     assert row.market_value_krw == Decimal("3427162")
     assert row.unrealized_pnl_krw == Decimal("763464")
+
+
+def test_kiwoom_date_formats_both_parse():
+    """TR 마다 날짜 형식이 다르다 — 하나만 받으면 다른 쪽이 조용히 버려진다.
+
+    실측(2026-09-21): ust21100 은 "20260916", usa21730 은 "2026-06-30".
+    이걸 놓쳐서 배당이 0건으로 나왔다(예외 없음).
+    """
+    from datetime import date as _date
+
+    from brokers.kiwoom.broker import _parse_yyyymmdd
+
+    assert _parse_yyyymmdd("20260916") == _date(2026, 9, 16)
+    assert _parse_yyyymmdd("2026-06-30") == _date(2026, 6, 30)
+    assert _parse_yyyymmdd("2026/06/30") == _date(2026, 6, 30)
+    assert _parse_yyyymmdd("") is None
+    assert _parse_yyyymmdd(None) is None
+    assert _parse_yyyymmdd("202609") is None
+
+
+def test_client_retries_transport_errors():
+    """커넥션이 끊겨도 한 번만에 죽지 않는다.
+
+    배당 조회는 종목별이라 호출이 수십 번 나가고, 실제로 키움이 keep-alive 를
+    끊어 RemoteProtocolError 가 났다(2026-09-21). 조회는 멱등하니 다시 부른다.
+    """
+    import httpx
+
+    from brokers.kiwoom.client import KiwoomClient
+
+    class _Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, url, headers=None, json=None, **kw):
+            self.calls += 1
+            if "oauth2" in url:
+                return _Resp({"token": "t", "expires_dt": "20991231235959", "return_code": 0})
+            if self.calls <= 3:  # 토큰 1회 + 실패 2회
+                raise httpx.RemoteProtocolError("Server disconnected")
+            return _Resp({"return_code": 0, "result_list": []})
+
+    http = _Flaky()
+    client = KiwoomClient("https://api.kiwoom.com", "k", "s",
+                          http_client=http, sleep=lambda _s: None)
+    pages = client.request_tr("usa21730", {}, path="/api/us/acnt")
+    assert pages == [{"return_code": 0, "result_list": []}]
+
+
+def test_client_gives_up_after_transport_retries():
+    """무한 재시도는 하지 않는다 — 소진되면 원인을 담아 올린다."""
+    import httpx
+    import pytest as _pytest
+
+    from brokers.kiwoom.client import KiwoomClient
+    from brokers.kiwoom.exceptions import KiwoomApiError
+
+    class _Dead:
+        def post(self, url, headers=None, json=None, **kw):
+            if "oauth2" in url:
+                return _Resp({"token": "t", "expires_dt": "20991231235959", "return_code": 0})
+            raise httpx.ReadTimeout("timed out")
+
+    client = KiwoomClient("https://api.kiwoom.com", "k", "s",
+                          http_client=_Dead(), sleep=lambda _s: None)
+    with _pytest.raises(KiwoomApiError) as exc:
+        client.request_tr("usa21730", {}, path="/api/us/acnt")
+    assert "재시도 소진" in str(exc.value)

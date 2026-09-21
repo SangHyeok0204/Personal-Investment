@@ -1,45 +1,247 @@
 "use client";
 
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
+import { useAccount } from "@/components/layout/account-context";
 import {
+  Cell,
+  DataTable,
   NotConnectedBanner,
+  PlannedList,
   StatRow,
   StatTile,
   StubCard,
-  StubChart,
-  StubTable,
 } from "@/components/stub";
+import { getDividends } from "@/lib/api";
+import { formatKrwString } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+// 배당 수령 이력 — 키움 usa21730 의 dvid_amt.
+//
+// ⚠️키움에 **배당 전용 TR 이 없다.** 일별 종목수익률 응답에 배당금이 섞여 오고,
+//   종목코드와 거래소구분이 둘 다 필수라 종목별로 조회해야 한다(실측). 그래서
+//   "예상 배당"이나 "배당락 캘린더"는 이 원천으로 만들 수 없다 — 받은 것만 안다.
+//   화면이 약속하지 않도록 제목도 '배당 이력'으로 둔다.
+
+const RANGES = [
+  { id: 180, label: "6개월" },
+  { id: 365, label: "1년" },
+  { id: 1000, label: "전체" },
+];
 
 export default function DividendsPage() {
+  const { accountId, connected } = useAccount();
+  const [days, setDays] = useState(365);
+
+  const dividends = useQuery({
+    queryKey: ["dividends", accountId, days],
+    queryFn: () => getDividends(accountId, days),
+    staleTime: 60_000,
+  });
+
+  const data = dividends.data;
+  const items = data?.items ?? [];
+  const monthly = data?.monthly ?? [];
+  const maxMonth = Math.max(1, ...monthly.map((m) => Number(m.amount_krw)));
+
+  // 월평균 — 배당이 찍힌 달만 세면 과대평가된다. 조회 기간의 개월 수로 나눈다.
+  const months = Math.max(1, Math.round(days / 30));
+  const monthlyAvg =
+    data?.total_amount_krw != null
+      ? Math.round(Number(data.total_amount_krw) / months)
+      : null;
+
   return (
     <>
-      <Topbar title="배당 캘린더" subtitle="배당락 · 지급일 · 예상 배당금" />
+      <Topbar title="배당 이력" subtitle="수령한 배당 (원화)" />
       <PageContainer wide>
-        <NotConnectedBanner what="보유 종목 + 배당 일정 데이터" />
+        {!connected && <NotConnectedBanner what="키움 배당 조회" />}
 
         <StatRow>
-          <StatTile label="올해 수령 배당" />
-          <StatTile label="예상 연 배당" hint="현 보유 기준" />
-          <StatTile label="포트폴리오 배당수익률" />
-          <StatTile label="다음 배당락" />
+          <StatTile
+            label="총 수령 배당"
+            value={formatKrwString(data?.total_amount_krw)}
+            hint={
+              data?.first_pay_date
+                ? `${data.first_pay_date} ~ ${data.last_pay_date}`
+                : "조회 기간 합계"
+            }
+            loading={dividends.isLoading}
+          />
+          <StatTile
+            label="수령 횟수"
+            value={data ? `${data.total}` : undefined}
+            hint={
+              data?.by_ticker.length ? `${data.by_ticker.length}종목` : undefined
+            }
+            loading={dividends.isLoading}
+          />
+          <StatTile
+            label="월평균"
+            value={monthlyAvg == null ? undefined : formatKrwString(String(monthlyAvg))}
+            hint={`조회 기간 ${months}개월 기준`}
+            loading={dividends.isLoading}
+          />
+          <StatTile
+            label="최근 수령"
+            value={data?.last_pay_date ?? undefined}
+            hint={
+              items[0] ? `${items[0].asset_name ?? items[0].ticker}` : undefined
+            }
+            loading={dividends.isLoading}
+          />
         </StatRow>
 
-        <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-          <StubCard title="월별 배당 수령액">
-            <StubChart height={240} />
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {RANGES.map((r) => (
+            <Chip key={r.id} active={days === r.id} onClick={() => setDays(r.id)}>
+              {r.label}
+            </Chip>
+          ))}
+          <span className="ml-auto text-[11px] font-semibold text-ink-faint">
+            {items.length}건
+          </span>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+          <StubCard title="수령 내역" subtitle="최근순">
+            <DataTable
+              columns={["지급일", "종목", "섹터", "금액"]}
+              align={["left", "left", "left", "right"]}
+              empty={
+                dividends.isLoading
+                  ? "불러오는 중…"
+                  : connected
+                    ? "해당 기간에 수령한 배당이 없습니다"
+                    : "계좌를 연동하면 배당 이력이 표시됩니다"
+              }
+            >
+              {items.map((d) => (
+                <tr
+                  key={d.id}
+                  className="border-t border-hairline transition-colors hover:bg-canvas-soft/60"
+                >
+                  <Cell left tone="muted">
+                    {d.pay_date}
+                  </Cell>
+                  <Cell left strong>
+                    <span className="flex items-center gap-2">
+                      {d.asset_name ?? d.ticker}
+                      <span className="text-[10px] font-semibold text-ink-faint">
+                        {d.ticker}
+                      </span>
+                    </span>
+                  </Cell>
+                  <Cell left tone="muted">
+                    {d.sector ?? "—"}
+                  </Cell>
+                  <Cell strong tone="up">
+                    {formatKrwString(d.amount_krw)}
+                  </Cell>
+                </tr>
+              ))}
+            </DataTable>
           </StubCard>
-          <StubCard title="다가오는 배당" subtitle="배당락 임박순">
-            <StubTable columns={["종목", "배당락", "지급일", "예상액"]} rows={8} />
-          </StubCard>
-          <StubCard title="배당 수령 내역" className="xl:col-span-2">
-            <StubTable
-              columns={["지급일", "종목", "주당배당금", "수량", "세전", "세후"]}
-              rows={8}
+
+          <div className="space-y-4">
+            <StubCard title="월별 수령" subtitle="배당은 분기 주기가 흔하다">
+              {monthly.length > 0 ? (
+                <div className="space-y-2">
+                  {monthly
+                    .slice()
+                    .reverse()
+                    .map((m) => (
+                      <div key={m.month}>
+                        <div className="mb-0.5 flex items-baseline justify-between">
+                          <span className="text-[12px] font-bold text-ge-navy">
+                            {m.month}
+                          </span>
+                          <span className="text-[11px] font-bold tabular-nums text-ink-secondary">
+                            {formatKrwString(m.amount_krw)}
+                            <span className="ml-1.5 font-semibold text-ink-faint">
+                              {m.count}건
+                            </span>
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft">
+                          <div
+                            className="h-full rounded-full bg-status-success"
+                            style={{
+                              width: `${(Number(m.amount_krw) / maxMonth) * 100}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div className="flex h-32 items-center justify-center text-[12px] font-semibold text-ink-faint">
+                  {dividends.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
+                </div>
+              )}
+            </StubCard>
+
+            <StubCard title="종목별" subtitle="누가 배당을 주고 있나">
+              <DataTable
+                columns={["종목", "횟수", "금액"]}
+                align={["left", "right", "right"]}
+                empty={dividends.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
+              >
+                {(data?.by_ticker ?? []).map((t) => (
+                  <tr
+                    key={t.ticker}
+                    className="border-t border-hairline transition-colors hover:bg-canvas-soft/60"
+                  >
+                    <Cell left strong>
+                      {t.asset_name ?? t.ticker}
+                    </Cell>
+                    <Cell tone="muted">{t.count}회</Cell>
+                    <Cell tone="up">{formatKrwString(t.amount_krw)}</Cell>
+                  </tr>
+                ))}
+              </DataTable>
+            </StubCard>
+          </div>
+
+          <StubCard title="이 화면이 하지 않는 것" className="xl:col-span-2">
+            <PlannedList
+              items={[
+                "예상 배당·배당락 캘린더는 만들지 않았다 — 키움에 배당 전용 TR 이 없고, 이 원천(usa21730)은 **받은 배당**만 알려준다. 미래를 약속하려면 별도 배당 일정 데이터가 필요하다",
+                "세전/세후 구분 없음 — 증권사가 이 TR 로 원화 금액 하나만 준다",
+                "배당수익률(yield)은 보유 평가액이 시점마다 달라 정의를 먼저 정해야 한다",
+              ]}
             />
           </StubCard>
         </div>
       </PageContainer>
     </>
+  );
+}
+
+function Chip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors",
+        active
+          ? "border-ge-point bg-ge-blue-bg text-ge-point"
+          : "border-hairline bg-white text-ink-muted hover:bg-canvas-soft",
+      )}
+    >
+      {children}
+    </button>
   );
 }

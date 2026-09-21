@@ -220,10 +220,11 @@ export const navItems: NavItem[] = [
     icon: PiggyBank,
     children: [
       {
-        label: "배당 캘린더",
+        label: "배당 이력",
         href: "/income/dividends",
-        status: "placeholder",
-        hint: "배당락 · 지급일 · 예상 배당금",
+        status: "live",
+        // ⚠️'캘린더'가 아니다 — 키움은 **받은 배당**만 준다(예상·배당락 없음).
+        hint: "수령한 배당 · 월별 · 종목별",
       },
       {
         label: "입출금",

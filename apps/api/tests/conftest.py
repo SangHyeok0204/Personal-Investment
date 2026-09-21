@@ -12,7 +12,7 @@ from app.models import Base
 # All tables truncated between tests (FK-safe via CASCADE).
 # 포트폴리오 테이블도 포함한다 — 계좌/종목은 테스트마다 새로 만든다(2026-09-21).
 _ALL_TABLES = (
-    "job_logs, imports, jobs, trades, realized_pnl, account_daily_performance, "
+    "job_logs, imports, jobs, trades, realized_pnl, account_daily_performance, dividends, "
     "portfolio_snapshots, current_positions, account_balances, "
     "accounts, assets, brokerage_connections, brokers"
 )

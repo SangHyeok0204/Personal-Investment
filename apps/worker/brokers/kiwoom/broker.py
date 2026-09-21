@@ -21,6 +21,7 @@ from ..base import (
     BalanceRow,
     BrokerAdapter,
     DailyPerformanceRow,
+    DividendRow,
     PositionRow,
     RealizedPnlRow,
     TradeRow,
@@ -285,6 +286,92 @@ class KiwoomAdapter(BrokerAdapter):
             )
         return out
 
+    def fetch_dividends(self, account, tickers, start: date, end: date):
+        """배당 수령 이력.
+
+        배당 전용 TR 이 없어 일별 종목수익률(usa21730)의 dvid_amt 를 골라낸다.
+        배당이 0 인 날이 대부분이라 0 은 버린다.
+
+        ⚠️종목마다 거래소 코드를 알아야 하는데 잔고 응답이 알려주지 않는다. 이미
+          아는 코드가 있으면 그것만 쓰고, 없으면 ND→NY→NA 로 찾는다. 찾은 코드는
+          결과에 실어 보내 호출부가 저장하게 한다(다음부터 헛호출이 줄어든다).
+        """
+        if "US" not in self._markets:
+            return []
+
+        out: list[DividendRow] = []
+        for ticker, known_code in tickers:
+            if not ticker:
+                continue
+            code = known_code or self._resolve_exchange_code(ticker, end)
+            if code is None:
+                continue  # 세 거래소 어디에도 없다 — 조회 대상이 아니다.
+            try:
+                pages = self._client.request_tr(
+                    API_US_STOCK_DAILY,
+                    {
+                        "from": start.strftime("%Y%m%d"),
+                        "to": end.strftime("%Y%m%d"),
+                        "stex_tp": code,
+                        "stk_cd": ticker,
+                    },
+                    path=us_equities.US_ACNT_PATH,
+                )
+            except KiwoomApiError as exc:
+                if _is_unknown_symbol(exc):
+                    continue
+                raise
+            for page in pages:
+                for raw in page.get("result_list") or []:
+                    amount = _opt(raw.get("dvid_amt"))
+                    if not amount:
+                        continue  # 배당 없는 날 — 대부분이다.
+                    pay_date = _parse_yyyymmdd(
+                        raw.get("last_base_dt") or raw.get("frst_base_dt")
+                    )
+                    if pay_date is None:
+                        continue
+                    out.append(
+                        DividendRow(
+                            pay_date=pay_date,
+                            ticker=ticker,
+                            name=(raw.get("stk_nm") or None),
+                            amount_krw=amount,
+                            currency="KRW",
+                            broker_exchange_code=code,
+                        )
+                    )
+
+        out.sort(key=lambda d: (d.pay_date, d.ticker))
+        return out
+
+    def _resolve_exchange_code(self, ticker: str, end: date) -> str | None:
+        """종목이 어느 거래소인지 찾는다(ND/NY/NA).
+
+        ⚠️탐색에 **짧은 구간**을 쓴다. 전체 구간(1년)으로 찾으면 응답이 360행이라
+          한 종목에 최대 3번 무거운 조회가 나가고, 실제로 read timeout 이 났다.
+          맞는 거래소인지만 보면 되므로 며칠이면 충분하다.
+        """
+        probe_start = end - timedelta(days=_EXCHANGE_PROBE_DAYS)
+        for code in _US_EXCHANGE_CODES:
+            try:
+                self._client.request_tr(
+                    API_US_STOCK_DAILY,
+                    {
+                        "from": probe_start.strftime("%Y%m%d"),
+                        "to": end.strftime("%Y%m%d"),
+                        "stex_tp": code,
+                        "stk_cd": ticker,
+                    },
+                    path=us_equities.US_ACNT_PATH,
+                )
+                return code
+            except KiwoomApiError as exc:
+                if _is_unknown_symbol(exc):
+                    continue
+                raise
+        return None
+
     def fetch_portfolio(self, account: AccountRef) -> AccountPortfolio:
         raw_account = {
             "external_account_id": account.external_account_id,
@@ -377,6 +464,22 @@ API_US_DAILY_PERF = "usa21670"
 #:  "조회기간은 6개월 이내만 가능합니다". 거래내역(1년)과 다르므로 따로 둔다.
 API_US_REALIZED = "ust21530"
 _REALIZED_WINDOW_DAYS = 175
+
+#: 일별 종목수익률(usa21730). **배당 전용 TR 이 없어** 이 응답의 dvid_amt 를 쓴다.
+API_US_STOCK_DAILY = "usa21730"
+#: ⚠️usa21730 은 stk_cd 와 stex_tp 가 **둘 다 필수**다. 그런데 보유종목 응답의
+#:  stex_nm 은 "미국"이라 거래소를 알려주지 않는다(실측). 아래 순서로 시도해
+#:  값이 오는 코드를 찾는다 — 나스닥 종목이 가장 많아 ND 를 먼저 본다.
+_US_EXCHANGE_CODES = ("ND", "NY", "NA")
+#: 종목코드/거래소가 안 맞을 때의 코드. '없음'이지 실패가 아니다.
+_UNKNOWN_SYMBOL_CODE = "1903"
+#: 거래소 코드 탐색에 쓰는 구간(일). 짧게 잡아야 한다 — 전체 구간으로 찾으면
+#: 한 종목에 최대 3번 360행짜리 조회가 나가 read timeout 이 난다(실측).
+_EXCHANGE_PROBE_DAYS = 5
+
+
+def _is_unknown_symbol(exc) -> bool:
+    return _UNKNOWN_SYMBOL_CODE in (getattr(exc, "return_msg", "") or "")
 #: ⚠️ust21530 은 해당 기간에 매도가 없으면 **빈 목록이 아니라 에러**를 낸다
 #:  (return_code=20 / 571758 "조회내역이 없습니다"). 여러 창으로 나눠 조회할 때
 #:  매도가 없는 창이 하나만 있어도 전체가 죽으므로, 이 코드는 '없음'으로 읽는다.
@@ -502,7 +605,15 @@ def _to_trade_row(raw: dict) -> TradeRow | None:
 
 
 def _parse_yyyymmdd(value):
-    text = (value or "").strip()
+    """키움 날짜 파싱.
+
+    ⚠️TR 마다 형식이 다르다(실측 2026-09-21):
+       ust21100 거래내역        → "20260916"   (8자리)
+       usa21730 일별종목수익률   → "2026-06-30" (하이픈)
+      하나만 받으면 다른 쪽이 통째로 버려진다 — 배당이 0건으로 나왔던 원인이다.
+      예외도 안 나고 조용히 빈다.
+    """
+    text = (value or "").strip().replace("-", "").replace("/", "")
     if len(text) != 8 or not text.isdigit():
         return None
     return date(int(text[:4]), int(text[4:6]), int(text[6:]))
