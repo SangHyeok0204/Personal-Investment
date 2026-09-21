@@ -160,7 +160,6 @@ export const navItems: NavItem[] = [
         hint: "시장·지수 가격과 수익률",
       },
       { label: "매크로", href: "/macro", status: "live", hint: "금리 · 환율 · 원자재" },
-      { label: "iNAV 모니터", href: "/inav", status: "live" },
       { label: "AI Key Data", href: "/ai-key-data", status: "live" },
     ],
   },
