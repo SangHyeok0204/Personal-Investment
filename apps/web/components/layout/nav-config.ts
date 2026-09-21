@@ -1,6 +1,6 @@
 import {
+  BookOpen,
   Boxes,
-  CandlestickChart,
   LineChart,
   Newspaper,
   PiggyBank,
@@ -70,10 +70,10 @@ export const navItems: NavItem[] = [
         hint: "키움 · 토스 · 연금 계좌 합산",
       },
       {
-        label: "자산 배분",
+        label: "섹터/자산 배분",
         href: "/portfolio/allocation",
         status: "placeholder",
-        hint: "자산군 · 섹터 · 통화 비중",
+        hint: "섹터 · 자산군 · 통화 비중",
       },
       {
         label: "환노출",
@@ -183,17 +183,45 @@ export const navItems: NavItem[] = [
     ],
   },
   {
-    label: "종목 리서치",
-    icon: CandlestickChart,
+    // ★2026-09-21 사용자 요청으로 "종목 리서치" → "리서치"로 넓혔다.
+    //   보유 종목을 감시하는 것과 **무엇을 살지 공부하는 것**은 다른 활동인데,
+    //   원래 IA 에는 후자의 자리가 없었다. 반도체·AI 학습이 당장의 목표다.
+    label: "리서치",
+    icon: BookOpen,
+    href: "/research",
     children: [
-      { label: "미국", href: "/stock/us", status: "live", hint: "어닝 · 이슈" },
-      { label: "한국", status: "planned" },
       {
-        label: "재무/밸류에이션",
-        status: "planned",
-        hint: "실적 추이 · 멀티플",
+        label: "리서치 라이브러리",
+        href: "/research",
+        status: "placeholder",
+        hint: "보유 자료 인덱스 (05_리서치)",
       },
-      { label: "공시", status: "planned", hint: "DART · SEC 공시" },
+      {
+        label: "종목 리서치",
+        href: "/research/stocks",
+        status: "placeholder",
+        hint: "종목별 노트 · 투자 아이디어",
+      },
+      {
+        label: "산업 리서치",
+        href: "/research/industry",
+        status: "placeholder",
+        hint: "반도체 · AI · 2차전지",
+      },
+      {
+        label: "영상 분석",
+        href: "/research/video",
+        status: "placeholder",
+        hint: "YouTube 자막 수집 · 요약",
+      },
+      {
+        label: "학습 노트",
+        href: "/research/notes",
+        status: "placeholder",
+        hint: "반도체 · AI 개념 정리",
+      },
+      { label: "미국 어닝/이슈", href: "/stock/us", status: "live" },
+      { label: "공시", status: "planned", hint: "DART · SEC" },
     ],
   },
   {
