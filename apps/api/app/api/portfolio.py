@@ -921,6 +921,17 @@ _PERIODS: list[tuple[str, int]] = [
 _RISK_WINDOWS: list[tuple[str, int]] = [("최근 1년", 365), ("전체", 36500)]
 
 
+# 기여도는 17종목을 더해 검산하므로 반올림 오차가 눈에 띈다. 다른 비율보다
+# 두 자리 더 잡는다 — 6자리면 누적 오차가 표시 정밀도 바로 아래까지 올라온다.
+_CONTRIBUTION = Decimal("0.00000001")
+
+
+def _contribution_ratio(value: Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+    return value.quantize(_CONTRIBUTION, rounding=ROUND_HALF_UP)
+
+
 def _ratio(value: Decimal | None) -> Decimal | None:
     """비율을 소수 6자리로 자른다 — 화면에서 쓰는 정밀도보다 넉넉하다."""
     if value is None:
@@ -1067,7 +1078,12 @@ def _contributions(
     """종목별 절대 기여도.
 
     분모는 **전체 매입원가**다. 그래야 종목 기여도를 다 더하면 포트폴리오
-    평가수익률과 정확히 같아진다 — 화면에서 바로 검산할 수 있다.
+    평가수익률과 같아진다 — 화면에서 바로 검산할 수 있다.
+
+    ⚠️"정확히"는 아니다. 종목마다 반올림한 뒤 더하므로 마지막 자리에 오차가
+      남는다(실측: 17종목에서 3e-6). 그래서 **기여도는 8자리로 반올림한다** —
+      6자리였을 때의 오차가 표시 정밀도(소수 2자리 %) 바로 아래였다.
+      과장해서 "정확히 일치"라고 쓰면 검산하다 어긋난 자리를 보고 버그로 읽는다.
 
     ⚠️매입원가를 KRW 로 환산할 수 없는 종목이 하나라도 있으면 그 종목의 기여도는
       None 이다. 0 으로 채우면 합계 검산이 조용히 어긋난다.
@@ -1114,7 +1130,7 @@ def _contributions(
             unrealized_return=position.unrealized_return,
             dividend_krw=dividends.get(asset.ticker),
             contribution=(
-                _ratio(position.unrealized_pnl_krw / total_purchase)
+                _contribution_ratio(position.unrealized_pnl_krw / total_purchase)
                 if position.unrealized_pnl_krw is not None and total_purchase
                 else None
             ),

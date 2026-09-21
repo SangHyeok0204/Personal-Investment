@@ -64,8 +64,10 @@ export default function TransfersPage() {
         {!connected && <NotConnectedBanner what="키움 일별 계좌수익률" />}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+          {/* ⚠️수익률 추이 화면의 '순입금 (구간 중)'과 다른 값이다 —
+              여기는 첫날 입금까지 **전부** 센다. 증감은 두 화면이 같다. */}
           <StatTile
-            label="순입금"
+            label="순입금 (전체)"
             value={formatKrwString(data?.net_deposit_krw)}
             hint={
               data

@@ -75,10 +75,15 @@ export default function ReturnsPage() {
             hint={data?.last_date ?? undefined}
             loading={perf.isLoading}
           />
+          {/* ⚠️입출금 화면의 '순입금'과 **다른 값**이다. 여기는 조회 구간
+              시작일 이후만 세고(시작 자산에 이미 반영된 첫날 입금은 제외),
+              입출금 화면은 계좌 개설 이후 전부를 센다. 실측 차이 979,221원 =
+              첫날 입금액. 두 화면의 '증감'은 정확히 같다(1,169,220원) —
+              분해 방식만 다르다. 이름을 구분해 두지 않으면 버그로 읽힌다. */}
           <StatTile
-            label="기간 순입금"
+            label="순입금 (구간 중)"
             value={formatKrwString(data?.net_deposit_krw)}
-            hint="입금 − 출금"
+            hint="시작일 이후 입금 − 출금"
             loading={perf.isLoading}
           />
           <StatTile
