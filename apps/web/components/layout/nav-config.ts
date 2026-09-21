@@ -22,6 +22,12 @@ import type { LucideIcon } from "lucide-react";
 // `href` 가 있으면 실제 라우팅되고, 없으면 아직 화면이 없는 자리(플라이아웃에서
 // 비활성 버튼으로 렌더)다. `status` 는 그 자리가 어떤 상태인지 표시한다:
 //   - "live"        실제 데이터가 붙어 동작 중
+//                   ★2026-09-22 전수 확인: 화면의 useQuery 배선 + 그 API 의 실제
+//                     응답코드를 둘 다 본다. 둘 중 하나만 보면 틀린다 — 원본 GE 에서
+//                     물려받은 화면 중 여럿이 collector 프록시라 코드는 멀쩡한데
+//                     503 이었고(매크로·AI Key Data·텔레그램·미국 어닝),
+//                     반대로 실데이터가 붙은 자산현황·보유종목·섹터배분·계좌연동은
+//                     placeholder 로 남아 있었다. 메뉴가 양쪽으로 거짓말을 했다.
 //   - "placeholder" 화면 골격만 있고 데이터는 더미/미연결
 //   - "planned"     화면 자체가 아직 없음(href 없음)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,20 +59,14 @@ export const navItems: NavItem[] = [
       {
         label: "자산 현황",
         href: "/portfolio",
-        status: "placeholder",
+        status: "live",
         hint: "총평가 · 예수금 · 평가손익",
       },
       {
         label: "보유 종목",
         href: "/portfolio/holdings",
-        status: "placeholder",
+        status: "live",
         hint: "종목별 수량 · 평단 · 손익",
-      },
-      {
-        label: "계좌별 잔고",
-        href: "/portfolio/accounts",
-        status: "placeholder",
-        hint: "증권사별 계좌 합산",
       },
       {
         label: "편입비",
@@ -77,7 +77,7 @@ export const navItems: NavItem[] = [
       {
         label: "섹터/자산 배분",
         href: "/portfolio/allocation",
-        status: "placeholder",
+        status: "live",
         hint: "섹터 · 자산군 · 통화 비중",
       },
       {
@@ -132,19 +132,13 @@ export const navItems: NavItem[] = [
         label: "벤치마크 비교",
         href: "/performance/benchmark",
         status: "placeholder",
-        hint: "KOSPI · S&P500 대비 초과수익",
+        hint: "기준 지수를 먼저 정해야 함 (시장 지표에 S&P500·나스닥·SOX 있음)",
       },
       {
         label: "성과 분석",
         href: "/performance/analysis",
         status: "live",
         hint: "위험지표 · 월별 · 종목 기여도",
-      },
-      {
-        label: "리스크 지표",
-        href: "/performance/risk",
-        status: "placeholder",
-        hint: "변동성 · MDD · 샤프",
       },
       { label: "기간 리포트", status: "planned", hint: "월간 · 분기 요약" },
     ],
@@ -166,17 +160,10 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "지수 · 금리 · 환율 · 원자재 · 크립토",
       },
-      {
-        // ⚠️원본 GE 의 collector(KOSPI200 분봉 DB 등)를 프록시하는 화면이다.
-        //   이 환경에는 collector 가 없어서 **503** 이다. "live" 로 두면 메뉴가
-        //   거짓말을 한다 — 실제 상태로 내린다.
-        label: "자산 가격/수익률 (구)",
-        href: "/stock-monitor",
-        status: "placeholder",
+      { label: "매크로", href: "/macro", status: "placeholder", hint: "collector 필요 — 현재 미가동 (금리·환율은 시장 지표에 있음)" },
+      { label: "AI Key Data", href: "/ai-key-data", status: "placeholder",
         hint: "collector 필요 — 현재 미가동",
       },
-      { label: "매크로", href: "/macro", status: "live", hint: "금리 · 환율 · 원자재" },
-      { label: "AI Key Data", href: "/ai-key-data", status: "live" },
     ],
   },
   {
@@ -217,7 +204,7 @@ export const navItems: NavItem[] = [
         status: "placeholder",
         hint: "반도체 · AI 개념 정리",
       },
-      { label: "미국 어닝/이슈", href: "/stock/us", status: "live" },
+      { label: "미국 어닝/이슈", href: "/stock/us", status: "placeholder" },
       { label: "공시", status: "planned", hint: "DART · SEC" },
     ],
   },
@@ -225,7 +212,9 @@ export const navItems: NavItem[] = [
     label: "뉴스",
     icon: Newspaper,
     children: [
-      { label: "텔레그램", href: "/telegram-news", status: "live" },
+      { label: "텔레그램", href: "/telegram-news", status: "placeholder",
+        hint: "collector 필요 — 현재 미가동",
+      },
       { label: "종토방", href: "/stock-discussion", status: "live" },
       { label: "기사", status: "planned" },
       { label: "보유종목 뉴스", status: "planned", hint: "내 포지션에 걸린 뉴스만" },
@@ -260,7 +249,7 @@ export const navItems: NavItem[] = [
       {
         label: "계좌 연동",
         href: "/settings/connections",
-        status: "placeholder",
+        status: "live",
         hint: "증권사 계좌 · 시세 소스",
       },
       {
