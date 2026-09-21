@@ -43,6 +43,9 @@ from app.models import (
 from app.schemas import (
     AccountListOut,
     CashByCurrencyOut,
+    CashflowEventOut,
+    CashflowMonthOut,
+    CashflowOut,
     ContributionOut,
     DrawdownPointOut,
     MonthlyReturnOut,
@@ -1495,4 +1498,124 @@ def list_orders(
         ),
         first_order_date=min(o.order_date for o in rows),
         last_order_date=max(o.order_date for o in rows),
+    )
+
+
+# ── 입출금 ──────────────────────────────────────────────────────────────────
+
+@router.get("/cashflow", response_model=CashflowOut)
+def get_cashflow(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> CashflowOut:
+    """입출금 이력과 "넣은 돈 대비 지금".
+
+    원천은 새 TR 이 아니라 이미 적재된 `account_daily_performance` 다
+    (키움 usa21670 의 ina_amt/pymn_amt). 입출금 전용 TR 을 또 부르지 않는다.
+
+    ★이 화면이 답해야 할 질문은 하나다: **내가 넣은 돈이 얼마고 지금 얼마인가.**
+      수익률 화면은 "얼마나 잘 굴렸나"(TWR)를 보고, 여기는 "실제로 얼마가
+      늘었나"(금액)를 본다. 둘은 다른 질문이라 숫자도 다르다.
+
+    ⚠️기초 잔고를 **가정하지 않는다.** 조회 구간 첫날의 자산에서 그날 순입금을
+      뺀 값이 0 이 아니면, 그건 구간 시작 전부터 있던 돈이다. 그걸 수익에
+      섞으면 "넣지도 않은 돈이 불어난" 것처럼 보인다 — opening_balance 로 따로 낸다.
+
+    ⚠️여기서는 입출금 날짜를 **증권사가 기록한 그대로** 쓴다. 수익률 계산에서
+      쓰는 날짜 보정(reconcile_flows)을 적용하지 않는다 — 그건 수익률을 바로잡기
+      위한 것이고, 출납 기록은 증권사 장부 그대로여야 대조가 된다.
+    """
+    empty = CashflowOut(
+        events=[], monthly=[], total_deposit_krw=None, total_withdrawal_krw=None,
+        net_deposit_krw=None, opening_balance_krw=None, current_assets_krw=None,
+        gain_krw=None, gain_ratio=None, first_date=None, last_date=None,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+    if not rows:
+        return empty
+
+    zero = Decimal("0")
+    events: list[CashflowEventOut] = []
+    monthly_acc: dict[str, list[Decimal]] = {}
+
+    for base_date, deposit, withdrawal, assets in rows:
+        deposit = deposit or zero
+        withdrawal = withdrawal or zero
+        if deposit > 0 or withdrawal > 0:
+            events.append(
+                CashflowEventOut(
+                    base_date=base_date,
+                    deposit_krw=deposit if deposit > 0 else None,
+                    withdrawal_krw=withdrawal if withdrawal > 0 else None,
+                    net_krw=deposit - withdrawal,
+                    assets_after_krw=assets,
+                )
+            )
+        key = f"{base_date.year:04d}-{base_date.month:02d}"
+        bucket = monthly_acc.setdefault(key, [zero, zero])
+        bucket[0] += deposit
+        bucket[1] += withdrawal
+
+    total_deposit = _sum([e.deposit_krw for e in events]) or zero
+    total_withdrawal = _sum([e.withdrawal_krw for e in events]) or zero
+    net_deposit = total_deposit - total_withdrawal
+
+    first_assets = rows[0][3]
+    first_flow = (rows[0][1] or zero) - (rows[0][2] or zero)
+    # 구간 시작 전부터 있던 돈. 0 에 가까우면 계좌가 이 구간에서 시작한 것이다.
+    opening = (first_assets - first_flow) if first_assets is not None else None
+    current = rows[-1][3]
+    gain = (
+        current - (opening or zero) - net_deposit
+        if current is not None
+        else None
+    )
+    base = (opening or zero) + net_deposit
+
+    return CashflowOut(
+        # 최근이 위로 — 마지막에 무슨 일이 있었는지가 먼저 궁금하다.
+        events=list(reversed(events)),
+        monthly=[
+            CashflowMonthOut(
+                month=month,
+                deposit_krw=values[0],
+                withdrawal_krw=values[1],
+                net_krw=values[0] - values[1],
+            )
+            for month, values in sorted(monthly_acc.items())
+            # 입출금이 아예 없던 달은 빼둔다 — 0 만 늘어놓으면 목록이 안 읽힌다.
+            if values[0] > 0 or values[1] > 0
+        ],
+        total_deposit_krw=total_deposit,
+        total_withdrawal_krw=total_withdrawal,
+        net_deposit_krw=net_deposit,
+        opening_balance_krw=opening,
+        current_assets_krw=current,
+        gain_krw=gain.quantize(_MONEY, rounding=ROUND_HALF_UP) if gain is not None else None,
+        gain_ratio=(
+            (gain / base).quantize(_RATIO, rounding=ROUND_HALF_UP)
+            if gain is not None and base > 0
+            else None
+        ),
+        first_date=rows[0][0],
+        last_date=rows[-1][0],
     )

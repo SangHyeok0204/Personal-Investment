@@ -234,7 +234,7 @@ export const navItems: NavItem[] = [
       {
         label: "입출금",
         href: "/income/transfers",
-        status: "placeholder",
+        status: "live",
         hint: "납입 · 인출 이력",
       },
       { label: "월별 현금흐름", status: "planned" },

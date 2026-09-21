@@ -773,6 +773,48 @@ class OrderListOut(BaseModel):
     last_order_date: date | None
 
 
+# ── 입출금 ───────────────────────────────────────────────────────────────────
+
+class CashflowEventOut(BaseModel):
+    base_date: date
+    # 입금/출금 중 실제로 있었던 쪽만 채운다 — 0 을 늘어놓으면 읽기 나쁘다.
+    deposit_krw: Decimal | None
+    withdrawal_krw: Decimal | None
+    net_krw: Decimal
+    # 그날 마감 예탁자산. 입금이 자산에 반영됐는지 눈으로 대조할 수 있다.
+    assets_after_krw: Decimal | None
+
+
+class CashflowMonthOut(BaseModel):
+    month: str
+    deposit_krw: Decimal
+    withdrawal_krw: Decimal
+    net_krw: Decimal
+
+
+class CashflowOut(BaseModel):
+    """입출금 이력 + "넣은 돈 대비 지금".
+
+    ⚠️`gain_krw` 는 **금액 증감**이지 수익률(TWR)이 아니다. 성과 분석의 기간
+      수익률과 다른 질문에 답한다 — 여기는 "얼마가 늘었나", 거기는 "얼마나 잘
+      굴렸나". 입금 시점이 다르면 두 숫자는 당연히 갈린다.
+    ⚠️`opening_balance_krw` 는 조회 구간 시작 전부터 있던 돈이다. 이걸 수익에
+      섞으면 넣지도 않은 돈이 불어난 것처럼 보인다.
+    """
+
+    events: list[CashflowEventOut]
+    monthly: list[CashflowMonthOut]
+    total_deposit_krw: Decimal | None
+    total_withdrawal_krw: Decimal | None
+    net_deposit_krw: Decimal | None
+    opening_balance_krw: Decimal | None
+    current_assets_krw: Decimal | None
+    gain_krw: Decimal | None
+    gain_ratio: Decimal | None
+    first_date: date | None
+    last_date: date | None
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

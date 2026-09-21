@@ -3332,6 +3332,46 @@ export function getOrders(
   return request<OrderList>(`/api/v1/portfolio/orders${q ? `${q}&` : "?"}${extra}`);
 }
 
+// ── 입출금 ───────────────────────────────────────────────────────────────────
+
+export interface CashflowEvent {
+  base_date: string;
+  deposit_krw: string | null;
+  withdrawal_krw: string | null;
+  net_krw: string;
+  assets_after_krw: string | null;
+}
+
+export interface CashflowMonth {
+  month: string;
+  deposit_krw: string;
+  withdrawal_krw: string;
+  net_krw: string;
+}
+
+export interface Cashflow {
+  events: CashflowEvent[];
+  monthly: CashflowMonth[];
+  total_deposit_krw: string | null;
+  total_withdrawal_krw: string | null;
+  net_deposit_krw: string | null;
+  /** 조회 구간 시작 전부터 있던 돈. 수익에 섞으면 안 된다. */
+  opening_balance_krw: string | null;
+  current_assets_krw: string | null;
+  /** 금액 증감 — 수익률(TWR)이 아니다. */
+  gain_krw: string | null;
+  gain_ratio: string | null;
+  first_date: string | null;
+  last_date: string | null;
+}
+
+export function getCashflow(accountId?: string | null, days = 1095): Promise<Cashflow> {
+  const q = accountQuery(accountId);
+  return request<Cashflow>(
+    `/api/v1/portfolio/cashflow${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,
