@@ -41,6 +41,13 @@ import { runQuickSync } from "@/lib/api";
 
 const VIEW_REFRESH_MS = 5_000;
 const BROKER_SYNC_MS = 5_000;
+// 장이 닫혀 있는 동안의 화면 갱신 주기.
+// ★5초를 늦추는 게 아니다 — **바뀔 수 없는 값을 계속 묻지 않는 것**이다.
+//   장 마감 후 시세는 다음 개장까지 16:00 ET 종가에 고정돼 있고(토스·야후 둘 다
+//   시간외 체결을 주지 않는 것을 실측으로 확인했다), 증권사 동기화도 이미
+//   장중에만 돈다. 그런데 시세 폴링만 24시간 5초로 돌고 있었다.
+//   개장하면 자동으로 5초로 돌아온다.
+const CLOSED_REFRESH_MS = 60_000;
 // 실패가 이어질 때 물러나는 한계. 60초를 넘기면 "멈춘 것"과 구분이 안 된다.
 const MAX_BACKOFF_MS = 60_000;
 const STORAGE_KEY = "pi:auto-refresh";
@@ -48,8 +55,11 @@ const STORAGE_KEY = "pi:auto-refresh";
 type AutoRefreshCtx = {
   enabled: boolean;
   setEnabled: (v: boolean) => void;
-  /** 화면 갱신 주기(ms). 꺼져 있으면 false — react-query 가 폴링을 멈춘다. */
+  /** 화면 갱신 주기(ms). 꺼져 있으면 false — react-query 가 폴링을 멈춘다.
+   *  장이 닫혀 있으면 느려진다(바뀔 수 없는 값을 묻지 않는다). */
   viewInterval: number | false;
+  /** 지금 장이 열려 있다고 보는가. 화면이 "왜 안 움직이지"에 답할 수 있게 노출한다. */
+  marketOpen: boolean;
   syncing: boolean;
   lastSyncAt: Date | null;
   lastError: string | null;
@@ -60,16 +70,54 @@ type AutoRefreshCtx = {
 
 const Ctx = createContext<AutoRefreshCtx | null>(null);
 
-/** KRX/미국장 둘 다 닫혀 있으면 증권사를 부르지 않는다. */
+/** 브라우저 로컬 시각을 특정 타임존의 (요일, 분) 으로 바꾼다.
+ *
+ * ⚠️`getHours()` 는 **사용자 PC 의 시간대**다. 시장 시간을 그걸로 따지면
+ *   여행 중이거나 시간대를 바꿔 둔 PC 에서 통째로 틀린다.
+ */
+function inZone(now: Date, timeZone: string): { day: number; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
+    get("weekday"),
+  );
+  // 자정은 "24" 로 오는 구현이 있다.
+  const hour = Number(get("hour")) % 24;
+  return { day: weekday, minutes: hour * 60 + Number(get("minute")) };
+}
+
+/** KRX/미국장 둘 다 닫혀 있으면 증권사도, 시세도 부르지 않는다.
+ *
+ * ★각 시장의 **현지 시각**으로 따진다(2026-09-22 수정). 전에는 KST 분 범위를
+ *   "넉넉히" 잡아 06:20 까지 개장으로 봤는데, 그 때문에 미국장이 ET 16:00 에
+ *   닫힌 뒤로도 80분을 더 5초마다 시세를 물었다. 서버의 판정
+ *   (`us_regular_session_open`, ET 기준)과도 어긋나 있었다 — 같은 질문에
+ *   두 답이 나오면 어느 쪽을 믿어야 할지 알 수 없다.
+ *
+ * ★현지 시각으로 따지면 **서머타임이 저절로 맞는다.** 전에는 "서머타임 22:30"
+ *   이라고 주석만 달고 고정 범위를 썼다.
+ *
+ * ⚠️공휴일은 보지 않는다. 휴장일에 몇 번 더 물어보는 건 값이 안 변할 뿐
+ *   틀리지는 않는다 — 휴장일 달력을 들고 있을 만한 이득이 아니다.
+ */
 function marketLikelyOpen(now: Date): boolean {
-  const day = now.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = now.getHours() * 60 + now.getMinutes();
-  const krx = mins >= 540 && mins < 930; // 09:00~15:30 KST
-  // 미국 정규장은 KST 23:30~06:00(서머타임 22:30~05:00). 넉넉히 잡는다 —
-  // 조금 더 도는 건 괜찮지만 장중에 안 도는 건 곤란하다.
-  const us = mins >= 1350 || mins < 380;
-  return krx || us;
+  const us = inZone(now, "America/New_York");
+  const kr = inZone(now, "Asia/Seoul");
+  const weekday = (z: { day: number }) => z.day >= 1 && z.day <= 5;
+
+  // 미국 정규장 09:30~16:00 ET. 앞뒤로 5분씩만 여유를 둔다.
+  const usOpen =
+    weekday(us) && us.minutes >= 9 * 60 + 25 && us.minutes < 16 * 60 + 5;
+  // KRX 09:00~15:30 KST.
+  const krOpen =
+    weekday(kr) && kr.minutes >= 8 * 60 + 55 && kr.minutes < 15 * 60 + 35;
+  return usOpen || krOpen;
 }
 
 export function AutoRefreshProvider({ children }: { children: ReactNode }) {
@@ -78,6 +126,17 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const [syncing, setSyncing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // 장 개폐는 분 단위로만 바뀐다. 1분마다 다시 보면 충분하고, 개장 직후
+  // 늦어도 1분 안에 5초 주기로 돌아온다.
+  const [marketOpen, setMarketOpen] = useState(() => marketLikelyOpen(new Date()));
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setMarketOpen(marketLikelyOpen(new Date())),
+      60_000,
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
   // 동기화가 겹치지 않게 한다 — 앞의 호출이 느리면 큐가 쌓인다.
   //   5초 주기 + 실측 1.6초라 평소엔 겹치지 않지만, 증권사가 느려지면 겹친다.
   const inFlight = useRef(false);
@@ -149,14 +208,19 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     () => ({
       enabled,
       setEnabled,
-      viewInterval: enabled ? VIEW_REFRESH_MS : false,
+      viewInterval: enabled
+        ? marketOpen
+          ? VIEW_REFRESH_MS
+          : CLOSED_REFRESH_MS
+        : false,
+      marketOpen,
       syncing,
       lastSyncAt,
       lastError,
       backoffRemainingMs: Math.max(0, nextAllowedAt.current - Date.now()),
       syncNow,
     }),
-    [enabled, setEnabled, syncing, lastSyncAt, lastError, syncNow],
+    [enabled, marketOpen, setEnabled, syncing, lastSyncAt, lastError, syncNow],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
