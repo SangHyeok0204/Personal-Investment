@@ -3524,6 +3524,46 @@ export function getAiData(): Promise<AiData> {
   return request<AiData>("/api/v1/market/ai-data");
 }
 
+// ── 환노출 ───────────────────────────────────────────────────────────────────
+
+export interface FxPosition {
+  ticker: string;
+  name: string | null;
+  currency: string;
+  market_value_krw: string | null;
+  /** 추정값 — 증권사가 매입 환율을 주지 않는다. 모르면 null. */
+  estimated_entry_rate: string | null;
+  estimated_fx_pnl_krw: string | null;
+}
+
+export interface FxShock {
+  move: string;
+  value_krw: string | null;
+  delta_krw: string | null;
+}
+
+export interface FxExposure {
+  base_currency: string;
+  exposed_currency: string;
+  current_rate: string | null;
+  exposed_value_krw: string | null;
+  exposure_ratio: string | null;
+  positions: FxPosition[];
+  estimated_entry_rate: string | null;
+  rate_change_ratio: string | null;
+  /** 추정(매입 환율이 추정이므로). */
+  unrealized_fx_krw: string | null;
+  /** 실측(증권사가 매수·매도 환율을 준다). */
+  realized_fx_krw: string | null;
+  shocks: FxShock[];
+  rate_as_of: string | null;
+  note: string;
+}
+
+export function getFxExposure(accountId?: string | null): Promise<FxExposure> {
+  return request<FxExposure>(`/api/v1/portfolio/fx-exposure${accountQuery(accountId)}`);
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

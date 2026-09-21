@@ -979,6 +979,55 @@ class AiDataOut(BaseModel):
     sources: list[str]
 
 
+# ── 환노출 ───────────────────────────────────────────────────────────────────
+
+class FxPositionOut(BaseModel):
+    """종목별 환노출.
+
+    ⚠️`estimated_entry_rate` 는 **추정**이다. 증권사가 매입 환율을 주지 않아
+      매수 체결일의 일별 종가 환율로 가중평균했다. 모르면 None 이고,
+      그때 `estimated_fx_pnl_krw` 도 None 이다 — 0 으로 두면 "환차 없음"이 된다.
+    """
+
+    ticker: str
+    name: str | None
+    currency: str
+    market_value_krw: Decimal | None
+    estimated_entry_rate: Decimal | None
+    estimated_fx_pnl_krw: Decimal | None
+
+
+class FxShockOut(BaseModel):
+    """환율이 이만큼 움직이면 평가액이 얼마가 되나."""
+
+    move: Decimal
+    value_krw: Decimal | None
+    delta_krw: Decimal | None
+
+
+class FxExposureOut(BaseModel):
+    """환노출 — 원화로 살아가며 달러 자산을 들고 있을 때의 위험.
+
+    ⚠️`unrealized_fx_krw` 는 추정(매입 환율이 추정이므로), `realized_fx_krw` 는
+      실측(증권사가 매수·매도 환율을 함께 준다)이다. 성격이 다르므로 합치지 않는다.
+    """
+
+    base_currency: str
+    exposed_currency: str
+    current_rate: Decimal | None
+    exposed_value_krw: Decimal | None
+    # 전체 평가금액 중 외화 비중. 1.0 이면 전부 환율에 노출돼 있다.
+    exposure_ratio: Decimal | None
+    positions: list[FxPositionOut]
+    estimated_entry_rate: Decimal | None
+    rate_change_ratio: Decimal | None
+    unrealized_fx_krw: Decimal | None
+    realized_fx_krw: Decimal | None
+    shocks: list[FxShockOut]
+    rate_as_of: date | None
+    note: str
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

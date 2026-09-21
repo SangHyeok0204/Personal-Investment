@@ -82,8 +82,9 @@ export const navItems: NavItem[] = [
       },
       {
         label: "환노출",
-        status: "planned",
-        hint: "USD/KRW 노출과 환헤지 상태",
+        href: "/portfolio/fx",
+        status: "live",
+        hint: "USD/KRW 노출 · 환차손익 · 민감도",
       },
     ],
   },

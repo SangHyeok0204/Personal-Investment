@@ -50,6 +50,9 @@ from app.schemas import (
     BenchmarkPeriodOut,
     BenchmarkPointOut,
     CashflowOut,
+    FxExposureOut,
+    FxPositionOut,
+    FxShockOut,
     ContributionOut,
     DrawdownPointOut,
     MonthlyReturnOut,
@@ -1819,4 +1822,187 @@ def get_benchmark(
         ),
         first_date=usable[0],
         last_date=last,
+    )
+
+
+# ── 환노출 ──────────────────────────────────────────────────────────────────
+
+_FX_PAIR = "KRW=X"
+# 민감도 표에 세울 환율 변동 폭.
+_FX_SHOCKS = [Decimal("-0.10"), Decimal("-0.05"), Decimal("0.05"), Decimal("0.10")]
+
+
+@router.get("/fx-exposure", response_model=FxExposureOut)
+def get_fx_exposure(
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> FxExposureOut:
+    """환노출 — 원화로 살아가는 사람이 달러 자산을 들고 있을 때의 위험.
+
+    ★이 화면이 답하는 것: **내 손익 중 얼마가 종목이고 얼마가 환율인가.**
+      실측 예(NVDA, 실현): 주가로 +₩50,182 벌었는데 환율이 1,524 → 1,380 으로
+      빠져 환차 -₩121,201, 합치면 -₩71,019 였다.
+
+    ⚠️**매입 환율을 증권사가 주지 않는다.** trades.amount_krw 는 82건 전부 비어
+      있고, 일별성과의 환율 칸도 530행 전부 비어 있다. 그래서 보유 종목의
+      "얼마에 샀나"는 **매수 체결일의 일별 종가 환율로 추정**한다.
+      추정이라는 사실을 화면에도 적는다 — 실제 체결 환율과는 다를 수 있다.
+
+    ⚠️실현 환차손익은 추정이 아니다. 증권사가 매수·매도 환율을 함께 주므로
+      그 값을 그대로 쓴다.
+    """
+    empty = FxExposureOut(
+        base_currency="KRW", exposed_currency="USD", current_rate=None,
+        exposed_value_krw=None, exposure_ratio=None, positions=[],
+        estimated_entry_rate=None, rate_change_ratio=None,
+        unrealized_fx_krw=None, realized_fx_krw=None, shocks=[],
+        rate_as_of=None, note="",
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    rows = db.execute(
+        select(CurrentPosition, Asset)
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+        .order_by(CurrentPosition.market_value_krw.desc().nullslast())
+    ).all()
+    if not rows:
+        return empty
+
+    # 외화 종목만 환노출이다. 원화 종목은 환율이 움직여도 그대로다.
+    foreign = [(p, a) for p, a in rows if (a.currency or "USD") != "KRW"]
+    exposed = _sum([p.market_value_krw for p, _ in foreign])
+    total = _sum([p.market_value_krw for p, _ in rows])
+    current_rate = next(
+        (p.exchange_rate for p, _ in foreign if p.exchange_rate is not None), None
+    )
+
+    # 매수 체결일 환율로 종목별 평균 매입 환율을 추정한다.
+    history = fetch_history([_FX_PAIR], range_="2y")
+    fx = history.get(_FX_PAIR)
+    buys = db.execute(
+        select(Trade.ticker, Trade.trade_date, Trade.amount_local)
+        .where(
+            Trade.account_id.in_(account_ids),
+            Trade.side == "BUY",
+            Trade.ticker.in_([a.ticker for _, a in foreign]),
+        )
+    ).all()
+
+    weighted: dict[str, list[Decimal]] = {}
+    for ticker, trade_date, amount in buys:
+        if amount is None or fx is None:
+            continue
+        rate = fx.close_on_or_before(trade_date)
+        if rate is None:
+            continue
+        bucket = weighted.setdefault(ticker, [Decimal("0"), Decimal("0")])
+        bucket[0] += amount * rate
+        bucket[1] += amount
+
+    def entry_rate(ticker: str) -> Decimal | None:
+        bucket = weighted.get(ticker)
+        if not bucket or bucket[1] == 0:
+            return None
+        return (bucket[0] / bucket[1]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    positions: list[FxPositionOut] = []
+    fx_pnl_total = Decimal("0")
+    fx_pnl_known = False
+    for position, asset in foreign:
+        entry = entry_rate(asset.ticker)
+        value = position.market_value_krw
+        # ⚠️환차손익 = 평가금액 × (1 − 매입환율/현재환율). 매입환율을 모르면 None.
+        gain = None
+        if entry and current_rate and value is not None and current_rate > 0:
+            gain = (value * (Decimal("1") - entry / current_rate)).quantize(
+                _MONEY, rounding=ROUND_HALF_UP
+            )
+            fx_pnl_total += gain
+            fx_pnl_known = True
+        positions.append(
+            FxPositionOut(
+                ticker=asset.ticker,
+                name=asset.name,
+                currency=asset.currency or "USD",
+                market_value_krw=value,
+                estimated_entry_rate=entry,
+                estimated_fx_pnl_krw=gain,
+            )
+        )
+
+    # 포트폴리오 평균 매입 환율 — 평가금액 가중.
+    numerator = sum(
+        (p.market_value_krw or Decimal("0")) * (entry_rate(a.ticker) or Decimal("0"))
+        for p, a in foreign
+        if entry_rate(a.ticker) is not None and p.market_value_krw is not None
+    )
+    denominator = sum(
+        (p.market_value_krw or Decimal("0"))
+        for p, a in foreign
+        if entry_rate(a.ticker) is not None and p.market_value_krw is not None
+    )
+    portfolio_entry = (
+        (numerator / denominator).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if denominator
+        else None
+    )
+
+    realized_fx = db.execute(
+        select(func.sum(RealizedPnl.fx_pnl_krw)).where(
+            RealizedPnl.account_id.in_(account_ids)
+        )
+    ).scalar()
+
+    return FxExposureOut(
+        base_currency="KRW",
+        exposed_currency="USD",
+        current_rate=current_rate,
+        exposed_value_krw=exposed,
+        exposure_ratio=(
+            (exposed / total).quantize(_RATIO, rounding=ROUND_HALF_UP)
+            if exposed is not None and total
+            else None
+        ),
+        positions=positions,
+        estimated_entry_rate=portfolio_entry,
+        rate_change_ratio=(
+            ((current_rate - portfolio_entry) / portfolio_entry).quantize(
+                _RATIO, rounding=ROUND_HALF_UP
+            )
+            if portfolio_entry and current_rate and portfolio_entry > 0
+            else None
+        ),
+        unrealized_fx_krw=(
+            fx_pnl_total.quantize(_MONEY, rounding=ROUND_HALF_UP)
+            if fx_pnl_known
+            else None
+        ),
+        realized_fx_krw=realized_fx,
+        shocks=[
+            FxShockOut(
+                move=shock,
+                value_krw=(
+                    (exposed * (Decimal("1") + shock)).quantize(
+                        _MONEY, rounding=ROUND_HALF_UP
+                    )
+                    if exposed is not None
+                    else None
+                ),
+                delta_krw=(
+                    (exposed * shock).quantize(_MONEY, rounding=ROUND_HALF_UP)
+                    if exposed is not None
+                    else None
+                ),
+            )
+            for shock in _FX_SHOCKS
+        ],
+        rate_as_of=(fx.dates[-1] if fx and fx.dates else None),
+        note=(
+            "매입 환율은 증권사가 주지 않아 **매수 체결일의 일별 종가 환율로 추정**한 "
+            "값입니다. 실제 체결 환율과는 다를 수 있습니다. 실현 환차손익은 증권사가 "
+            "매수·매도 환율을 함께 주므로 추정이 아닙니다."
+        ),
     )
