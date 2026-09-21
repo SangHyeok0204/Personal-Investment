@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pydantic import ValidationError
 from sqlalchemy import text
 
+from brokers.credentials import EnvCredentialResolver
 from brokers.kiwoom import auth, domestic, us_equities
 from brokers.kiwoom.adapter import normalize_account
 from brokers.kiwoom.client import KiwoomClient
@@ -37,6 +38,9 @@ from repositories import snapshots as snapshots_repo
 
 DEFAULT_BASE_URL = "https://api.kiwoom.com"
 CONFIG_ERROR_MESSAGE = "KIWOOM_APP_KEY/KIWOOM_SECRET_KEY is not configured"
+
+# 자격증명 출처. 테스트나 다른 배포 형태에서 갈아끼울 수 있게 모듈 수준에 둔다.
+_CREDENTIAL_RESOLVER = EnvCredentialResolver()
 
 
 # ---- connection helpers (no dedicated repo per contract §5 structure) ---------
@@ -153,15 +157,27 @@ def run(engine, job_id, payload, storage_dir, log_job):
         connection_id = connection["id"]
         broker_id = connection["broker_id"]
 
-        app_key = os.environ.get("KIWOOM_APP_KEY", "").strip()
-        secret_key = os.environ.get("KIWOOM_SECRET_KEY", "").strip()
-        base_url = os.environ.get("KIWOOM_API_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
+        # ★2026-09-21: 전역 환경변수를 직접 읽던 것을 자격증명 리졸버로 바꿨다.
+        #   연결(brokerage_connections)마다 다른 키를 줄 수 있어야 "키만 바꾸면
+        #   다른 사람 계좌"가 성립한다. 리졸버가 연결 이름으로 먼저 찾고, 없으면
+        #   KIWOOM_APP_KEY 로 떨어지므로 혼자 쓸 때는 설정이 그대로다.
+        try:
+            credentials = _CREDENTIAL_RESOLVER.resolve(
+                broker_code="KIWOOM", connection=connection
+            )
+        except KiwoomConfigError as exc:
+            log_job(engine, job_id, "ERROR", "validate_configuration", str(exc))
+            raise
+        app_key = credentials.app_key
+        secret_key = credentials.secret_key
+        base_url = credentials.base_url
 
-        if not app_key or not secret_key:
-            log_job(engine, job_id, "ERROR", "validate_configuration", CONFIG_ERROR_MESSAGE)
-            raise KiwoomConfigError(CONFIG_ERROR_MESSAGE)
-        log_job(engine, job_id, "INFO", "validate_configuration",
-                "Configuration valid; credentials present")
+        # 지문만 남긴다 — 어느 자격증명으로 돌았는지는 알 수 있고 키는 안 샌다.
+        log_job(
+            engine, job_id, "INFO", "validate_configuration",
+            "Configuration valid; credentials present "
+            f"(fingerprint={credentials.fingerprint}, env={credentials.environment})",
+        )
 
         now = datetime.now(timezone.utc)
         rel_dir, abs_dir = _raw_dir(storage_dir, job_id, now)

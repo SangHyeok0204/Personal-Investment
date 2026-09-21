@@ -67,7 +67,7 @@ export const navItems: NavItem[] = [
         label: "계좌별 잔고",
         href: "/portfolio/accounts",
         status: "placeholder",
-        hint: "키움 · 토스 · 연금 계좌 합산",
+        hint: "증권사별 계좌 합산",
       },
       {
         label: "섹터/자산 배분",
@@ -263,7 +263,7 @@ export const navItems: NavItem[] = [
         label: "계좌 연동",
         href: "/settings/connections",
         status: "placeholder",
-        hint: "키움 · 토스 API 키 등록",
+        hint: "증권사 계좌 · 시세 소스",
       },
       {
         label: "수집 상태",
