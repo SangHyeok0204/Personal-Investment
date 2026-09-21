@@ -6,3 +6,4 @@
 """
 from .base import CompositePriceSource, PriceSource, Quote  # noqa: F401
 from .yahoo import YahooPriceSource  # noqa: F401
+from . import fred  # noqa: F401

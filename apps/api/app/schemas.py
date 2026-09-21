@@ -815,6 +815,39 @@ class CashflowOut(BaseModel):
     last_date: date | None
 
 
+# ── 매크로 지표 ──────────────────────────────────────────────────────────────
+
+class MacroRowOut(BaseModel):
+    """매크로 지표 한 줄.
+
+    ⚠️`value` 의 의미가 `transform` 마다 다르다.
+      · level    — 값 자체(실업률 4.1 → "4.1%")
+      · yoy      — **전년 대비 변화율**(CPI 332.8 이 아니라 0.029 → "+2.9%")
+      · mom_diff — 전월 대비 증감(비농업고용 158,913 이 아니라 150 → "+15만명")
+    ⚠️`changes` 는 그 값의 **차이**다. yoy 지표의 변화는 "물가상승률이 몇 %p
+      움직였나"이지 "물가가 몇 % 올랐나"가 아니다.
+    """
+
+    series_id: str
+    name: str
+    category: str
+    transform: str
+    unit: str
+    note: str | None
+    value: Decimal | None
+    # 발표가 한 달 이상 늦는 지표가 있다. 화면은 이 날짜를 반드시 띄운다.
+    as_of: date | None
+    changes: dict[str, Decimal | None]
+
+
+class MacroMonitorOut(BaseModel):
+    rows: list[MacroRowOut]
+    categories: list[str]
+    periods: list[str]
+    missing: list[str]
+    notes: list[str]
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

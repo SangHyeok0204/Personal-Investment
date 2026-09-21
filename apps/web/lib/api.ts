@@ -3372,6 +3372,34 @@ export function getCashflow(accountId?: string | null, days = 1095): Promise<Cas
   );
 }
 
+// ── 매크로 지표 ──────────────────────────────────────────────────────────────
+
+export interface MacroRow {
+  series_id: string;
+  name: string;
+  category: string;
+  /** level(값 자체) · yoy(전년 대비 변화율) · mom_diff(전월 대비 증감) */
+  transform: "level" | "yoy" | "mom_diff";
+  unit: string;
+  note: string | null;
+  value: string | null;
+  /** 발표가 한 달 이상 늦는 지표가 있다 — 반드시 띄운다. */
+  as_of: string | null;
+  changes: Record<string, string | null>;
+}
+
+export interface MacroMonitor {
+  rows: MacroRow[];
+  categories: string[];
+  periods: string[];
+  missing: string[];
+  notes: string[];
+}
+
+export function getMacro(): Promise<MacroMonitor> {
+  return request<MacroMonitor>("/api/v1/market/macro");
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

@@ -16,17 +16,24 @@
 import sys
 import threading
 import time
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Query
 
-from app.schemas import MarketMonitorOut, MarketRowOut
+from app.schemas import (
+    MacroMonitorOut,
+    MacroRowOut,
+    MarketMonitorOut,
+    MarketRowOut,
+)
 
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
 if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
+from prices import fred  # noqa: E402
 from prices.history import PERIODS, base_values, changes, fetch_series  # noqa: E402
 
 router = APIRouter(prefix="/api/v1/market", tags=["market"])
@@ -130,4 +137,134 @@ def get_market_monitor(refresh: bool = Query(default=False)) -> MarketMonitorOut
     built = _build()
     with _lock:
         _cache = (time.monotonic(), built)
+    return built
+
+
+# ── 매크로 지표 ─────────────────────────────────────────────────────────────
+
+_MACRO_SEED = (
+    Path(__file__).resolve().parents[4] / "database" / "seeds" / "macro_universe.py"
+)
+
+# 매크로는 월간 발표가 대부분이다. 5분마다 받을 이유가 없다.
+MACRO_TTL_SECONDS = 3600.0
+
+_macro_lock = threading.Lock()
+_macro_cache: tuple[float, "MacroMonitorOut"] | None = None
+
+
+def _load_macro_universe():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_macro_universe_seed", _MACRO_SEED)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_macro_universe_seed"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _macro_value(series, transform: str) -> Decimal | None:
+    """지표의 **본래 읽는 값**. transform 마다 다르다.
+
+    ⚠️전부 raw 값으로 보여 주면 틀린 말이 된다 — CPI 332.8 은 아무 의미가 없다.
+    """
+    if transform == "yoy":
+        return series.yoy()
+    if transform == "mom_diff":
+        return series.mom_diff()
+    latest = series.latest
+    return latest[1] if latest else None
+
+
+def _macro_at(series, transform: str, when):
+    """과거 시점 기준의 같은 값. 기간 비교에 쓴다."""
+    if transform == "yoy":
+        return series.yoy(at=when)
+    if transform == "mom_diff":
+        return series.mom_diff(at=when)
+    return series.value_on_or_before(when)
+
+
+def _build_macro() -> "MacroMonitorOut":
+    universe = _load_macro_universe()
+    rows_def = universe.MACRO_UNIVERSE
+    series_map = fred.fetch_series([r[0] for r in rows_def])
+
+    labels = [label for label, _ in universe.PERIOD_DAYS]
+    out: list[MacroRowOut] = []
+    missing: list[str] = []
+
+    for series_id, name, category, transform, unit, note in rows_def:
+        series = series_map.get(series_id)
+        if series is None:
+            missing.append(f"{name} ({series_id})")
+            continue
+
+        current = _macro_value(series, transform)
+        latest = series.latest
+        anchor = latest[0] if latest else None
+
+        changes: dict[str, Decimal | None] = {}
+        for label, days in universe.PERIOD_DAYS:
+            past = (
+                _macro_at(series, transform, anchor - timedelta(days=days))
+                if anchor is not None
+                else None
+            )
+            # ⚠️변화는 **값의 차이**다. yoy 지표의 "변화"는 물가상승률이 몇 %p
+            #   움직였나이지, 물가가 몇 % 올랐나가 아니다.
+            changes[label] = (
+                (current - past).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                if current is not None and past is not None
+                else None
+            )
+
+        out.append(
+            MacroRowOut(
+                series_id=series_id,
+                name=name,
+                category=category,
+                transform=transform,
+                unit=unit,
+                note=note or None,
+                value=(
+                    current.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                    if current is not None
+                    else None
+                ),
+                # ⚠️CPI·고용은 발표가 한 달 이상 늦다. 기준일을 반드시 같이 낸다.
+                as_of=anchor,
+                changes=changes,
+            )
+        )
+
+    return MacroMonitorOut(
+        rows=out,
+        categories=universe.CATEGORY_ORDER,
+        periods=labels,
+        missing=missing,
+        notes=universe.MISSING_NOTES,
+    )
+
+
+@router.get("/macro", response_model=MacroMonitorOut)
+def get_macro(refresh: bool = Query(default=False)) -> MacroMonitorOut:
+    """매크로 지표 — 물가·고용·금리·성장.
+
+    ★FRED 를 **키 없이** 쓴다. API 는 api_key 를 요구하지만(400), 그래프 CSV
+      내보내기는 키 없이 200 이다(실측).
+    """
+    global _macro_cache
+    now = time.monotonic()
+    with _macro_lock:
+        if (
+            not refresh
+            and _macro_cache is not None
+            and now - _macro_cache[0] < MACRO_TTL_SECONDS
+        ):
+            return _macro_cache[1]
+
+    built = _build_macro()
+    with _macro_lock:
+        _macro_cache = (time.monotonic(), built)
     return built
