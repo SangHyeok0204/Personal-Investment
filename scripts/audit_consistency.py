@@ -95,6 +95,7 @@ class Audit:
         performance = self.get("/portfolio/performance?days=1095")
         realized = self.get("/portfolio/realized?days=1095")
         dividends = self.get("/portfolio/dividends?days=1095")
+        monthly = self.get("/portfolio/monthly-cashflow?days=1095")
 
         print("\n[평가금액·손익]")
         self.same(
@@ -163,6 +164,24 @@ class Audit:
         self.same(
             "배당", dividends["total_amount_krw"], analytics["dividend_krw"],
             "dividends", "analytics",
+        )
+
+        # ── 월별 현금흐름 ──────────────────────────────────────────────
+        # ⚠️두 화면의 원천이 **다르다**: 배당 화면은 dividends 테이블,
+        #   월별 현금흐름은 account_daily_performance 다. 같은 사실을 증권사가
+        #   두 군데에 적어 둔 것이므로 값이 갈리면 적재 어딘가가 틀린 것이다.
+        print("\n[월별 현금흐름]")
+        self.same(
+            "배당 총계", dividends["total_amount_krw"], monthly["total_dividend_krw"],
+            "dividends", "monthly-cashflow",
+        )
+        # 순납입도 같은 원천(일별성과)이라 입출금 화면과 정확히 같아야 한다.
+        self.same(
+            "순납입",
+            Decimal(cashflow["total_deposit_krw"] or 0)
+            - Decimal(cashflow["total_withdrawal_krw"] or 0),
+            Decimal(monthly["total_deposit_krw"]) - Decimal(monthly["total_withdrawal_krw"]),
+            "cashflow", "monthly-cashflow",
         )
 
         print(f"\n{'=' * 56}")

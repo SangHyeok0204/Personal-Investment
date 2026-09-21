@@ -3619,6 +3619,57 @@ export function getTradingCosts(
   );
 }
 
+// ── 월별 현금흐름 ────────────────────────────────────────────────────────────
+// ★여기 금액은 **전부 원화**다. 원천이 account_daily_performance 하나뿐이라
+//   통화를 섞을 일이 없다 — 수수료/세금 화면(USD, trades 원천)과는 다른 출처다.
+//   두 화면의 비용 숫자를 환율로 이어 붙이지 않는다.
+
+export interface MonthlyCashflowRow {
+  month: string;
+  /** 외부 흐름 — 내 지갑 ↔ 계좌. 수익이 아니다. */
+  deposit_krw: string;
+  withdrawal_krw: string;
+  net_flow_krw: string;
+  /** 계좌가 만든 현금 — 시장과 무관하게 실제로 생기거나 사라진 돈. */
+  dividend_krw: string;
+  cost_krw: string;
+  net_cash_generated_krw: string;
+  /** 매매 회전 — 계좌 안에서 현금 ↔ 주식. 손익이 아니다. */
+  buy_krw: string;
+  sell_krw: string;
+  pnl_krw: string;
+  opening_assets_krw: string | null;
+  closing_assets_krw: string | null;
+  /** 월초 + 순납입 + 손익으로 설명되지 않는 나머지. **환차라고 부르지 않는다.** */
+  unexplained_krw: string | null;
+}
+
+export interface MonthlyCashflow {
+  rows: MonthlyCashflowRow[];
+  total_deposit_krw: string;
+  total_withdrawal_krw: string;
+  total_dividend_krw: string;
+  total_cost_krw: string;
+  net_cash_generated_krw: string;
+  total_buy_krw: string;
+  total_sell_krw: string;
+  months_dividend_covered_cost: number;
+  months_total: number;
+  first_month: string | null;
+  last_month: string | null;
+  note: string;
+}
+
+export function getMonthlyCashflow(
+  accountId?: string | null,
+  days = 1095,
+): Promise<MonthlyCashflow> {
+  const q = accountQuery(accountId);
+  return request<MonthlyCashflow>(
+    `/api/v1/portfolio/monthly-cashflow${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

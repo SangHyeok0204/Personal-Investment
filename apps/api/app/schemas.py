@@ -1151,3 +1151,59 @@ class DividendListOut(BaseModel):
     by_ticker: list[DividendByTickerOut]
     first_pay_date: date | None
     last_pay_date: date | None
+
+
+# ── 월별 현금흐름 ────────────────────────────────────────────────────────────
+
+class MonthlyCashflowRowOut(BaseModel):
+    """한 달의 현금흐름 한 줄. **전부 원화다.**
+
+    ★원천을 `account_daily_performance` 하나로 고정했다. trades 는 USD 이고
+      거래일 환율이 없어서, 두 원천을 섞으면 통화가 섞인다. 반면 이 표는
+      입금·출금·배당·수수료·매수·매도를 증권사가 **전부 원화로** 준다.
+
+    ⚠️세 층을 더하지 않는다. 성격이 다르기 때문이다:
+      · 외부 흐름(deposit/withdrawal) — 내 지갑 ↔ 계좌. 수익이 아니다.
+      · 계좌가 만든 현금(dividend − cost) — 시장과 무관하게 실제로 생긴 현금.
+      · 매매 회전(buy/sell) — 계좌 안에서 현금 ↔ 주식. 손익이 아니다.
+    """
+
+    month: str
+    deposit_krw: Decimal
+    withdrawal_krw: Decimal
+    net_flow_krw: Decimal
+    dividend_krw: Decimal
+    cost_krw: Decimal
+    net_cash_generated_krw: Decimal
+    buy_krw: Decimal
+    sell_krw: Decimal
+    pnl_krw: Decimal
+    opening_assets_krw: Decimal | None
+    closing_assets_krw: Decimal | None
+    #: 월초 + 순납입 + 손익 으로 설명되지 않는 나머지. 대부분 환율이다(아래 note).
+    unexplained_krw: Decimal | None
+
+
+class MonthlyCashflowOut(BaseModel):
+    """월별 현금흐름.
+
+    ⚠️`unexplained_krw` 를 **환차손익이라고 부르지 않는다.** 키움 일별성과의
+      `exchange_rate` 가 530행 전부 비어 있어 환율을 실측할 수 없다. 다만
+      "전월말 주식평가액 × 월간 USD/KRW 변화"와 맞춰 보면 상관계수 0.937
+      (R²=0.878), 부호 15/17 일치, 절대합의 63%가 설명된다 — 그래서 '대부분
+      환율'이라고는 말하되 환차 금액으로 적지는 않는다.
+    """
+
+    rows: list[MonthlyCashflowRowOut]
+    total_deposit_krw: Decimal
+    total_withdrawal_krw: Decimal
+    total_dividend_krw: Decimal
+    total_cost_krw: Decimal
+    net_cash_generated_krw: Decimal
+    total_buy_krw: Decimal
+    total_sell_krw: Decimal
+    months_dividend_covered_cost: int
+    months_total: int
+    first_month: str | None
+    last_month: str | None
+    note: str

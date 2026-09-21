@@ -246,7 +246,14 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "납입 · 인출 이력",
       },
-      { label: "월별 현금흐름", status: "planned" },
+      {
+        label: "월별 현금흐름",
+        href: "/income/monthly",
+        status: "live",
+        // ⚠️입출금 화면과 다른 질문이다 — 거기는 "내가 넣은 돈 대비 지금",
+        //   여기는 "한 달 동안 돈이 어디서 들어오고 어디로 나갔나"다.
+        hint: "배당 − 비용 · 순납입 · 매매 회전",
+      },
       { label: "세금", status: "planned", hint: "양도소득세 · 배당소득세 추정" },
     ],
   },

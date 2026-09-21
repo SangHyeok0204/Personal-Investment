@@ -66,6 +66,8 @@ from app.schemas import (
     InclusionWeightPointOut,
     LiveQuoteOut,
     LiveQuotesOut,
+    MonthlyCashflowOut,
+    MonthlyCashflowRowOut,
     OrderListOut,
     OrderOut,
     TradingCostOut,
@@ -2143,4 +2145,147 @@ def get_trading_costs(
         realized_pnl_krw=realized,
         first_trade_date=min(t.trade_date for t in rows),
         last_trade_date=max(t.trade_date for t in rows),
+    )
+
+
+# ── 월별 현금흐름 ────────────────────────────────────────────────────────────
+
+_FX_NOTE = (
+    "월초 자산 + 순납입 + 손익으로 설명되지 않는 나머지를 '그 외'로 둡니다. "
+    "환차손익이라고 적지 않은 이유는 키움 일별성과의 환율 칸이 530행 전부 비어 "
+    "있어 실측할 수 없기 때문입니다. 다만 전월말 주식평가액 × 월간 USD/KRW "
+    "변화와 맞춰 보면 상관계수 0.937(R²=0.878), 부호 17개월 중 15개월 일치, "
+    "절대합의 63%가 설명됩니다 — 대부분 환율입니다."
+)
+
+
+@router.get("/monthly-cashflow", response_model=MonthlyCashflowOut)
+def get_monthly_cashflow(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> MonthlyCashflowOut:
+    """월별 현금흐름 — 한 달 동안 돈이 어디서 들어오고 어디로 나갔나.
+
+    ★원천을 `account_daily_performance` **하나로** 고정한다. 이 표는 입금·출금·
+      배당·수수료·매수대금·매도대금을 증권사가 전부 **원화로** 주기 때문에
+      통화를 섞을 일이 없다. trades(USD)와 합치는 순간 거래일 환율이 없어
+      원화 환산이 거짓이 되는데, 여기서는 그 문제 자체가 생기지 않는다.
+      → 수수료/세금 화면의 USD 금액과 여기 원화 금액은 **다른 원천**이다.
+        둘을 환율로 이어 붙이지 않는다.
+
+    ⚠️세 층을 한 숫자로 합치지 않는다. 성격이 다르다:
+      · 외부 흐름(입금−출금) — 내 지갑 ↔ 계좌. **수익이 아니다.** 자산은 늘지만
+        내 돈이 늘어난 게 아니라 위치만 바뀐 것이다.
+      · 계좌가 만든 현금(배당−비용) — 시장이 어떻든 실제로 생기거나 사라진 현금.
+      · 매매 회전(매수/매도) — 계좌 안에서 현금 ↔ 주식. 손익이 아니다.
+      합치면 "이번 달 900만원 들어옴" 같은 말이 나오는데 그건 아무 뜻이 없다.
+
+    ⚠️월말 자산 대조에서 남는 값을 **환차손익이라고 부르지 않는다**(_FX_NOTE).
+      실측할 수 없는 것에 이름을 붙이면 그 순간 추정이 실측인 척하게 된다.
+    """
+    empty = MonthlyCashflowOut(
+        rows=[], total_deposit_krw=Decimal("0"), total_withdrawal_krw=Decimal("0"),
+        total_dividend_krw=Decimal("0"), total_cost_krw=Decimal("0"),
+        net_cash_generated_krw=Decimal("0"), total_buy_krw=Decimal("0"),
+        total_sell_krw=Decimal("0"), months_dividend_covered_cost=0, months_total=0,
+        first_month=None, last_month=None, note=_FX_NOTE,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+            func.sum(AccountDailyPerformance.dividend_krw),
+            func.sum(AccountDailyPerformance.commission_tax_krw),
+            func.sum(AccountDailyPerformance.buy_amount_krw),
+            func.sum(AccountDailyPerformance.sell_amount_krw),
+            func.sum(AccountDailyPerformance.pnl_krw),
+            # 자산 잔액은 **합치지 않는다** — 잔액이지 흐름이 아니다.
+            # 계좌가 여럿이면 같은 날 잔액의 합이 맞으므로 그때만 합산한다.
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+    if not rows:
+        return empty
+
+    zero = Decimal("0")
+    #: 월 → [입금, 출금, 배당, 비용, 매수, 매도, 손익]
+    flows: dict[str, list[Decimal]] = {}
+    #: 월 → 그 달 **마지막 거래일**의 자산 잔액. 월말 잔액은 합이 아니라 끝값이다.
+    closing: dict[str, Decimal | None] = {}
+
+    for base_date, dep, wd, div, cost, buy, sell, pnl, assets in rows:
+        key = f"{base_date.year:04d}-{base_date.month:02d}"
+        bucket = flows.setdefault(key, [zero] * 7)
+        for i, v in enumerate((dep, wd, div, cost, buy, sell, pnl)):
+            bucket[i] += v or zero
+        # 행이 날짜 오름차순이라 마지막으로 덮어쓴 값이 그 달의 끝값이 된다.
+        closing[key] = assets
+
+    months = sorted(flows)
+    out: list[MonthlyCashflowRowOut] = []
+    previous_close: Decimal | None = None
+
+    for month in months:
+        dep, wd, div, cost, buy, sell, pnl = flows[month]
+        close = closing[month]
+        net_flow = dep - wd
+        # 첫 달은 월초 잔액을 모른다 — 0 으로 두면 "무에서 시작했다"는 거짓이 된다.
+        unexplained = (
+            close - previous_close - net_flow - pnl
+            if close is not None and previous_close is not None
+            else None
+        )
+        out.append(
+            MonthlyCashflowRowOut(
+                month=month,
+                deposit_krw=dep,
+                withdrawal_krw=wd,
+                net_flow_krw=net_flow,
+                dividend_krw=div,
+                cost_krw=cost,
+                net_cash_generated_krw=div - cost,
+                buy_krw=buy,
+                sell_krw=sell,
+                pnl_krw=pnl,
+                opening_assets_krw=previous_close,
+                closing_assets_krw=close,
+                unexplained_krw=unexplained,
+            )
+        )
+        previous_close = close
+
+    total_div = sum((r.dividend_krw for r in out), zero)
+    total_cost = sum((r.cost_krw for r in out), zero)
+
+    return MonthlyCashflowOut(
+        # 최근이 위로 — 이번 달이 먼저 궁금하다.
+        rows=list(reversed(out)),
+        total_deposit_krw=sum((r.deposit_krw for r in out), zero),
+        total_withdrawal_krw=sum((r.withdrawal_krw for r in out), zero),
+        total_dividend_krw=total_div,
+        total_cost_krw=total_cost,
+        net_cash_generated_krw=total_div - total_cost,
+        total_buy_krw=sum((r.buy_krw for r in out), zero),
+        total_sell_krw=sum((r.sell_krw for r in out), zero),
+        # ⚠️'덮었다'는 배당 > 비용인 달만 센다. 둘 다 0 인 달은 덮은 게 아니다.
+        months_dividend_covered_cost=sum(
+            1 for r in out if r.dividend_krw > r.cost_krw
+        ),
+        months_total=len(out),
+        first_month=months[0],
+        last_month=months[-1],
+        note=_FX_NOTE,
     )

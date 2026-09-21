@@ -620,3 +620,98 @@ def test_dividends_respect_day_window(client, db, kiwoom):
 
     assert client.get("/api/v1/portfolio/dividends?days=365").json()["total"] == 1
     assert client.get("/api/v1/portfolio/dividends?days=3000").json()["total"] == 2
+
+
+# ── 월별 현금흐름 ────────────────────────────────────────────────────────────
+
+def _add_daily(db, account_id, day, **kw):
+    from app.models import AccountDailyPerformance
+
+    db.add(AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id, base_date=day, **kw))
+
+
+def test_monthly_cashflow_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/monthly-cashflow").json()
+    assert body["rows"] == []
+    assert body["months_total"] == 0
+
+
+def test_monthly_cashflow_keeps_the_three_layers_apart(client, db, kiwoom):
+    """입금과 배당을 **더하지 않는다** — 입금은 수익이 아니라 위치 이동이다."""
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    # ⚠️`.replace(day=15)` 는 오늘이 월초면 **미래 날짜**가 된다. 1일로 고정한다.
+    today = _date.today().replace(day=1)
+    _add_daily(
+        db, account_id, today,
+        deposit_krw=Decimal("1000000"), withdrawal_krw=Decimal("200000"),
+        dividend_krw=Decimal("30000"), commission_tax_krw=Decimal("12000"),
+        buy_amount_krw=Decimal("5000000"), sell_amount_krw=Decimal("3000000"),
+        pnl_krw=Decimal("40000"), deposit_assets_krw=Decimal("9000000"),
+    )
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/monthly-cashflow?days=1095").json()
+    row = body["rows"][0]
+    # 외부 흐름 — 그 자체로 닫힌다.
+    assert Decimal(row["net_flow_krw"]) == Decimal("800000")
+    # 계좌가 만든 현금 — 배당 − 비용. 입금이 섞이지 않았다.
+    assert Decimal(row["net_cash_generated_krw"]) == Decimal("18000")
+    # 매매 회전은 합계를 내지 않는다(손익이 아니므로 더할 이유가 없다).
+    assert Decimal(row["buy_krw"]) == Decimal("5000000")
+    assert Decimal(row["sell_krw"]) == Decimal("3000000")
+    # 세 층 어디에도 "1,048,000" 같은 합계가 없다.
+    assert Decimal(body["net_cash_generated_krw"]) == Decimal("18000")
+
+
+def test_monthly_cashflow_first_month_has_no_opening_balance(client, db, kiwoom):
+    """첫 달 월초 잔액은 **null 이다.** 0 으로 두면 '무에서 시작했다'는 거짓이 된다."""
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_daily(db, account_id, _date.today().replace(day=1),
+               deposit_assets_krw=Decimal("5000000"), pnl_krw=Decimal("1000"))
+    db.commit()
+
+    row = client.get("/api/v1/portfolio/monthly-cashflow").json()["rows"][0]
+    assert row["opening_assets_krw"] is None
+    # 월초을 모르면 '그 외'도 계산할 수 없다 — 0 이 아니라 null 이어야 한다.
+    assert row["unexplained_krw"] is None
+
+
+def test_monthly_cashflow_unexplained_is_the_actual_residual(client, db, kiwoom):
+    """월말 − 월초 − 순납입 − 손익. 이 값을 환차라고 부르지 않는다(이름 없음)."""
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    # 1일 ↔ 전월 말일. 미래로 가지 않고 두 달이 반드시 갈린다(dateutil 불필요).
+    this_month = _date.today().replace(day=1)
+    last_month = this_month - _td(days=1)
+
+    _add_daily(db, account_id, last_month, deposit_assets_krw=Decimal("10000000"))
+    _add_daily(db, account_id, this_month,
+               deposit_assets_krw=Decimal("12000000"),
+               deposit_krw=Decimal("1000000"), pnl_krw=Decimal("500000"))
+    db.commit()
+
+    rows = client.get("/api/v1/portfolio/monthly-cashflow").json()["rows"]
+    latest = rows[0]
+    # 12,000,000 − 10,000,000 − 1,000,000 − 500,000 = 500,000
+    assert Decimal(latest["unexplained_krw"]) == Decimal("500000")
+    assert Decimal(latest["opening_assets_krw"]) == Decimal("10000000")
+
+
+def test_monthly_cashflow_does_not_count_an_empty_month_as_covered(client, db, kiwoom):
+    """배당 0 · 비용 0 인 달은 '배당이 비용을 덮은 달'이 아니다."""
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_daily(db, account_id, _date.today().replace(day=1),
+               dividend_krw=Decimal("0"), commission_tax_krw=Decimal("0"),
+               deposit_assets_krw=Decimal("1000000"))
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/monthly-cashflow").json()
+    assert body["months_total"] == 1
+    assert body["months_dividend_covered_cost"] == 0

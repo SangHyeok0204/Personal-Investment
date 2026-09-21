@@ -3,6 +3,8 @@
 이 파일이 지키는 것은 **키가 새지 않는다**는 것 하나다. 화면에서 키를 입력받도록
 만든 이상, 키가 응답으로 되돌아오거나 검증 없이 저장되는 일이 없어야 한다.
 """
+import os
+
 import pytest
 
 from app.core import credentials_store
@@ -10,13 +12,32 @@ from app.core import credentials_store
 
 @pytest.fixture()
 def env_file(tmp_path, monkeypatch):
-    """테스트 동안 .env 를 임시 파일로 바꾼다 — 진짜 .env 를 건드리지 않는다."""
+    """테스트 동안 .env 를 임시 파일로 바꾼다 — 진짜 .env 를 건드리지 않는다.
+
+    ⚠️`monkeypatch.delenv(..., raising=False)` 로는 **되돌아오지 않는다.** 그 함수는
+      실제로 지운 키만 복원 목록에 기록하므로, 원래 없던 키는 아무것도 기록하지
+      않는다. 그런데 자격증명 저장 API 는 `load_into_environ()` 으로 `os.environ` 에
+      KIWOOM_* 를 **진짜로 써 넣는다** — 즉 테스트가 끝나도 그 값이 프로세스에 남는다.
+
+      실제로 이것 때문에 `KIWOOM_MARKETS=US` 가 남아, 뒤따라 도는 worker 테스트가
+      국내장을 통째로 건너뛰었다(current_positions 5 → 3, KRW 예수금 행 소실).
+      단독 실행에서는 통과하고 전체 실행에서만 깨져서 원인이 보이지 않았다.
+
+      그래서 지우는 것으로 끝내지 않고 **들어왔다 나가는 값까지 직접 되돌린다.**
+    """
     path = tmp_path / ".env"
     path.write_text("DATABASE_URL=postgresql://x\nKIWOOM_APP_KEY=\nKIWOOM_SECRET_KEY=\n")
     monkeypatch.setattr(credentials_store, "ENV_PATH", path)
-    for name in credentials_store.MANAGED_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    return path
+
+    saved = {name: os.environ.pop(name, None) for name in credentials_store.MANAGED_KEYS}
+    try:
+        yield path
+    finally:
+        for name, value in saved.items():
+            # 테스트 도중 생긴 값은 버리고, 원래 있던 값만 되돌린다.
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
 
 
 def test_status_never_returns_the_keys(client, env_file, monkeypatch):

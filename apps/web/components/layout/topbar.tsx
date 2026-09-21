@@ -13,7 +13,10 @@ import {
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { ALL_ACCOUNTS, useAccount } from "@/components/layout/account-context";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
-import { useAutoRefresh } from "@/components/layout/auto-refresh-context";
+import {
+  AUTO_REFRESH_LABEL,
+  useAutoRefresh,
+} from "@/components/layout/auto-refresh-context";
 import { runBrokerageSync } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -255,7 +258,7 @@ export function Topbar({
               aria-pressed={auto.enabled}
               title={
                 auto.enabled
-                  ? "자동 갱신 켜짐 — 화면 5초, 증권사 잔고 30초(장중·이 탭이 보일 때만)"
+                  ? AUTO_REFRESH_LABEL
                   : "자동 갱신 꺼짐"
               }
               className={cn(

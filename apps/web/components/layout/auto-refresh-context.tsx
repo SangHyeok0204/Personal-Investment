@@ -50,6 +50,14 @@ const BROKER_SYNC_MS = 5_000;
 const CLOSED_REFRESH_MS = 60_000;
 // 실패가 이어질 때 물러나는 한계. 60초를 넘기면 "멈춘 것"과 구분이 안 된다.
 const MAX_BACKOFF_MS = 60_000;
+
+// ⚠️툴팁 문구를 손으로 적지 않는다. 사용자 요청으로 증권사 동기화를 30초 → 5초로
+//   내렸을 때 **상단바 툴팁만 30초로 남아** 화면이 사실과 다른 말을 했다.
+//   주기를 바꾸면 문구도 같이 바뀌도록 상수에서 만든다.
+export const AUTO_REFRESH_LABEL =
+  `자동 갱신 켜짐 — 화면 ${VIEW_REFRESH_MS / 1000}초, ` +
+  `증권사 잔고 ${BROKER_SYNC_MS / 1000}초(장중·이 탭이 보일 때만). ` +
+  `장 마감 중에는 ${CLOSED_REFRESH_MS / 1000}초로 늦춥니다.`;
 const STORAGE_KEY = "pi:auto-refresh";
 
 type AutoRefreshCtx = {
