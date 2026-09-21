@@ -3090,6 +3090,83 @@ export function getLiveQuotes(accountId?: string | null): Promise<LiveQuotes> {
   return request<LiveQuotes>(`/api/v1/portfolio/quotes${accountQuery(accountId)}`);
 }
 
+// ── 관심종목 ─────────────────────────────────────────────────────────────────
+
+export interface WatchlistItem {
+  id: string;
+  ticker: string;
+  asset_name: string | null;
+  memo: string | null;
+  target_price: string | null;
+  stop_price: string | null;
+  sort_order: number;
+  /** 지금 보유 중인지. 저장값이 아니라 조회할 때마다 판단한다. */
+  held: boolean;
+  price: string | null;
+  currency: string | null;
+  previous_close: string | null;
+  change: string | null;
+  change_rate: string | null;
+  fifty_two_week_low: string | null;
+  fifty_two_week_high: string | null;
+  /** 52주 저점 0 ~ 고점 1 사이의 위치. */
+  fifty_two_week_position: string | null;
+  to_target: string | null;
+  to_stop: string | null;
+  source: string | null;
+  as_of: string | null;
+}
+
+export interface WatchlistList {
+  items: WatchlistItem[];
+  missing: string[];
+  fetched: number;
+}
+
+export function getWatchlist(): Promise<WatchlistList> {
+  return request<WatchlistList>("/api/v1/watchlist");
+}
+
+export function addWatchlist(body: {
+  ticker: string;
+  asset_name?: string | null;
+  memo?: string | null;
+  target_price?: string | null;
+  stop_price?: string | null;
+}): Promise<WatchlistList> {
+  return request<WatchlistList>("/api/v1/watchlist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** 보낸 필드만 반영된다 — 메모만 고쳐도 목표가가 지워지지 않는다. */
+export function updateWatchlist(
+  id: string,
+  body: Partial<{
+    memo: string | null;
+    target_price: string | null;
+    stop_price: string | null;
+  }>,
+): Promise<WatchlistList> {
+  return request<WatchlistList>(`/api/v1/watchlist/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function removeWatchlist(id: string): Promise<WatchlistList> {
+  return request<WatchlistList>(`/api/v1/watchlist/${id}`, { method: "DELETE" });
+}
+
+export function importHoldingsToWatchlist(): Promise<WatchlistList> {
+  return request<WatchlistList>("/api/v1/watchlist/import-holdings", {
+    method: "POST",
+  });
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

@@ -601,3 +601,32 @@ class Dividend(Base):
         UniqueConstraint("account_id", "pay_date", "ticker", name="uq_dividends_account_date_ticker"),
         Index("ix_dividends_account_date", "account_id", "pay_date"),
     )
+
+
+class WatchlistItem(Base):
+    """관심종목 — 아직 안 산 종목도 담는 보드.
+
+    ⚠️보유 종목을 여기 복제하지 않는다. `current_positions` 가 정본이고, 복제하면
+      판 뒤에도 남거나 둘이 어긋난다. 화면에서 합쳐 보여줄 뿐이다.
+    ⚠️`assets` 를 FK 로 걸지 않는다 — assets 행은 매수해야 생기는데, 안 산 종목을
+      담는 게 이 화면의 요점이다.
+    """
+
+    __tablename__ = "watchlist_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+

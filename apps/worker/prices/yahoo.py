@@ -99,6 +99,8 @@ class YahooPriceSource(PriceSource):
                 else None
             ),
             source=self.name,
+            fifty_two_week_high=_dec(meta.get("fiftyTwoWeekHigh")),
+            fifty_two_week_low=_dec(meta.get("fiftyTwoWeekLow")),
         )
 
     def quotes(self, symbols: list[str]) -> dict[str, Quote]:

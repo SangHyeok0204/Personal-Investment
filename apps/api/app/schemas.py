@@ -578,6 +578,62 @@ class LiveQuotesOut(BaseModel):
     as_of: datetime | None
 
 
+# ── 관심종목 ─────────────────────────────────────────────────────────────────
+
+class WatchlistCreateIn(BaseModel):
+    ticker: str
+    asset_name: str | None = None
+    memo: str | None = None
+    target_price: Decimal | None = None
+    stop_price: Decimal | None = None
+
+
+class WatchlistUpdateIn(BaseModel):
+    """부분 수정. 라우터가 `exclude_unset` 으로 **보낸 필드만** 반영한다 —
+    안 그러면 메모만 고쳐도 목표가가 null 로 덮인다."""
+
+    asset_name: str | None = None
+    memo: str | None = None
+    target_price: Decimal | None = None
+    stop_price: Decimal | None = None
+    sort_order: int | None = None
+
+
+class WatchlistItemOut(BaseModel):
+    id: uuid.UUID
+    ticker: str
+    asset_name: str | None
+    memo: str | None
+    target_price: Decimal | None
+    stop_price: Decimal | None
+    sort_order: int
+    # 지금 보유 중인지. 저장하지 않고 current_positions 를 보고 매번 판단한다.
+    held: bool
+
+    # 아래는 시세 소스에서 온 값. 못 받으면 전부 None 이고 화면이 "—" 로 둔다.
+    price: Decimal | None
+    currency: str | None
+    previous_close: Decimal | None
+    change: Decimal | None
+    change_rate: Decimal | None
+    fifty_two_week_low: Decimal | None
+    fifty_two_week_high: Decimal | None
+    # 52주 저점 0 ~ 고점 1 사이의 위치.
+    fifty_two_week_position: Decimal | None
+    # 현재가 대비 목표가/손절가까지의 비율. 가격이 없으면 None(0 이 아니다).
+    to_target: Decimal | None
+    to_stop: Decimal | None
+    source: str | None
+    as_of: datetime | None
+
+
+class WatchlistListOut(BaseModel):
+    items: list[WatchlistItemOut]
+    # 시세를 못 받은 종목. 숨기지 않고 드러낸다.
+    missing: list[str]
+    fetched: int
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

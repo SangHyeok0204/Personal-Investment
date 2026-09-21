@@ -30,12 +30,26 @@ class Quote:
     previous_close: Decimal | None = None
     as_of: datetime | None = None
     source: str = ""
+    # 52주 고저. 야후만 준다(토스 일봉 응답에는 없다). 없으면 화면이 "—" 로 둔다.
+    fifty_two_week_high: Decimal | None = None
+    fifty_two_week_low: Decimal | None = None
 
     @property
     def change(self) -> Decimal | None:
         if self.previous_close is None:
             return None
         return self.price - self.previous_close
+
+    @property
+    def fifty_two_week_position(self) -> Decimal | None:
+        """52주 저점 0, 고점 1 사이의 위치. 범위를 모르면 None.
+
+        ⚠️고저가 같으면(상장 직후 등) 나눌 수 없다 — 0.5 같은 값을 지어내지 않는다.
+        """
+        low, high = self.fifty_two_week_low, self.fifty_two_week_high
+        if low is None or high is None or high <= low:
+            return None
+        return (self.price - low) / (high - low)
 
     @property
     def change_rate(self) -> Decimal | None:

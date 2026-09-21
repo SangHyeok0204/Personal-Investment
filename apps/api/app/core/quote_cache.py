@@ -17,7 +17,9 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -32,8 +34,18 @@ from prices.toss import TossPriceSource  # noqa: E402
 
 TTL_SECONDS = 4.0
 
+# 52주 고저는 하루에 한 번 바뀔까 말까 한 값이다. 가격과 **같은 주기로 받을 이유가
+# 없어서** 따로, 훨씬 길게 캐시한다.
+# ⚠️토스 일봉 응답에는 52주 범위가 없다. 정규장 중에는 토스가 주 소스라, 이걸
+#   가격과 묶어 두면 장중 내내 "52주 위치 —" 가 된다(실제로 그렇게 나왔다).
+#   그래서 범위만 야후에서 따로 받아 붙인다.
+RANGE_TTL_SECONDS = 3600.0
+
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, Quote]] = {}
+# 심볼 → (저장시각, 52주저점, 52주고점). 저점/고점이 None 이어도 캐시한다 —
+# 못 받는 심볼을 매번 다시 묻지 않기 위해서다.
+_range_cache: dict[str, tuple[float, Decimal | None, Decimal | None]] = {}
 
 
 def us_regular_session_open(now: datetime | None = None) -> bool:
@@ -81,10 +93,61 @@ def _build_source() -> CompositePriceSource:
     return CompositePriceSource(order)
 
 
-def get_quotes(symbols: list[str]) -> tuple[dict[str, Quote], int]:
+def _fill_52w(quotes: dict[str, Quote]) -> dict[str, Quote]:
+    """주 소스가 52주 범위를 안 주면 야후에서 따로 받아 붙인다.
+
+    가격과 다른 주기(1시간)로 캐시한다 — 52주 고저는 초 단위로 움직이지 않는다.
+    """
+    now = time.monotonic()
+    need: list[str] = []
+    for symbol, quote in quotes.items():
+        if quote.fifty_two_week_high is not None:
+            continue  # 주 소스가 이미 줬다(야후가 1순위였던 경우).
+        hit = _range_cache.get(symbol)
+        if hit is None or now - hit[0] >= RANGE_TTL_SECONDS:
+            need.append(symbol)
+
+    if need:
+        source = YahooPriceSource()
+        try:
+            fetched = source.quotes(need)
+        except Exception:
+            fetched = {}
+        finally:
+            source.close()
+        stored = time.monotonic()
+        with _lock:
+            for symbol in need:
+                got = fetched.get(symbol)
+                _range_cache[symbol] = (
+                    stored,
+                    got.fifty_two_week_low if got else None,
+                    got.fifty_two_week_high if got else None,
+                )
+
+    out: dict[str, Quote] = {}
+    for symbol, quote in quotes.items():
+        if quote.fifty_two_week_high is not None:
+            out[symbol] = quote
+            continue
+        hit = _range_cache.get(symbol)
+        out[symbol] = (
+            replace(quote, fifty_two_week_low=hit[1], fifty_two_week_high=hit[2])
+            if hit
+            else quote
+        )
+    return out
+
+
+def get_quotes(
+    symbols: list[str], with_range: bool = False
+) -> tuple[dict[str, Quote], int]:
     """심볼별 시세와 **상류에서 새로 받아온 개수**.
 
     캐시가 살아 있는 심볼은 그대로 쓰고, 만료된 것만 묶어서 한 번에 받아온다.
+
+    `with_range` 면 52주 고저까지 채운다. 5초마다 도는 보유종목 경로는 그게
+    필요 없어서 기본으로 끈다 — 필요 없는 상류 호출을 만들지 않는다.
     """
     wanted = [s for s in dict.fromkeys(symbols) if s]
     if not wanted:
@@ -103,7 +166,7 @@ def get_quotes(symbols: list[str]) -> tuple[dict[str, Quote], int]:
                 stale.append(symbol)
 
     if not stale:
-        return out, 0
+        return (_fill_52w(out) if with_range else out), 0
 
     source = _build_source()
     try:
@@ -117,10 +180,11 @@ def get_quotes(symbols: list[str]) -> tuple[dict[str, Quote], int]:
             _cache[symbol] = (stored, quote)
     out.update(fetched)
     # ⚠️못 받은 심볼은 out 에 없다. 호출부가 "—" 로 그린다 — 0 으로 채우지 않는다.
-    return out, len(fetched)
+    return (_fill_52w(out) if with_range else out), len(fetched)
 
 
 def clear_cache() -> None:
     """테스트용. 프로덕션 경로에서는 부르지 않는다."""
     with _lock:
         _cache.clear()
+        _range_cache.clear()

@@ -20,6 +20,7 @@ from app.api import (
     stock_discussion,
     stock_monitor,
     system,
+    watchlist,
 )
 from app.core.errors import register_exception_handlers
 
@@ -67,6 +68,7 @@ app.include_router(stock_discussion.router)
 app.include_router(stock_monitor.router)
 app.include_router(ai_key_data.router)
 app.include_router(earnings.router)
+app.include_router(watchlist.router)
 app.include_router(etf_class.router)
 app.include_router(portfolio.router)
 app.include_router(brokerage.router)
