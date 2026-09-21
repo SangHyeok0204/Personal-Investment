@@ -47,6 +47,13 @@ class PositionRow:
     # 환율은 **증권사가 준 값**을 그대로 싣는다. 여기서 계산하지 않는다 —
     # 종목별 수치와 합계가 서로 다른 환율을 타면 화면에서 합이 안 맞는다.
     exchange_rate: Decimal | None = None
+    # ★KRW 환산값도 **증권사가 준 값**을 그대로 싣는다(키움 evlt_amt_krw/pl_amt_krw).
+    #   local 값에 환율을 곱해 우리가 만들지 않는다 — 증권사 내부 환산과 소수점이
+    #   달라져 합계가 어긋난다.
+    #   ⚠️이 필드가 없으면 외화 종목의 평가금액이 USD 숫자 그대로 KRW 자리에 실려
+    #     총자산이 1/1370 로 줄어든다(2026-09-21 해외 연동에서 실제로 겪었다).
+    market_value_krw: Decimal | None = None
+    unrealized_pnl_krw: Decimal | None = None
     asset_type: str | None = None
 
 

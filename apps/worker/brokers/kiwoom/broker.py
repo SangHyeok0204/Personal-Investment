@@ -19,6 +19,7 @@ from ..base import AccountPortfolio, AccountRef, BalanceRow, BrokerAdapter, Posi
 from ..registry import register
 from . import auth as auth_module
 from . import domestic
+from . import us_equities
 from .adapter import mask_account_number, normalize_account, to_decimal
 from .client import KiwoomClient
 from .exceptions import KiwoomAuthError
@@ -26,8 +27,29 @@ from .exceptions import KiwoomAuthError
 
 @register("KIWOOM")
 class KiwoomAdapter(BrokerAdapter):
-    def __init__(self, credentials, http_client=None, token_store=None, sleep=None):
+    #: 기본으로 조회할 시장. 연결마다 바꿀 수 있다.
+    DEFAULT_MARKETS = ("KR", "US")
+
+    def __init__(
+        self,
+        credentials,
+        http_client=None,
+        token_store=None,
+        sleep=None,
+        markets=None,
+    ):
+        """markets: 조회할 시장 집합. ("US",) 면 해외만, ("KR",) 면 국내만.
+
+        ★2026-09-21 사용자 요청: 이 계좌는 국내 비중이 작고 해외가 본체라
+          국내를 빼고 해외만 보고 싶다. 시장을 끄고 켜는 것은 **조회 비용**과도
+          직결된다 — 안 보는 시장의 TR 을 매번 부르면 유량제한만 축낸다.
+        """
         self._credentials = credentials
+        self._markets = tuple(
+            m.upper() for m in (markets if markets is not None else self.DEFAULT_MARKETS)
+        )
+        if not self._markets:
+            raise ValueError("markets 가 비어 있습니다 — 조회할 시장이 없습니다")
         self._token_store = token_store or auth_module.default_store
         kwargs = {}
         if sleep is not None:
@@ -43,6 +65,10 @@ class KiwoomAdapter(BrokerAdapter):
     @property
     def credentials(self):
         return self._credentials
+
+    @property
+    def markets(self):
+        return self._markets
 
     @property
     def client(self):
@@ -102,23 +128,96 @@ class KiwoomAdapter(BrokerAdapter):
             "account_name": account.account_name,
             "account_type": account.account_type,
         }
-        balance_pages = domestic.fetch_balance(self._client, raw_account)
-        deposit_pages = domestic.fetch_deposit(self._client, raw_account)
+        raw_pages: list[tuple[str, dict]] = []
+        balance = deposit = None
+        us_balance = us_deposit = us_detail = None
 
-        balance = domestic.parse_balance(balance_pages)
-        deposit = domestic.parse_deposit(deposit_pages)
-        normalized = normalize_account(raw_account, balance, deposit)
+        if "KR" in self._markets:
+            balance_pages = domestic.fetch_balance(self._client, raw_account)
+            deposit_pages = domestic.fetch_deposit(self._client, raw_account)
+            balance = domestic.parse_balance(balance_pages)
+            deposit = domestic.parse_deposit(deposit_pages)
+            raw_pages += [(domestic.API_BALANCE, p) for p in balance_pages]
+            raw_pages += [(domestic.API_DEPOSIT, p) for p in deposit_pages]
+
+        if "US" in self._markets:
+            us_balance_pages = us_equities.fetch_positions(self._client, raw_account)
+            us_deposit_pages = us_equities.fetch_deposit(self._client, raw_account)
+            us_detail_pages = us_equities.fetch_deposit_detail(self._client, raw_account)
+            us_balance = us_equities.parse_positions(us_balance_pages)
+            us_deposit = us_equities.parse_deposit(us_deposit_pages)
+            us_detail = us_equities.parse_deposit_detail(us_detail_pages)
+            raw_pages += [(us_equities.API_US_POSITIONS, p) for p in us_balance_pages]
+            raw_pages += [(us_equities.API_US_DEPOSIT, p) for p in us_deposit_pages]
+            raw_pages += [(us_equities.API_US_DEPOSIT_DETAIL, p) for p in us_detail_pages]
+
+        # 국내를 끄면 kt00018/kt00001 을 아예 부르지 않으므로, 국내 쪽은 빈 응답을
+        # 넣어 normalize_account 가 US 만으로 계산하게 한다.
+        if balance is None:
+            balance = domestic.parse_balance([{"acnt_evlt_remn_indv_tot": []}])
+        if deposit is None:
+            deposit = domestic.parse_deposit([{}])
+
+        normalized = normalize_account(
+            raw_account, balance, deposit, us_balance, us_deposit, us_detail
+        )
+
+        # ⚠️ust21070 의 보유종목 행에는 적용환율(exch_rate)이 **오지 않는다**(2026-09-21
+        #   실측: 행 키에 없음). 환율이 비면 매입원가를 KRW 로 환산할 수 없어 수익률
+        #   분모가 통째로 빠진다. 같은 응답 묶음의 ust21160 이 주는 usd_exch_rate 로
+        #   채운다 — 증권사가 준 값이지 우리가 계산한 값이 아니다.
+        usd_rate = _usd_rate(us_detail)
+
+        balances = normalized.get("balances", [])
+        if "KR" not in self._markets:
+            # ⚠️국내 TR 을 안 불렀으면 원화 예수금은 **모르는 값**이다. adapter 의
+            #   _krw_cash_row 는 빈 kt00001 응답에서 0 을 만들어 내는데, 0 원과
+            #   '모름'은 다르다 — 0 이라고 단언하면 화면이 없는 사실을 말하게 된다.
+            #   대신 ust21160 이 주는 won_entr(원화예수금)로 채운다.
+            #   ⚠️kt00001 의 D+2 결제 반영분이 아니라 D+0 값이다 — 미결제 정산이
+            #     있으면 kt00001 수치와 다를 수 있다.
+            won = _won_entr(us_detail)
+            balances = [
+                {**b, "cash_balance": won, "available_cash": None}
+                if b.get("currency") == "KRW"
+                else b
+                for b in balances
+                if b.get("currency") != "KRW" or won is not None
+            ]
+
+        positions = []
+        for p in normalized.get("positions", []):
+            if p.get("currency") == "USD" and p.get("exchange_rate") is None and usd_rate:
+                p = {**p, "exchange_rate": usd_rate}
+            positions.append(_to_position_row(p))
 
         return AccountPortfolio(
             account=account,
-            balances=[_to_balance_row(b) for b in normalized.get("balances", [])],
-            positions=[_to_position_row(p) for p in normalized.get("positions", [])],
+            balances=[_to_balance_row(b) for b in balances],
+            positions=positions,
             as_of=datetime.now(timezone.utc),
-            raw_pages=(
-                [(domestic.API_BALANCE, p) for p in balance_pages]
-                + [(domestic.API_DEPOSIT, p) for p in deposit_pages]
-            ),
+            raw_pages=raw_pages,
         )
+
+
+def _usd_rate(us_detail):
+    """ust21160 의 usd_exch_rate. "1,371.70" 처럼 콤마가 섞여 온다."""
+    if us_detail is None:
+        return None
+    raw = getattr(us_detail, "usd_exch_rate", None)
+    if raw in (None, ""):
+        return None
+    return to_decimal(str(raw).replace(",", ""))
+
+
+def _won_entr(us_detail):
+    """ust21160 의 won_entr(원화예수금). 키움이 자리수 0 패딩으로 준다."""
+    if us_detail is None:
+        return None
+    raw = getattr(us_detail, "won_entr", None)
+    if raw in (None, ""):
+        return None
+    return to_decimal(str(raw).replace(",", ""))
 
 
 def _classify_auth_failure(message: str) -> str:
@@ -163,6 +262,8 @@ def _to_position_row(p: dict) -> PositionRow:
         unrealized_pnl_local=_opt(p.get("unrealized_pnl_local")),
         unrealized_return=_percent_to_ratio(p.get("unrealized_return")),
         exchange_rate=_opt(p.get("exchange_rate")),
+        market_value_krw=_opt(p.get("market_value_krw")),
+        unrealized_pnl_krw=_opt(p.get("unrealized_pnl_krw")),
         asset_type=p.get("asset_type"),
     )
 

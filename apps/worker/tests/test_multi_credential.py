@@ -262,3 +262,20 @@ def test_missing_return_stays_none_not_zero():
     """수집이 안 된 수익률을 0 으로 바꾸면 '미수집'이 '본전'으로 보인다."""
     row = _to_position_row({"ticker": "005930", "quantity": "1", "currency": "KRW"})
     assert row.unrealized_return is None
+
+
+def test_position_keeps_broker_supplied_krw_values():
+    """외화 종목의 KRW 환산은 증권사가 준 값을 그대로 싣는다.
+
+    ⚠️이 필드를 빠뜨리면 USD 숫자가 KRW 자리에 그대로 실려 총자산이 1/1370 로
+      줄어든다 — 2026-09-21 해외 연동에서 실제로 겪은 버그다. 예외는 안 난다.
+    """
+    row = _to_position_row({
+        "ticker": "MSFT", "asset_name": "마이크로소프트", "currency": "USD",
+        "quantity": "5", "market_value_local": "2472.70",
+        "market_value_krw": "3427162", "unrealized_pnl_local": "550.84",
+        "unrealized_pnl_krw": "763464", "exchange_rate": "1386.00",
+    })
+    assert row.market_value_local == Decimal("2472.70")
+    assert row.market_value_krw == Decimal("3427162")
+    assert row.unrealized_pnl_krw == Decimal("763464")
