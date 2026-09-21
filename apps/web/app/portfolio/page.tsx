@@ -18,11 +18,14 @@ import {
   toneOf,
 } from "@/components/stub";
 import {
+  getPerformance,
   getPortfolioHoldings,
   getPortfolioSummary,
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
+import { SeriesChart } from "@/components/charts/series-chart";
+import { cn } from "@/lib/utils";
 import {
   formatKrwSigned,
   formatKrwString,
@@ -53,6 +56,13 @@ export default function PortfolioPage() {
     queryKey: ["portfolioHoldings", accountId],
     queryFn: () => getPortfolioHoldings(accountId),
     staleTime: 30_000,
+  });
+
+  // 자산 추이 — 우리가 스냅샷을 쌓지 않고 증권사가 들고 있던 과거를 읽는다.
+  const performance = useQuery({
+    queryKey: ["performance", accountId, 365],
+    queryFn: () => getPerformance(accountId, 365),
+    staleTime: 60_000,
   });
 
   const s = summary.data;
@@ -111,9 +121,59 @@ export default function PortfolioPage() {
         </StatRow>
 
         <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-          <StubCard title="자산 추이" subtitle="총 평가금액 시계열">
-            {/* 스냅샷 적재 배치가 붙기 전에는 그릴 점이 없다. */}
-            <StubChart height={260} note="일별 스냅샷 적재 대기" />
+          <StubCard
+            title="자산 추이"
+            subtitle={
+              performance.data?.first_date
+                ? `${performance.data.first_date} ~ ${performance.data.last_date}`
+                : "예탁자산 시계열"
+            }
+          >
+            {performance.data && performance.data.items.length > 0 ? (
+              <>
+                <SeriesChart
+                  height={230}
+                  points={performance.data.items.map((p) => ({
+                    date: p.base_date,
+                    value: p.deposit_assets_krw == null ? null : Number(p.deposit_assets_krw),
+                  }))}
+                  tooltipFormat={(p) =>
+                    formatKrwString(p.value == null ? null : String(Math.round(p.value)))
+                  }
+                />
+                {/* ⚠️(끝-시작)을 수익이라 부르지 않는다 — 그 사이 입금이 수익으로 보인다. */}
+                <dl className="mt-2 grid grid-cols-3 gap-2 border-t border-hairline pt-2.5 text-[11px]">
+                  <div>
+                    <dt className="text-ink-muted">순입금</dt>
+                    <dd className="font-bold tabular-nums text-ink-secondary">
+                      {formatKrwString(performance.data.net_deposit_krw)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-ink-muted">입출금 제외 증감</dt>
+                    <dd
+                      className={cn(
+                        "font-extrabold tabular-nums",
+                        Number(performance.data.gain_krw ?? 0) >= 0 ? "text-bid" : "text-ask",
+                      )}
+                    >
+                      {formatKrwSigned(performance.data.gain_krw)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-ink-muted">기간</dt>
+                    <dd className="font-bold tabular-nums text-ink-secondary">
+                      {performance.data.items.length}일
+                    </dd>
+                  </div>
+                </dl>
+              </>
+            ) : (
+              <StubChart
+                height={260}
+                note={performance.isLoading ? "불러오는 중…" : "계좌 성과 데이터 없음"}
+              />
+            )}
           </StubCard>
 
           <StubCard title="자산 배분" subtitle="자산군 비중">

@@ -31,6 +31,8 @@ from app.models import (
     CurrentPosition,
     PortfolioSnapshot,
     Trade,
+    AccountDailyPerformance,
+    RealizedPnl,
 )
 from app.schemas import (
     AccountListOut,
@@ -48,6 +50,10 @@ from app.schemas import (
     TradeListOut,
     TradeOut,
     TradeStatsOut,
+    DailyPerformanceOut,
+    PerformanceSeriesOut,
+    RealizedPnlListOut,
+    RealizedPnlOut,
 )
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
@@ -596,4 +602,159 @@ def list_trades(
         ],
         first_trade_date=span[0],
         last_trade_date=span[1],
+    )
+
+
+# ── 일별 성과 (자산 추이 · 수익률) ───────────────────────────────────────────
+
+@router.get("/performance", response_model=PerformanceSeriesOut)
+def get_performance(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(365, ge=1, le=3650),
+    db: Session = Depends(get_db),
+) -> PerformanceSeriesOut:
+    """계좌 일별 성과 시계열 — 증권사가 들고 있던 과거를 그대로 읽는다.
+
+    계좌가 여럿이면 같은 날짜의 값을 더한다(예탁자산·주식평가는 합산 가능한 값이다).
+
+    ⚠️기간 손익을 (끝 - 시작)으로 계산하지 않는다. 그 사이의 입금이 그대로 '수익'
+      으로 보이기 때문이다. 순입금을 빼서 gain_krw 로 내보낸다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return PerformanceSeriesOut(
+            items=[], first_date=None, last_date=None,
+            start_assets_krw=None, end_assets_krw=None,
+            net_deposit_krw=None, gain_krw=None,
+        )
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.sum(AccountDailyPerformance.stock_value_krw),
+            func.sum(AccountDailyPerformance.cumulative_pnl_krw),
+            func.sum(AccountDailyPerformance.pnl_krw),
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+
+    items = [
+        DailyPerformanceOut(
+            base_date=base_date,
+            deposit_assets_krw=assets,
+            stock_value_krw=stock,
+            cumulative_pnl_krw=cumulative,
+            pnl_krw=pnl,
+            deposit_krw=deposit,
+            withdrawal_krw=withdrawal,
+        )
+        for base_date, assets, stock, cumulative, pnl, deposit, withdrawal in rows
+    ]
+    if not items:
+        return PerformanceSeriesOut(
+            items=[], first_date=None, last_date=None,
+            start_assets_krw=None, end_assets_krw=None,
+            net_deposit_krw=None, gain_krw=None,
+        )
+
+    start_assets = items[0].deposit_assets_krw
+    end_assets = items[-1].deposit_assets_krw
+    # 첫날의 입출금은 시작 잔고에 이미 반영돼 있다 — 이중 계산을 피해 제외한다.
+    net_deposit = _sum(
+        [(i.deposit_krw or Decimal("0")) - (i.withdrawal_krw or Decimal("0")) for i in items[1:]]
+    )
+    gain = (
+        (end_assets - start_assets - (net_deposit or Decimal("0")))
+        if (start_assets is not None and end_assets is not None)
+        else None
+    )
+
+    return PerformanceSeriesOut(
+        items=items,
+        first_date=items[0].base_date,
+        last_date=items[-1].base_date,
+        start_assets_krw=start_assets,
+        end_assets_krw=end_assets,
+        net_deposit_krw=net_deposit,
+        gain_krw=gain.quantize(_MONEY, rounding=ROUND_HALF_UP) if gain is not None else None,
+    )
+
+
+# ── 실현손익 ────────────────────────────────────────────────────────────────
+
+@router.get("/realized", response_model=RealizedPnlListOut)
+def list_realized_pnl(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(365, ge=1, le=3650),
+    db: Session = Depends(get_db),
+) -> RealizedPnlListOut:
+    """실현손익 — 매도 확정분. 최근순.
+
+    ⚠️주가 손익(pnl_krw)과 환 손익(fx_pnl_krw)을 **분리해서** 내보낸다. 합치면
+      "종목이 올라서 번 건지 환율로 번 건지" 구분이 사라진다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return RealizedPnlListOut(
+            items=[], total=0, pnl_krw=None, fx_pnl_krw=None,
+            win_count=0, loss_count=0,
+            first_sell_date=None, last_sell_date=None,
+        )
+
+    since = date.today() - timedelta(days=days)
+    conditions = [RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= since]
+
+    rows = db.execute(
+        select(RealizedPnl, Asset.sector)
+        .outerjoin(Asset, Asset.id == RealizedPnl.asset_id)
+        .where(*conditions)
+        .order_by(RealizedPnl.sell_date.desc(), RealizedPnl.ticker)
+    ).all()
+
+    items = [
+        RealizedPnlOut(
+            id=row.id,
+            sell_date=row.sell_date,
+            ticker=row.ticker,
+            asset_name=row.asset_name,
+            sector=sector,
+            currency=row.currency,
+            quantity=row.quantity,
+            avg_buy_price=row.avg_buy_price,
+            avg_sell_price=row.avg_sell_price,
+            buy_amount_local=row.buy_amount_local,
+            sell_amount_local=row.sell_amount_local,
+            commission_tax_local=row.commission_tax_local,
+            pnl_local=row.pnl_local,
+            pnl_krw=row.pnl_krw,
+            pnl_rate=row.pnl_rate,
+            buy_exchange_rate=row.buy_exchange_rate,
+            sell_exchange_rate=row.sell_exchange_rate,
+            fx_pnl_krw=row.fx_pnl_krw,
+        )
+        for row, sector in rows
+    ]
+
+    # 승패는 **주가 손익** 기준이다. 환차를 섞으면 매매 판단의 성적이 흐려진다.
+    wins = sum(1 for i in items if (i.pnl_krw or 0) > 0)
+    losses = sum(1 for i in items if (i.pnl_krw or 0) < 0)
+
+    return RealizedPnlListOut(
+        items=items,
+        total=len(items),
+        pnl_krw=_sum([i.pnl_krw for i in items]),
+        fx_pnl_krw=_sum([i.fx_pnl_krw for i in items]),
+        win_count=wins,
+        loss_count=losses,
+        first_sell_date=min((i.sell_date for i in items), default=None),
+        last_sell_date=max((i.sell_date for i in items), default=None),
     )

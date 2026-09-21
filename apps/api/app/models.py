@@ -463,3 +463,95 @@ class Trade(Base):
         Index("ix_trades_account_date", "account_id", "trade_date"),
         Index("ix_trades_ticker", "ticker"),
     )
+
+
+class AccountDailyPerformance(Base):
+    """계좌 일별 성과 (alembic 0008, 키움 usa21670).
+
+    증권사가 이미 들고 있는 과거 시계열이다 — 우리가 매일 스냅샷을 찍어 쌓지 않는다.
+    ⚠️거래가 없는 날도 행이 온다(값이 전날과 같다). 차트에서 '변동 없음'과 '데이터
+      없음'을 구분해야 하면 pnl_krw==0 으로 판단하지 말고 날짜 연속성을 본다.
+    """
+
+    __tablename__ = "account_daily_performance"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    base_date: Mapped[date] = mapped_column(Date, nullable=False)
+    deposit_assets_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    stock_value_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    pnl_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    cumulative_pnl_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    dividend_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    commission_tax_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    buy_amount_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    sell_amount_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    deposit_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    withdrawal_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    return_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "base_date", name="uq_daily_perf_account_date"),
+        Index("ix_daily_perf_account_date", "account_id", "base_date"),
+    )
+
+
+class RealizedPnl(Base):
+    """실현손익 한 건 (alembic 0008, 키움 ust21530).
+
+    증권사가 **매도일 × 종목**으로 집계해 준다(매도평균가) — 그래서 그게 자연키다.
+    ⚠️환차손익(fx_pnl_krw)은 주가 손익과 **별개**다. 합치면 종목이 올라서 번 건지
+      환율로 번 건지 구분이 사라진다(실측: SGOV 외화 -$7.58 / 환차 +₩195,692).
+    """
+
+    __tablename__ = "realized_pnl"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True
+    )
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    sell_date: Mapped[date] = mapped_column(Date, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String, nullable=False)
+    avg_buy_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    avg_sell_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    buy_amount_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    sell_amount_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    commission_tax_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    pnl_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    buy_amount_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    sell_amount_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    commission_tax_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    pnl_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    pnl_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    buy_exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    sell_exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    fx_pnl_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    exchange: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "sell_date", "ticker", name="uq_realized_account_date_ticker"),
+        Index("ix_realized_account_date", "account_id", "sell_date"),
+    )

@@ -2838,3 +2838,79 @@ export function getTrades(params: {
   if (params.ticker) q.set("ticker", params.ticker);
   return request<TradeList>(`/api/v1/portfolio/trades?${q.toString()}`);
 }
+
+// ── 일별 성과 / 실현손익 ─────────────────────────────────────────────────────
+
+export interface DailyPerformancePoint {
+  base_date: string;
+  deposit_assets_krw: string | null;
+  stock_value_krw: string | null;
+  cumulative_pnl_krw: string | null;
+  pnl_krw: string | null;
+  deposit_krw: string | null;
+  withdrawal_krw: string | null;
+}
+
+export interface PerformanceSeries {
+  items: DailyPerformancePoint[];
+  first_date: string | null;
+  last_date: string | null;
+  start_assets_krw: string | null;
+  end_assets_krw: string | null;
+  net_deposit_krw: string | null;
+  // (끝 - 시작 - 순입금). 입출금 영향을 뺀 실제 증감.
+  gain_krw: string | null;
+}
+
+export interface RealizedPnlItem {
+  id: string;
+  sell_date: string;
+  ticker: string;
+  asset_name: string | null;
+  sector: string | null;
+  currency: string;
+  quantity: string;
+  avg_buy_price: string | null;
+  avg_sell_price: string | null;
+  buy_amount_local: string | null;
+  sell_amount_local: string | null;
+  commission_tax_local: string | null;
+  pnl_local: string | null;
+  pnl_krw: string | null;
+  pnl_rate: string | null;
+  buy_exchange_rate: string | null;
+  sell_exchange_rate: string | null;
+  // 환차손익 — 주가 손익과 별개다. 합치지 않는다.
+  fx_pnl_krw: string | null;
+}
+
+export interface RealizedPnlList {
+  items: RealizedPnlItem[];
+  total: number;
+  pnl_krw: string | null;
+  fx_pnl_krw: string | null;
+  win_count: number;
+  loss_count: number;
+  first_sell_date: string | null;
+  last_sell_date: string | null;
+}
+
+export function getPerformance(
+  accountId?: string | null,
+  days = 365,
+): Promise<PerformanceSeries> {
+  const q = accountQuery(accountId);
+  return request<PerformanceSeries>(
+    `/api/v1/portfolio/performance${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
+export function getRealizedPnl(
+  accountId?: string | null,
+  days = 365,
+): Promise<RealizedPnlList> {
+  const q = accountQuery(accountId);
+  return request<RealizedPnlList>(
+    `/api/v1/portfolio/realized${q ? `${q}&` : "?"}days=${days}`,
+  );
+}

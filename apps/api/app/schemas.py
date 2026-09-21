@@ -359,3 +359,64 @@ class TradeListOut(BaseModel):
     stats: list[TradeStatsOut]
     first_trade_date: date | None
     last_trade_date: date | None
+
+
+# ── 일별 성과 / 실현손익 ─────────────────────────────────────────────────────
+
+class DailyPerformanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    base_date: date
+    deposit_assets_krw: Decimal | None
+    stock_value_krw: Decimal | None
+    cumulative_pnl_krw: Decimal | None
+    pnl_krw: Decimal | None
+    deposit_krw: Decimal | None
+    withdrawal_krw: Decimal | None
+
+
+class PerformanceSeriesOut(BaseModel):
+    items: list[DailyPerformanceOut]
+    first_date: date | None
+    last_date: date | None
+    # 기간 시작·끝의 예탁자산. 기간 손익은 여기에 순입금을 빼야 의미가 생긴다.
+    start_assets_krw: Decimal | None
+    end_assets_krw: Decimal | None
+    net_deposit_krw: Decimal | None
+    # (끝 - 시작 - 순입금). 입출금 영향을 뺀 순수 증감이다.
+    gain_krw: Decimal | None
+
+
+class RealizedPnlOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    sell_date: date
+    ticker: str
+    asset_name: str | None
+    sector: str | None
+    currency: str
+    quantity: Decimal
+    avg_buy_price: Decimal | None
+    avg_sell_price: Decimal | None
+    buy_amount_local: Decimal | None
+    sell_amount_local: Decimal | None
+    commission_tax_local: Decimal | None
+    pnl_local: Decimal | None
+    pnl_krw: Decimal | None
+    pnl_rate: Decimal | None
+    buy_exchange_rate: Decimal | None
+    sell_exchange_rate: Decimal | None
+    fx_pnl_krw: Decimal | None
+
+
+class RealizedPnlListOut(BaseModel):
+    items: list[RealizedPnlOut]
+    total: int
+    # 주가 손익과 환 손익을 **분리해서** 내보낸다 — 합치면 무엇으로 벌었는지 모른다.
+    pnl_krw: Decimal | None
+    fx_pnl_krw: Decimal | None
+    win_count: int
+    loss_count: int
+    first_sell_date: date | None
+    last_sell_date: date | None

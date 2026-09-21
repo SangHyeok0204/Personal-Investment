@@ -460,3 +460,85 @@ def test_trades_carry_sector_when_asset_is_known(client, db, kiwoom):
     # 마스터가 없는 종목도 이름은 체결 기록 자체에 남아 있다.
     assert by_ticker["QLD"]["asset_name"] == "QQQ2배프로셰어즈ETF"
     assert by_ticker["QLD"]["sector"] is None
+
+
+# ── 일별 성과 / 실현손익 ─────────────────────────────────────────────────────
+
+def test_performance_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/performance").json()
+    assert body["items"] == []
+    assert body["gain_krw"] is None
+
+
+def test_performance_excludes_deposits_from_gain(client, db, kiwoom):
+    """(끝자산 − 시작자산)을 수익이라 부르지 않는다 — 그 사이 입금이 수익으로 보인다."""
+    from app.models import AccountDailyPerformance
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    today = _date.today()
+    # 시작 100만 → 끝 300만. 그 사이 150만을 입금했다.
+    db.add_all([
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today - _td(days=2),
+            deposit_assets_krw=Decimal("1000000"), deposit_krw=Decimal("1000000"),
+        ),
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today - _td(days=1),
+            deposit_assets_krw=Decimal("2600000"), deposit_krw=Decimal("1500000"),
+        ),
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today,
+            deposit_assets_krw=Decimal("3000000"),
+        ),
+    ])
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/performance?days=10").json()
+    assert len(body["items"]) == 3
+    assert Decimal(body["start_assets_krw"]) == Decimal("1000000")
+    assert Decimal(body["end_assets_krw"]) == Decimal("3000000")
+    # 첫날 입금은 시작 잔고에 이미 반영돼 있으므로 순입금에서 제외된다.
+    assert Decimal(body["net_deposit_krw"]) == Decimal("1500000")
+    # 3,000,000 − 1,000,000 − 1,500,000 = 500,000 (단순 차액 2,000,000 이 아니다)
+    assert Decimal(body["gain_krw"]) == Decimal("500000.00")
+
+
+def _add_realized(db, account_id, **kw):
+    from app.models import RealizedPnl
+    from datetime import date as _date
+
+    defaults = dict(
+        id=uuid.uuid4(), account_id=account_id, ticker="NVDA", asset_name="엔비디아",
+        sell_date=_date(2026, 9, 18), quantity=Decimal("4"), currency="USD",
+        pnl_krw=Decimal("50682"), fx_pnl_krw=Decimal("-121201"),
+        pnl_rate=Decimal("0.0437"),
+    )
+    defaults.update(kw)
+    row = RealizedPnl(**defaults)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_realized_separates_price_pnl_from_fx_pnl(client, db, kiwoom):
+    """주가 손익과 환 손익을 합치지 않는다 — 무엇으로 벌었는지가 사라진다."""
+    account_id = kiwoom["account"].id
+    _add_realized(db, account_id, ticker="NVDA",
+                  pnl_krw=Decimal("50682"), fx_pnl_krw=Decimal("-121201"))
+    _add_realized(db, account_id, ticker="SGOV", asset_name="미국초단기국채ETF",
+                  pnl_krw=Decimal("-10505"), fx_pnl_krw=Decimal("195692"))
+
+    body = client.get("/api/v1/portfolio/realized?days=3000").json()
+    assert body["total"] == 2
+    assert Decimal(body["pnl_krw"]) == Decimal("40177")      # 50682 - 10505
+    assert Decimal(body["fx_pnl_krw"]) == Decimal("74491")   # -121201 + 195692
+    # 승패는 **주가 손익** 기준 — 환차를 섞으면 매매 판단의 성적이 흐려진다.
+    assert body["win_count"] == 1
+    assert body["loss_count"] == 1
+
+
+def test_realized_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/realized").json()
+    assert body["total"] == 0
+    assert body["pnl_krw"] is None

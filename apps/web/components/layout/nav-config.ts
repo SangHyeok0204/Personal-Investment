@@ -101,7 +101,7 @@ export const navItems: NavItem[] = [
       {
         label: "실현손익",
         href: "/trading/realized",
-        status: "placeholder",
+        status: "live",
         hint: "종목별 · 기간별 실현 PnL",
       },
       {
@@ -120,7 +120,7 @@ export const navItems: NavItem[] = [
       {
         label: "수익률 추이",
         href: "/performance/returns",
-        status: "placeholder",
+        status: "live",
         hint: "TWR · MWR 시계열",
       },
       {

@@ -108,6 +108,54 @@ class TradeRow:
     processed_at: str | None = None
 
 
+@dataclass(frozen=True)
+class DailyPerformanceRow:
+    """계좌 일별 성과 한 점. 전부 KRW — 증권사가 이미 환산해 준 값이다."""
+
+    base_date: date
+    deposit_assets_krw: Decimal | None = None
+    stock_value_krw: Decimal | None = None
+    pnl_krw: Decimal | None = None
+    cumulative_pnl_krw: Decimal | None = None
+    dividend_krw: Decimal | None = None
+    commission_tax_krw: Decimal | None = None
+    buy_amount_krw: Decimal | None = None
+    sell_amount_krw: Decimal | None = None
+    deposit_krw: Decimal | None = None
+    withdrawal_krw: Decimal | None = None
+    return_rate: Decimal | None = None
+    exchange_rate: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class RealizedPnlRow:
+    """실현손익 한 건 (매도일 × 종목 집계).
+
+    ⚠️환차손익(fx_pnl_krw)은 주가 손익과 별개다 — 합치지 않는다.
+    """
+
+    sell_date: date
+    ticker: str
+    name: str | None
+    currency: str
+    quantity: Decimal
+    avg_buy_price: Decimal | None = None
+    avg_sell_price: Decimal | None = None
+    buy_amount_local: Decimal | None = None
+    sell_amount_local: Decimal | None = None
+    commission_tax_local: Decimal | None = None
+    pnl_local: Decimal | None = None
+    buy_amount_krw: Decimal | None = None
+    sell_amount_krw: Decimal | None = None
+    commission_tax_krw: Decimal | None = None
+    pnl_krw: Decimal | None = None
+    pnl_rate: Decimal | None = None
+    buy_exchange_rate: Decimal | None = None
+    sell_exchange_rate: Decimal | None = None
+    fx_pnl_krw: Decimal | None = None
+    exchange: str | None = None
+
+
 class BrokerAdapter:
     """증권사 하나에 대한 읽기 어댑터.
 
@@ -142,4 +190,16 @@ class BrokerAdapter:
 
     def fetch_trades(self, account: AccountRef, start: date, end: date) -> list[TradeRow]:
         """기간 내 체결 내역. 증권사마다 조회 기간 상한이 다르므로 구현체가 쪼갠다."""
+        raise NotImplementedError
+
+    def fetch_daily_performance(
+        self, account: AccountRef, start: date, end: date
+    ) -> list[DailyPerformanceRow]:
+        """계좌 일별 성과 시계열. 증권사가 들고 있는 과거를 그대로 받아 온다."""
+        raise NotImplementedError
+
+    def fetch_realized_pnl(
+        self, account: AccountRef, start: date, end: date
+    ) -> list[RealizedPnlRow]:
+        """실현손익(매도 확정분)."""
         raise NotImplementedError

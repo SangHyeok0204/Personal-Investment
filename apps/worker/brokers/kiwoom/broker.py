@@ -20,7 +20,9 @@ from ..base import (
     AccountRef,
     BalanceRow,
     BrokerAdapter,
+    DailyPerformanceRow,
     PositionRow,
+    RealizedPnlRow,
     TradeRow,
 )
 from ..registry import register
@@ -29,7 +31,7 @@ from . import domestic
 from . import us_equities
 from .adapter import mask_account_number, normalize_account, to_decimal
 from .client import KiwoomClient
-from .exceptions import KiwoomAuthError
+from .exceptions import KiwoomApiError, KiwoomAuthError
 
 
 @register("KIWOOM")
@@ -171,6 +173,113 @@ class KiwoomAdapter(BrokerAdapter):
         rows.sort(key=lambda r: (r.trade_date, r.trade_no))
         return rows
 
+    def fetch_daily_performance(self, account, start: date, end: date):
+        """일별 계좌 성과. 거래가 없는 날도 행이 온다(값이 전날과 같다)."""
+        if "US" not in self._markets:
+            return []
+        rows: dict[date, DailyPerformanceRow] = {}
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=_TRADE_WINDOW_DAYS), end)
+            pages = self._client.request_tr(
+                API_US_DAILY_PERF,
+                {"from": window_start.strftime("%Y%m%d"), "to": window_end.strftime("%Y%m%d")},
+                path=us_equities.US_ACNT_PATH,
+            )
+            for page in pages:
+                for raw in page.get("result_list") or []:
+                    base = _parse_yyyymmdd(raw.get("base_dt"))
+                    if base is None:
+                        continue
+                    # 창이 겹치면 같은 날짜가 두 번 온다 — 날짜를 키로 덮어쓴다.
+                    rows[base] = DailyPerformanceRow(
+                        base_date=base,
+                        deposit_assets_krw=_opt(raw.get("dast")),
+                        stock_value_krw=_opt(raw.get("stk_evlta")),
+                        pnl_krw=_opt(raw.get("pl_amt")),
+                        cumulative_pnl_krw=_opt(raw.get("acum_pl_amt")),
+                        dividend_krw=_opt(raw.get("dvid_amt")),
+                        commission_tax_krw=_opt(raw.get("cmsn_tax")),
+                        buy_amount_krw=_opt(raw.get("buy_amt")),
+                        sell_amount_krw=_opt(raw.get("sell_amt")),
+                        deposit_krw=_opt(raw.get("ina_amt")),
+                        withdrawal_krw=_opt(raw.get("pymn_amt")),
+                        return_rate=_percent_to_ratio(raw.get("prft_rt")),
+                        exchange_rate=_opt(raw.get("exrt")),
+                    )
+            window_start = window_end + timedelta(days=1)
+        return [rows[d] for d in sorted(rows)]
+
+    def fetch_realized_pnl(self, account, start: date, end: date):
+        """실현손익. 외화·원화를 각각 받아 합친다 — 우리가 환율을 곱해 만들지 않는다.
+
+        ⚠️매입환율과 매도환율이 달라서(실측 1,428.63 vs 1,543.00) 단일 환율로는
+          증권사 값을 재현할 수 없다. 그래서 두 번 부른다.
+        """
+        if "US" not in self._markets:
+            return []
+
+        merged: dict[tuple, dict] = {}
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=_REALIZED_WINDOW_DAYS), end)
+            for fc_krw_tp, bucket in (("0", "local"), ("1", "krw")):
+                try:
+                    pages = self._client.request_tr(
+                        API_US_REALIZED,
+                        {
+                            "strt_dt": window_start.strftime("%Y%m%d"),
+                            "end_dt": window_end.strftime("%Y%m%d"),
+                            "fc_krw_tp": fc_krw_tp,
+                        },
+                        path=us_equities.US_ACNT_PATH,
+                    )
+                except KiwoomApiError as exc:
+                    if _is_no_data(exc):
+                        continue  # 이 창에는 매도가 없었다 — 실패가 아니다.
+                    raise
+                for page in pages:
+                    for raw in page.get("result_list") or []:
+                        sell_date = _parse_yyyymmdd(raw.get("sell_dt"))
+                        ticker = (raw.get("stk_cd") or "").strip()
+                        if sell_date is None or not ticker:
+                            continue
+                        entry = merged.setdefault((sell_date, ticker), {})
+                        entry[bucket] = raw
+            window_start = window_end + timedelta(days=1)
+
+        out = []
+        for (sell_date, ticker), parts in sorted(merged.items()):
+            local = parts.get("local") or {}
+            krw = parts.get("krw") or {}
+            anchor = local or krw
+            out.append(
+                RealizedPnlRow(
+                    sell_date=sell_date,
+                    ticker=ticker,
+                    name=(anchor.get("frgn_stk_nm") or None),
+                    currency="USD",
+                    quantity=to_decimal(anchor.get("sell_qty")),
+                    avg_buy_price=_opt(local.get("avg_buy_uv")),
+                    avg_sell_price=_opt(local.get("avg_sell_uv")),
+                    buy_amount_local=_opt(local.get("buy_amt")),
+                    sell_amount_local=_opt(local.get("sell_amt")),
+                    commission_tax_local=_opt(local.get("cmsn_tax")),
+                    pnl_local=_opt(local.get("pl_amt")),
+                    buy_amount_krw=_opt(krw.get("buy_amt")),
+                    sell_amount_krw=_opt(krw.get("sell_amt")),
+                    commission_tax_krw=_opt(krw.get("cmsn_tax")),
+                    pnl_krw=_opt(krw.get("pl_amt")),
+                    pnl_rate=_percent_to_ratio(anchor.get("pl_rt")),
+                    buy_exchange_rate=_opt(anchor.get("prch_exrt")),
+                    sell_exchange_rate=_opt(anchor.get("sell_exrt")),
+                    # 환차손익은 외화/원화 어느 호출에서나 **원화**로 온다.
+                    fx_pnl_krw=_opt(anchor.get("krw_chg_dfrn_pl_amt")),
+                    exchange=(anchor.get("stex_nm") or None),
+                )
+            )
+        return out
+
     def fetch_portfolio(self, account: AccountRef) -> AccountPortfolio:
         raw_account = {
             "external_account_id": account.external_account_id,
@@ -256,6 +365,21 @@ API_US_TRADES = "ust21100"
 _TRADE_WINDOW_DAYS = 360
 #: 매수/매도 구분은 deal_kind_nm(전부 "매매")이 아니라 rmrk_nm(적요명)에 있다.
 _SIDE_BY_REMARK = {"매수": "BUY", "매도": "SELL"}
+
+#: 일별 계좌수익률(usa21670). 조회 상한은 ust21100 과 같은 1년으로 보고 창을 나눈다.
+API_US_DAILY_PERF = "usa21670"
+#: 실현손익(ust21530). ⚠️상한이 **6개월**이다 — 초과 시 return_code=20 / 505657
+#:  "조회기간은 6개월 이내만 가능합니다". 거래내역(1년)과 다르므로 따로 둔다.
+API_US_REALIZED = "ust21530"
+_REALIZED_WINDOW_DAYS = 175
+#: ⚠️ust21530 은 해당 기간에 매도가 없으면 **빈 목록이 아니라 에러**를 낸다
+#:  (return_code=20 / 571758 "조회내역이 없습니다"). 여러 창으로 나눠 조회할 때
+#:  매도가 없는 창이 하나만 있어도 전체가 죽으므로, 이 코드는 '없음'으로 읽는다.
+_NO_DATA_CODE = "571758"
+
+
+def _is_no_data(exc) -> bool:
+    return _NO_DATA_CODE in (getattr(exc, "return_msg", "") or "")
 
 
 def _usd_rate(us_detail):
