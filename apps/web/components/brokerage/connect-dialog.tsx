@@ -36,6 +36,8 @@ export function ConnectDialog({
   const [environment, setEnvironment] = useState("REAL");
   const [markets, setMarkets] = useState<string[]>(["US"]);
   const [error, setError] = useState<string | null>(null);
+  // IP 차단일 때 등록해야 할 서버 공인 IP. 값을 보여줘야 사용자가 찾아 헤매지 않는다.
+  const [blockedIp, setBlockedIp] = useState<string | null>(null);
   const [phase, setPhase] = useState<"form" | "syncing" | "done">("form");
   const [synced, setSynced] = useState<{ positions: number; trades: number } | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -82,6 +84,11 @@ export function ConnectDialog({
     onError: (err: unknown) => {
       setPhase("form");
       setError(err instanceof Error ? err.message : "연결에 실패했습니다.");
+      // ApiError 의 details 에 공인 IP 가 실려 온다(IP 차단일 때만).
+      const details = (err as { details?: Record<string, unknown> })?.details;
+      setBlockedIp(
+        typeof details?.public_ip === "string" ? details.public_ip : null,
+      );
     },
   });
 
@@ -138,6 +145,7 @@ export function ConnectDialog({
               markets={existing.markets}
               ok={existing.connection_ok}
               message={existing.connection_message}
+              publicIp={existing.public_ip}
               accounts={existing.accounts}
               loading={status.isFetching}
               busy={busy}
@@ -240,10 +248,13 @@ export function ConnectDialog({
                       {error}
                     </p>
                     {/IP|8050/.test(error) && (
-                      <p className="mt-1 text-[11px] font-medium text-ink-secondary">
-                        키가 아니라 <b>IP 등록</b> 문제입니다. 키움 REST API 홈페이지 &gt;
-                        API 사용신청에서 이 서버의 공인 IP 를 등록하세요.
-                      </p>
+                      <div className="mt-1.5 space-y-1.5">
+                        <p className="text-[11px] font-medium text-ink-secondary">
+                          키가 아니라 <b>IP 등록</b> 문제입니다. 키움 REST API 홈페이지 &gt;
+                          API 사용신청에서 아래 IP 를 등록하세요.
+                        </p>
+                        {blockedIp && <IpBox ip={blockedIp} />}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -279,6 +290,7 @@ function RegisteredBox({
   markets,
   ok,
   message,
+  publicIp,
   accounts,
   loading,
   busy,
@@ -289,6 +301,7 @@ function RegisteredBox({
   markets: string[];
   ok: boolean | null;
   message: string | null;
+  publicIp: string | null;
   accounts: BrokerAccountPreview[];
   loading: boolean;
   busy: boolean;
@@ -322,9 +335,12 @@ function RegisteredBox({
       </div>
 
       {!loading && !ok && message && (
-        <p className="mt-2 text-[11px] font-semibold leading-snug text-status-failed">
-          {message}
-        </p>
+        <div className="mt-2 space-y-1.5">
+          <p className="text-[11px] font-semibold leading-snug text-status-failed">
+            {message}
+          </p>
+          {publicIp && <IpBox ip={publicIp} />}
+        </div>
       )}
 
       {accounts.length > 0 && (
@@ -401,5 +417,37 @@ function Toggle({
     >
       {children}
     </button>
+  );
+}
+
+/** 등록해야 할 공인 IP 를 눈에 띄게 + 복사 가능하게.
+ *
+ * ★IP 미등록으로 두 번 막혔고 두 번째는 네트워크가 바뀌어 IP 자체가 달라진
+ *   경우였다. "IP를 등록하세요"만 보여주면 어떤 IP 인지 찾아 헤매게 된다.
+ */
+function IpBox({ ip }: { ip: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-2.5 py-1.5">
+      <code className="flex-1 text-[13px] font-extrabold tabular-nums text-ge-navy">
+        {ip}
+      </code>
+      <button
+        type="button"
+        onClick={() => {
+          // 클립보드는 보안 컨텍스트에서만 된다 — 실패해도 IP 는 이미 보인다.
+          navigator.clipboard?.writeText(ip).then(
+            () => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            },
+            () => setCopied(false),
+          );
+        }}
+        className="shrink-0 rounded-md border border-hairline px-2 py-0.5 text-[11px] font-bold text-ink-secondary transition-colors hover:bg-canvas-soft"
+      >
+        {copied ? "복사됨" : "복사"}
+      </button>
+    </div>
   );
 }

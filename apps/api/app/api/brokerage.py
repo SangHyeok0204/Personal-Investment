@@ -55,6 +55,8 @@ class AccountPreview(BaseModel):
 
 class CredentialsStatusOut(BaseModel):
     configured: bool
+    #: 키움 허용목록에 등록해야 하는 이 서버의 공인 IP. 조회 실패 시 null.
+    public_ip: str | None = None
     environment: str
     markets: list[str]
     # 키 자체는 절대 나가지 않는다 — 지문과 꼬리 4자리뿐이다.
@@ -74,6 +76,31 @@ class SyncResultOut(BaseModel):
     daily_performance: int = 0
     realized_pnl: int = 0
     message: str | None = None
+
+
+def _public_ip() -> str | None:
+    """이 서버의 공인 IP. 키움 허용목록에 등록해야 하는 바로 그 주소다.
+
+    ★2026-09-21: IP 미등록(8050) 으로 두 번 막혔고, 두 번째는 **네트워크가 바뀌어
+      IP 자체가 달라진 것**이었다(165.132.5.132 → 121.131.150.214). 오류 메시지가
+      "IP를 등록하세요"라고만 하면 사용자는 *어떤* IP 인지 찾아 헤맨다. 화면이
+      그 값을 직접 보여준다.
+
+    ⚠️외부 조회라 실패할 수 있다 — 실패하면 None 이고, 화면은 그 줄만 생략한다.
+      IP 를 못 알아냈다고 연동 자체가 막히면 안 된다.
+    """
+    import httpx
+
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            response = httpx.get(url, timeout=3.0)
+            if response.status_code == 200:
+                ip = response.text.strip()
+                if ip and len(ip) <= 45:
+                    return ip
+        except Exception:
+            continue
+    return None
 
 
 def _build_credentials(app_key: str, secret_key: str, environment: str):
@@ -127,6 +154,8 @@ def list_broker_accounts() -> CredentialsStatusOut:
     check, accounts = _probe(_build_credentials(app_key, secret_key, environment), markets)
     return CredentialsStatusOut(
         **settings,
+        # IP 차단일 때만 외부 조회를 한다 — 정상일 때 매번 부를 이유가 없다.
+        public_ip=_public_ip() if check.get("reason") == "ip_not_allowed" else None,
         connection_ok=bool(check.get("ok")),
         connection_reason=check.get("reason"),
         connection_message=check.get("message"),
@@ -151,11 +180,15 @@ def register_credentials(body: CredentialsIn) -> CredentialsStatusOut:
     if not check.get("ok"):
         # 원인을 그대로 올린다 — IP 미등록을 자격증명 오류로 오해하면 멀쩡한 키를
         # 계속 재발급하게 된다.
+        details = {"reason": check.get("reason")}
+        if check.get("reason") == "ip_not_allowed":
+            # "IP를 등록하세요"만으로는 *어떤* IP 인지 알 수 없다. 값을 같이 준다.
+            details["public_ip"] = _public_ip()
         raise AppError(
             400,
             "BROKER_CONNECTION_FAILED",
             check.get("message") or "연결에 실패했습니다.",
-            {"reason": check.get("reason")},
+            details,
         )
 
     credentials_store.save(app_key, secret_key, body.environment, markets)

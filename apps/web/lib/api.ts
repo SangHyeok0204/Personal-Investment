@@ -2927,6 +2927,8 @@ export interface BrokerAccountPreview {
 
 export interface CredentialsStatus {
   configured: boolean;
+  // 키움 허용목록에 등록해야 하는 서버 공인 IP. IP 차단일 때만 채워진다.
+  public_ip: string | null;
   environment: string;
   markets: string[];
   fingerprint: string | null;
