@@ -16,13 +16,16 @@
 import sys
 import threading
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Query
 
 from app.schemas import (
+    EarningsEventOut,
+    EarningsOut,
+    EpsHistoryOut,
     MacroMonitorOut,
     MacroRowOut,
     MarketMonitorOut,
@@ -33,6 +36,7 @@ _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
 if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
+from prices import earnings as earnings_source  # noqa: E402
 from prices import fred  # noqa: E402
 from prices.history import PERIODS, base_values, changes, fetch_series  # noqa: E402
 
@@ -268,3 +272,106 @@ def get_macro(refresh: bool = Query(default=False)) -> MacroMonitorOut:
     with _macro_lock:
         _macro_cache = (time.monotonic(), built)
     return built
+
+
+# ── 실적 발표 일정 ──────────────────────────────────────────────────────────
+
+# 실적 일정은 초 단위로 바뀌지 않는다. 6시간 캐시.
+EARNINGS_TTL_SECONDS = 6 * 3600.0
+
+# ⚠️60일을 본다. 14일·30일 창에서는 **내 보유 종목이 한 건도 안 걸렸다**(실측) —
+#   미국 대형주는 분기 실적이라 한 달 창으로는 비는 구간이 길다.
+EARNINGS_WINDOW_DAYS = 60
+
+# 근시일 시장 맥락용. 전체는 4,201건이라 그대로 내보낼 수 없다.
+_MAJOR_WINDOW_DAYS = 14
+_MAJOR_LIMIT = 25
+
+_earnings_lock = threading.Lock()
+_earnings_cache: dict[str, tuple[float, "EarningsOut"]] = {}
+
+
+def _to_event(event, mine: bool) -> EarningsEventOut:
+    return EarningsEventOut(
+        report_date=event.report_date,
+        ticker=event.ticker,
+        company=event.company,
+        timing=event.timing,
+        eps_forecast=event.eps_forecast,
+        estimate_count=event.estimate_count,
+        last_year_eps=event.last_year_eps,
+        market_cap=event.market_cap,
+        held=mine,
+    )
+
+
+def _build_earnings(mine_tickers: set[str]) -> "EarningsOut":
+    today = date.today()
+    events = earnings_source.fetch_calendar(today, EARNINGS_WINDOW_DAYS)
+
+    my_events = [_to_event(e, True) for e in events if e.ticker in mine_tickers]
+
+    # 근시일 대형주 — 시장 맥락. 내 종목은 위에 따로 있으니 여기서 뺀다.
+    horizon = today + timedelta(days=_MAJOR_WINDOW_DAYS)
+    major = [
+        e
+        for e in events
+        if e.report_date <= horizon
+        and e.ticker not in mine_tickers
+        and e.market_cap is not None
+    ]
+    major.sort(key=lambda e: e.market_cap or Decimal("0"), reverse=True)
+
+    return EarningsOut(
+        mine=my_events,
+        major=[_to_event(e, False) for e in major[:_MAJOR_LIMIT]],
+        window_days=EARNINGS_WINDOW_DAYS,
+        major_window_days=_MAJOR_WINDOW_DAYS,
+        total_scanned=len(events),
+        first_date=today,
+        last_date=today + timedelta(days=EARNINGS_WINDOW_DAYS),
+    )
+
+
+@router.get("/earnings", response_model=EarningsOut)
+def get_earnings(
+    tickers: str | None = Query(default=None, description="쉼표로 구분. 내 종목 표시용"),
+    refresh: bool = Query(default=False),
+) -> EarningsOut:
+    """미국 실적 발표 일정 — **키 없이** Nasdaq 공개 API.
+
+    ★야후는 막혔다(실측): v7 quote 401, v10 quoteSummary 는 "Invalid Crumb".
+      Nasdaq `api.nasdaq.com/api/calendar/earnings` 는 키 없이 200 이다.
+
+    ⚠️어느 종목이 '내 것'인지는 **호출부가 알려 준다**. 이 라우터는 계좌 DB 를
+      보지 않는다 — 시장 데이터 라우터가 포트폴리오에 의존하면 둘이 얽힌다.
+    """
+    wanted = {
+        t.strip().upper() for t in (tickers or "").split(",") if t.strip()
+    }
+    key = ",".join(sorted(wanted))
+    now = time.monotonic()
+    with _earnings_lock:
+        hit = _earnings_cache.get(key)
+        if not refresh and hit is not None and now - hit[0] < EARNINGS_TTL_SECONDS:
+            return hit[1]
+
+    built = _build_earnings(wanted)
+    with _earnings_lock:
+        _earnings_cache[key] = (time.monotonic(), built)
+    return built
+
+
+@router.get("/earnings/{symbol}/history", response_model=list[EpsHistoryOut])
+def get_eps_history(symbol: str) -> list[EpsHistoryOut]:
+    """분기별 컨센서스 vs 실제. 서프라이즈를 눈으로 본다."""
+    return [
+        EpsHistoryOut(
+            period=row.period,
+            kind=row.kind,
+            consensus=row.consensus,
+            actual=row.actual,
+            surprise=row.surprise,
+        )
+        for row in earnings_source.fetch_eps_history(symbol)
+    ]

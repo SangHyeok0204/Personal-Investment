@@ -886,6 +886,47 @@ class BenchmarkOut(BaseModel):
     last_date: date | None
 
 
+# ── 실적 발표 일정 ───────────────────────────────────────────────────────────
+
+class EarningsEventOut(BaseModel):
+    report_date: date
+    ticker: str
+    company: str
+    # 장전 / 장후 / 미정. 먼 날짜는 대개 "미정"이다.
+    timing: str
+    # ⚠️못 읽으면 None 이다. 0 으로 만들면 "EPS 0달러 전망"이라는 틀린 사실이 남는다.
+    eps_forecast: Decimal | None
+    estimate_count: int | None
+    last_year_eps: Decimal | None
+    market_cap: Decimal | None
+    held: bool
+
+
+class EpsHistoryOut(BaseModel):
+    period: str
+    kind: str
+    consensus: Decimal | None
+    actual: Decimal | None
+    # 실제 − 컨센서스. 둘 중 하나라도 없으면 None.
+    surprise: Decimal | None
+
+
+class EarningsOut(BaseModel):
+    """실적 일정. 내 종목과 시장 맥락을 나눠서 낸다.
+
+    ⚠️전체는 60일에 4,201건이라 그대로 내보내지 않는다 — 내 종목은 전부,
+      시장 맥락은 근시일 대형주만.
+    """
+
+    mine: list[EarningsEventOut]
+    major: list[EarningsEventOut]
+    window_days: int
+    major_window_days: int
+    total_scanned: int
+    first_date: date
+    last_date: date
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

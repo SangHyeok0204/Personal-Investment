@@ -204,7 +204,7 @@ export const navItems: NavItem[] = [
         status: "placeholder",
         hint: "반도체 · AI 개념 정리",
       },
-      { label: "미국 어닝/이슈", href: "/stock/us", status: "placeholder" },
+      { label: "미국 어닝/이슈", href: "/stock/us", status: "live" },
       { label: "공시", status: "planned", hint: "DART · SEC" },
     ],
   },

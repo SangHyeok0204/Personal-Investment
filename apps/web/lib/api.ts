@@ -3437,6 +3437,49 @@ export function getBenchmark(accountId?: string | null, days = 1095): Promise<Be
   );
 }
 
+// ── 실적 발표 일정 ───────────────────────────────────────────────────────────
+
+export interface EarningsEvent {
+  report_date: string;
+  ticker: string;
+  company: string;
+  /** 장전 · 장후 · 미정 (먼 날짜는 대개 미정) */
+  timing: string;
+  eps_forecast: string | null;
+  estimate_count: number | null;
+  last_year_eps: string | null;
+  market_cap: string | null;
+  held: boolean;
+}
+
+export interface EpsHistoryRow {
+  period: string;
+  kind: string;
+  consensus: string | null;
+  /** 발표 전이면 null — Nasdaq 은 0.0 으로 준다. */
+  actual: string | null;
+  surprise: string | null;
+}
+
+export interface Earnings {
+  mine: EarningsEvent[];
+  major: EarningsEvent[];
+  window_days: number;
+  major_window_days: number;
+  total_scanned: number;
+  first_date: string;
+  last_date: string;
+}
+
+export function getEarnings(tickers: string[]): Promise<Earnings> {
+  const q = tickers.length ? `?tickers=${encodeURIComponent(tickers.join(","))}` : "";
+  return request<Earnings>(`/api/v1/market/earnings${q}`);
+}
+
+export function getEpsHistory(symbol: string): Promise<EpsHistoryRow[]> {
+  return request<EpsHistoryRow[]>(`/api/v1/market/earnings/${symbol}/history`);
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,
