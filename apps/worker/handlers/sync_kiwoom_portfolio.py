@@ -448,6 +448,12 @@ def run(engine, job_id, payload, storage_dir, log_job):
             "orders": 0,
         }
         history_error: str | None = None
+        # ⚠️에러가 아니라 **조용히 0건**인 경우를 잡는다. 실측(2026-09-22 07:00 KST):
+        #   usa21670 이 "정상적으로 처리되었습니다 / result_list 빈 배열" 을 돌려줬다.
+        #   증권사 일일 배치 시간대로 보인다(같은 조회가 23시에는 530행이었다).
+        #   에러가 아니니 예외도 안 나고 history_error 도 안 찍힌다 — 새 DB 로
+        #   그 시간에 동기화하면 이력이 **빈 채로 굳는다**. 실제로 그렇게 됐다.
+        history_notes: list[str] = []
         try:
             history_start = now.date() - timedelta(days=HISTORY_DAYS)
             adapter_cls = get_adapter_class("KIWOOM")
@@ -501,6 +507,20 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         )
                         # 찾아낸 거래소 코드를 남겨 다음 동기화의 탐색을 줄인다.
                         history_repo.remember_exchange_codes(conn, dividends)
+            # 체결은 들어왔는데 일별성과·배당이 0이면 조회 자체가 빈 응답이었다는 뜻이다.
+            if history_counts["trades"] > 0:
+                if history_counts["daily_performance"] == 0:
+                    history_notes.append(
+                        "일별 계좌성과가 0건입니다 — 증권사가 에러 없이 빈 응답을 "
+                        "주는 시간대일 수 있습니다(이른 아침 배치). 나중에 다시 동기화하세요."
+                    )
+                if history_counts["dividends"] == 0:
+                    history_notes.append(
+                        "배당이 0건입니다 — 같은 이유일 수 있으니 나중에 다시 동기화하세요."
+                    )
+            for note in history_notes:
+                log_job(engine, job_id, "WARNING", "sync_history", note)
+
             log_job(
                 engine, job_id, "INFO", "sync_history",
                 f"Synced {history_counts['trades']} trade(s), "
@@ -523,6 +543,7 @@ def run(engine, job_id, payload, storage_dir, log_job):
         _update_connection_success(engine, connection_id)
         result = {
             "history_error": history_error,
+            "history_notes": history_notes,
             "accounts_synced": len(normalized),
             "domestic_positions": domestic_positions,
             "us_positions": us_positions,

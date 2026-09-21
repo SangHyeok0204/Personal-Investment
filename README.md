@@ -164,6 +164,26 @@ cd apps/web && npm run dev
 가리킨 채 나온다(실제로 그런 번들이 나왔다).
 ⚠️`8010` 은 `tools/perf-brief-runner` 가 쓰는 포트다. API 를 거기 올리면 충돌한다.
 
+⚠️**앱은 `investment`, 테스트는 `investment_test` 다. 절대 같은 DB 를 쓰지 말 것.**
+pytest 의 `db` 픽스처는 매 테스트마다 `TRUNCATE ... CASCADE` 를 돈다. 앱을
+`investment_test` 에 붙여 두면 테스트를 한 번 돌릴 때마다 대시보드 데이터가
+사라진다(실제로 여러 번 겪었다). 테스트 DB 이름은 `apps/api/tests/conftest.py`
+가 정한다.
+
+```bash
+# 앱 DB 를 처음 만들 때
+createdb investment
+DATABASE_URL="postgresql+psycopg://<user>@localhost:5432/investment" \
+  .venv/bin/python -m alembic upgrade head
+# 그 다음 대시보드의 [연동/설정] → 동기화, 또는
+curl -X POST http://localhost:8000/api/v1/brokerage/sync
+```
+
+⚠️**이른 아침(KST 05~07시경)에는 동기화하지 말 것.** 키움 `usa21670`(일별 계좌
+성과)이 그 시간대에 **에러 없이 빈 배열**을 돌려준다("정상적으로 처리되었습니다"
++ 0행). 같은 조회가 23시에는 530행이었다. 예외가 안 나므로 새 DB 를 그때 채우면
+이력이 빈 채로 굳는다. 동기화 응답의 경고 문구가 이 경우를 알려 준다.
+
 ```bash
 # 빌드 검증 — dev 서버의 .next 를 덮지 않도록 출력 폴더를 가른다
 cd apps/web && npm run build:check
