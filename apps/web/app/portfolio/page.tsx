@@ -1,48 +1,136 @@
 "use client";
 
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
+import { useAccount } from "@/components/layout/account-context";
 import {
+  Cell,
+  DataTable,
   NotConnectedBanner,
   PlannedList,
   StatRow,
   StatTile,
   StubCard,
   StubChart,
-  StubTable,
+  toneOf,
 } from "@/components/stub";
+import {
+  getPortfolioHoldings,
+  getPortfolioSummary,
+  type PortfolioHolding,
+} from "@/lib/api";
+import {
+  formatKrwSigned,
+  formatKrwString,
+  formatPercentString,
+  formatPriceString,
+  formatQuantityString,
+} from "@/lib/format";
 
-// 개인 대시보드의 1면. 키움 잔고 조회(예수금·평가금액·보유종목)가 붙으면
-// 여기 StatTile 4개와 아래 두 카드가 가장 먼저 실데이터로 바뀐다.
+// 개인 대시보드의 1면 — 자산 현황.
+//
+// ★2026-09-21 2차: 상단 4칸·보유 종목 표를 실제 API(/api/v1/portfolio/*)에 물렸다.
+//   계좌가 아직 없으면 서버가 합계를 null 로 주고, 화면은 "—" 와 연동 안내를 띄운다.
+//   0원으로 그리지 않는다 — 0원과 미연동은 다른 상태다.
+//
+// 자산 추이·자산 배분은 아직 골격이다: 추이는 portfolio_snapshots 가 쌓여야 의미가
+// 있고(수집 배치가 먼저), 배분은 종목 분류(0003) 를 붙여야 한다.
+
 export default function PortfolioPage() {
+  const { accountId, connected, isError: accountsError } = useAccount();
+
+  const summary = useQuery({
+    queryKey: ["portfolioSummary", accountId],
+    queryFn: () => getPortfolioSummary(accountId),
+    staleTime: 30_000,
+  });
+
+  const holdings = useQuery({
+    queryKey: ["portfolioHoldings", accountId],
+    queryFn: () => getPortfolioHoldings(accountId),
+    staleTime: 30_000,
+  });
+
+  const s = summary.data;
+  const rows = holdings.data?.items ?? [];
+  const loading = summary.isLoading;
+
   return (
     <>
       <Topbar title="자산 현황" subtitle="전체 계좌 합산 · 실시간 평가" />
       <PageContainer wide>
-        <NotConnectedBanner what="키움 계좌 API" />
+        {!connected && (
+          <NotConnectedBanner
+            what="키움 계좌 API"
+            message={
+              accountsError
+                ? "API 서버에 연결하지 못했습니다 — 백엔드(uvicorn)가 떠 있는지 확인하세요."
+                : undefined
+            }
+          />
+        )}
 
         <StatRow>
-          <StatTile label="총 평가금액" hint="보유종목 평가액 + 예수금" />
-          <StatTile label="평가손익" hint="매입원가 대비" accent="up" />
-          <StatTile label="당일 손익" hint="전일 종가 대비" accent="up" />
-          <StatTile label="예수금(D+2)" hint="주문 가능 금액" />
+          <StatTile
+            label="총 평가금액"
+            value={formatKrwString(s?.total_assets_krw)}
+            hint="보유종목 평가액 + 예수금"
+            loading={loading}
+          />
+          <StatTile
+            label="평가손익"
+            value={formatKrwSigned(s?.unrealized_pnl_krw)}
+            hint={
+              s?.unrealized_return != null
+                ? `매입원가 대비 ${formatPercentString(s.unrealized_return)}`
+                : "매입원가 대비"
+            }
+            accent="auto"
+            loading={loading}
+          />
+          <StatTile
+            label="보유종목 평가액"
+            value={formatKrwString(s?.securities_value_krw)}
+            hint={
+              s?.position_count ? `${s.position_count}종목` : "보유 종목 평가액"
+            }
+            loading={loading}
+          />
+          <StatTile
+            label="예수금"
+            value={formatKrwString(s?.cash_krw)}
+            hint={
+              s?.available_cash_krw != null
+                ? `주문가능 ${formatKrwString(s.available_cash_krw)}`
+                : "주문 가능 금액"
+            }
+            loading={loading}
+          />
         </StatRow>
 
         <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
           <StubCard title="자산 추이" subtitle="총 평가금액 시계열">
-            <StubChart height={260} />
+            {/* 스냅샷 적재 배치가 붙기 전에는 그릴 점이 없다. */}
+            <StubChart height={260} note="일별 스냅샷 적재 대기" />
           </StubCard>
 
           <StubCard title="자산 배분" subtitle="자산군 비중">
-            <StubChart height={260} />
+            <StubChart height={260} note="종목 분류 연동 대기" />
           </StubCard>
 
           <StubCard
-            title="보유 종목 상위"
-            subtitle="평가금액 순"
+            title="보유 종목"
+            subtitle={
+              holdings.data?.total_market_value_krw
+                ? `평가금액 합계 ${formatKrwString(holdings.data.total_market_value_krw)}`
+                : "평가금액 순"
+            }
             className="xl:col-span-2"
           >
-            <StubTable
+            <DataTable
               columns={[
                 "종목",
                 "수량",
@@ -53,26 +141,100 @@ export default function PortfolioPage() {
                 "수익률",
                 "비중",
               ]}
-              rows={6}
-            />
+              align={["left", "right", "right", "right", "right", "right", "right", "right"]}
+              empty={
+                holdings.isLoading
+                  ? "불러오는 중…"
+                  : connected
+                    ? "보유 종목이 없습니다"
+                    : "계좌를 연동하면 보유 종목이 표시됩니다"
+              }
+            >
+              {rows.map((h) => (
+                <HoldingRow
+                  key={`${h.account_id}-${h.asset_id}`}
+                  holding={h}
+                  totalKrw={holdings.data?.total_market_value_krw ?? null}
+                />
+              ))}
+            </DataTable>
           </StubCard>
 
           <StubCard title="오늘 체결" subtitle="당일 매매">
-            <StubTable columns={["시각", "종목", "구분", "수량", "단가"]} rows={4} />
+            <DataTable
+              columns={["시각", "종목", "구분", "수량", "단가"]}
+              empty="체결 수집이 아직 연결되지 않았습니다"
+            >
+              {null}
+            </DataTable>
           </StubCard>
 
           <StubCard title="연동하면 채워질 것들">
             <PlannedList
               items={[
-                "키움 REST 잔고조회 → 보유종목·평단·평가손익",
-                "예수금/증거금 → 주문가능금액과 D+2 정산",
+                "키움 REST 잔고조회 → 보유종목·평단·평가손익 (API 배선 완료, 수집기 대기)",
                 "일별 잔고 스냅샷 적재 → 자산 추이 차트",
+                "종목 분류(alembic 0003) 연결 → 자산 배분 원형",
+                "체결 내역 수집 → 오늘 체결 · 매매일지 자동 초안",
                 "토스 계좌 합산 → 계좌별/통합 뷰 전환",
               ]}
             />
           </StubCard>
         </div>
+
+        <div className="mt-4">
+          <Link
+            href="/portfolio/holdings"
+            className="group inline-flex items-center gap-2 text-[13px] font-bold text-ge-point transition-colors hover:text-ge-navy"
+          >
+            보유 종목 전체 보기
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          </Link>
+        </div>
       </PageContainer>
     </>
+  );
+}
+
+function HoldingRow({
+  holding: h,
+  totalKrw,
+}: {
+  holding: PortfolioHolding;
+  totalKrw: string | null;
+}) {
+  // 비중은 KRW 평가액 기준. 합계를 모르면 계산하지 않는다(빈칸이 거짓말보다 낫다).
+  const weight =
+    totalKrw && h.market_value_krw && Number(totalKrw) !== 0
+      ? `${((Number(h.market_value_krw) / Number(totalKrw)) * 100).toFixed(1)}%`
+      : "—";
+
+  return (
+    <tr className="border-t border-hairline transition-colors hover:bg-canvas-soft/60">
+      <Cell left strong>
+        <span className="flex items-center gap-2">
+          {h.name ?? h.ticker}
+          <span className="text-[10px] font-semibold text-ink-faint">
+            {h.ticker}
+          </span>
+          {h.currency !== "KRW" && (
+            <span className="rounded bg-ge-blue-bg px-1.5 py-0.5 text-[10px] font-bold text-ge-point">
+              {h.currency}
+            </span>
+          )}
+        </span>
+      </Cell>
+      <Cell>{formatQuantityString(h.quantity)}</Cell>
+      <Cell>{formatPriceString(h.average_purchase_price, h.currency)}</Cell>
+      <Cell>{formatPriceString(h.current_price, h.currency)}</Cell>
+      <Cell strong>{formatKrwString(h.market_value_krw)}</Cell>
+      <Cell tone={toneOf(h.unrealized_pnl_krw)}>
+        {formatKrwSigned(h.unrealized_pnl_krw)}
+      </Cell>
+      <Cell tone={toneOf(h.unrealized_return)}>
+        {formatPercentString(h.unrealized_return)}
+      </Cell>
+      <Cell tone="muted">{weight}</Cell>
+    </tr>
   );
 }

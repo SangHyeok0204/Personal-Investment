@@ -15,6 +15,7 @@ from app.api import (
     jobs,
     lan,
     macro,
+    portfolio,
     stock_discussion,
     stock_monitor,
     system,
@@ -66,3 +67,4 @@ app.include_router(stock_monitor.router)
 app.include_router(ai_key_data.router)
 app.include_router(earnings.router)
 app.include_router(etf_class.router)
+app.include_router(portfolio.router)

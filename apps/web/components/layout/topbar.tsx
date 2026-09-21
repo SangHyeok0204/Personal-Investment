@@ -11,6 +11,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { useSidebar } from "@/components/layout/sidebar-context";
+import { ALL_ACCOUNTS, useAccount } from "@/components/layout/account-context";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,15 +23,6 @@ import { cn } from "@/lib/utils";
  *   숫자를 잘못 읽는다. 기존 페이지 19장은 props 를 안 고쳐도 그대로 동작한다
  *   (계좌 칩·장 상태·동기화 표시는 기본값으로 켜지고, 전부 아직 더미다).
  */
-
-// 키움 API 가 붙기 전까지 쓰는 더미. 실제로는 /api/accounts 에서 받아온다.
-const PLACEHOLDER_ACCOUNTS = [
-  { id: "all", label: "전체 계좌", broker: "합산" },
-  { id: "kiwoom-main", label: "키움 주계좌", broker: "키움증권" },
-  { id: "kiwoom-isa", label: "ISA", broker: "키움증권" },
-  { id: "toss", label: "토스 계좌", broker: "토스증권" },
-  { id: "pension", label: "연금저축", broker: "미연동" },
-];
 
 /** KRX 정규장(09:00~15:30) 기준 장 상태. 휴장일은 아직 반영하지 않는다. */
 function useMarketSession() {
@@ -70,7 +62,7 @@ export function Topbar({
   actions,
   /** 계좌 칩·장 상태·동기화 표시를 숨기고 싶은 화면용(시장 전용 화면 등). */
   showAccountContext = true,
-  /** 마지막 동기화 시각 — 실데이터가 붙기 전에는 넘기지 않으면 "미연동"으로 뜬다. */
+  /** 마지막 동기화 시각. 넘기지 않으면 선택된 계좌(또는 전체 중 최신)에서 읽는다. */
   syncedAt,
   onSync,
 }: {
@@ -84,7 +76,7 @@ export function Topbar({
 }) {
   const { collapsed, toggle } = useSidebar();
   const session = useMarketSession();
-  const [accountId, setAccountId] = useState("all");
+  const { accountId, setAccountId, accounts, connected, isError } = useAccount();
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
 
@@ -106,9 +98,25 @@ export function Topbar({
     };
   }, [accountOpen]);
 
-  const account =
-    PLACEHOLDER_ACCOUNTS.find((a) => a.id === accountId) ??
-    PLACEHOLDER_ACCOUNTS[0];
+  const selected = accounts.find((a) => a.id === accountId) ?? null;
+  // 명시적으로 넘긴 값 > 선택 계좌의 동기화 시각 > 전체 계좌 중 가장 최근.
+  const lastSynced =
+    syncedAt ??
+    selected?.last_synced_at ??
+    accounts
+      .map((a) => a.last_synced_at)
+      .filter((v): v is string => v != null)
+      .sort()
+      .at(-1) ??
+    null;
+  // 라벨 우선순위: 고른 계좌 이름 → 전체 합산 → (계좌가 없으면) 미연동.
+  const accountLabel = selected
+    ? (selected.account_name ?? selected.account_number_masked ?? "계좌")
+    : connected
+      ? "전체 계좌"
+      : isError
+        ? "API 연결 안 됨"
+        : "계좌 미연동";
 
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-7">
@@ -160,38 +168,66 @@ export function Topbar({
                 aria-expanded={accountOpen}
                 className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-3 py-1.5 text-[12px] font-bold text-ge-navy transition-colors hover:bg-canvas-soft"
               >
-                <Wallet className="h-3.5 w-3.5 text-ge-point" />
-                {account.label}
+                <Wallet
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    connected ? "text-ge-point" : "text-slate-300",
+                  )}
+                />
+                <span className={cn(!connected && "text-ink-muted")}>
+                  {accountLabel}
+                </span>
                 <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
               </button>
               {accountOpen && (
                 <div
                   role="listbox"
-                  className="absolute right-0 top-full z-50 mt-1.5 min-w-[196px] rounded-xl bg-white p-1.5 shadow-[0_16px_36px_rgba(36,59,94,0.22)] ring-1 ring-hairline"
+                  className="absolute right-0 top-full z-50 mt-1.5 min-w-[220px] rounded-xl bg-white p-1.5 shadow-[0_16px_36px_rgba(36,59,94,0.22)] ring-1 ring-hairline"
                 >
-                  {PLACEHOLDER_ACCOUNTS.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      role="option"
-                      aria-selected={a.id === accountId}
-                      onClick={() => {
-                        setAccountId(a.id);
-                        setAccountOpen(false);
-                      }}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-ge-blue-bg",
-                        a.id === accountId && "bg-ge-blue-bg",
-                      )}
-                    >
-                      <span className="text-[13px] font-extrabold text-ge-navy">
-                        {a.label}
-                      </span>
-                      <span className="text-[10px] font-semibold text-ink-faint">
-                        {a.broker}
-                      </span>
-                    </button>
-                  ))}
+                  {/* 계좌가 없으면 목록 대신 연동 경로를 안내한다 — 빈 목록은
+                      "고를 게 없다"만 말하고 다음 행동을 알려주지 않는다. */}
+                  {!connected ? (
+                    <div className="px-3 py-3">
+                      <p className="text-[12px] font-semibold text-ink-secondary">
+                        {isError
+                          ? "API 서버에 연결하지 못했습니다."
+                          : "연동된 증권사 계좌가 없습니다."}
+                      </p>
+                      <a
+                        href="/settings/connections"
+                        className="mt-2 inline-block rounded-lg border border-hairline bg-white px-3 py-1.5 text-[12px] font-bold text-ge-point transition-colors hover:bg-ge-blue-bg"
+                      >
+                        계좌 연동하기
+                      </a>
+                    </div>
+                  ) : (
+                    <>
+                      <AccountOption
+                        label="전체 계좌"
+                        meta="합산"
+                        active={accountId === ALL_ACCOUNTS}
+                        onSelect={() => {
+                          setAccountId(ALL_ACCOUNTS);
+                          setAccountOpen(false);
+                        }}
+                      />
+                      {accounts.map((a) => (
+                        <AccountOption
+                          key={a.id}
+                          label={
+                            a.account_name ?? a.account_number_masked ?? "계좌"
+                          }
+                          meta={a.broker_name}
+                          active={a.id === accountId}
+                          inactive={!a.is_active}
+                          onSelect={() => {
+                            setAccountId(a.id);
+                            setAccountOpen(false);
+                          }}
+                        />
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -202,19 +238,19 @@ export function Topbar({
               onClick={onSync}
               disabled={!onSync}
               title={
-                syncedAt
-                  ? `마지막 동기화: ${new Date(syncedAt).toLocaleString("ko-KR")}`
-                  : "계좌 API 미연동"
+                lastSynced
+                  ? `마지막 동기화: ${new Date(lastSynced).toLocaleString("ko-KR")}`
+                  : "아직 동기화된 적 없음"
               }
               className="flex items-center gap-1.5 text-[12px] font-bold text-slate-500 transition-colors hover:text-slate-700 disabled:cursor-default disabled:text-slate-300"
             >
               <RefreshCw className="h-4 w-4" />
-              {syncedAt
-                ? new Date(syncedAt).toLocaleTimeString("ko-KR", {
+              {lastSynced
+                ? new Date(lastSynced).toLocaleTimeString("ko-KR", {
                     hour: "2-digit",
                     minute: "2-digit",
                   })
-                : "미연동"}
+                : "미동기화"}
             </button>
           </>
         )}
@@ -228,5 +264,45 @@ export function Topbar({
         </div>
       </div>
     </header>
+  );
+}
+
+/** 계좌 선택 목록의 한 줄. */
+function AccountOption({
+  label,
+  meta,
+  active,
+  inactive,
+  onSelect,
+}: {
+  label: string;
+  meta: string;
+  active: boolean;
+  inactive?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={active}
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-ge-blue-bg",
+        active && "bg-ge-blue-bg",
+      )}
+    >
+      <span
+        className={cn(
+          "truncate text-[13px] font-extrabold text-ge-navy",
+          inactive && "text-ink-muted line-through",
+        )}
+      >
+        {label}
+      </span>
+      <span className="shrink-0 text-[10px] font-semibold text-ink-faint">
+        {meta}
+      </span>
+    </button>
   );
 }

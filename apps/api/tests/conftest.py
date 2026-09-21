@@ -10,7 +10,12 @@ from app.main import app
 from app.models import Base
 
 # All tables truncated between tests (FK-safe via CASCADE).
-_ALL_TABLES = "job_logs, imports, jobs"
+# 포트폴리오 테이블도 포함한다 — 계좌/종목은 테스트마다 새로 만든다(2026-09-21).
+_ALL_TABLES = (
+    "job_logs, imports, jobs, "
+    "portfolio_snapshots, current_positions, account_balances, "
+    "accounts, assets, brokerage_connections, brokers"
+)
 
 
 def _test_db_url():

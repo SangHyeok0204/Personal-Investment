@@ -2584,3 +2584,135 @@ export interface EtfNewListingPayload {
 export function getEtfNewListing(): Promise<EtfNewListingPayload> {
   return request<EtfNewListingPayload>("/api/v1/etf-class/new-listing");
 }
+
+// ── 개인 계좌 포트폴리오 ──────────────────────────────────────────────────────
+// 금액은 서버가 **문자열**로 내보낸다(Decimal). 숫자로 파싱하지 말 것 —
+// IEEE754 반올림이 원 단위에서 드러나 합계와 종목별 수치가 어긋나 보인다.
+// 표시할 때만 formatKrwString 류로 자릿수를 넣는다.
+
+export interface PortfolioAccount {
+  id: string;
+  broker_code: string;
+  broker_name: string;
+  account_name: string | null;
+  account_number_masked: string | null;
+  account_type: string | null;
+  base_currency: string;
+  is_active: boolean;
+  last_synced_at: string | null;
+}
+
+export interface PortfolioAccountList {
+  items: PortfolioAccount[];
+  // false = 계좌가 하나도 없음. 0원이 아니라 "미연동"으로 그려야 한다.
+  connected: boolean;
+}
+
+export interface PortfolioConnection {
+  id: string;
+  broker_code: string;
+  broker_name: string;
+  connection_name: string;
+  environment: string;
+  status: string;
+  last_connected_at: string | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+}
+
+export interface PortfolioSummary {
+  as_of: string | null;
+  account_count: number;
+  position_count: number;
+  total_assets_krw: string | null;
+  securities_value_krw: string | null;
+  cash_krw: string | null;
+  available_cash_krw: string | null;
+  purchase_amount_krw: string | null;
+  unrealized_pnl_krw: string | null;
+  unrealized_return: string | null;
+}
+
+export interface PortfolioHolding {
+  account_id: string;
+  account_name: string | null;
+  broker_code: string;
+  asset_id: string;
+  ticker: string;
+  name: string | null;
+  market: string;
+  country: string;
+  currency: string;
+  asset_type: string | null;
+  quantity: string;
+  average_purchase_price: string | null;
+  current_price: string | null;
+  purchase_amount_local: string | null;
+  market_value_local: string | null;
+  market_value_krw: string | null;
+  unrealized_pnl_local: string | null;
+  unrealized_pnl_krw: string | null;
+  unrealized_return: string | null;
+  exchange_rate: string | null;
+  as_of: string;
+}
+
+export interface PortfolioHoldingList {
+  items: PortfolioHolding[];
+  total_market_value_krw: string | null;
+  as_of: string | null;
+}
+
+export interface PortfolioSnapshotPoint {
+  snapshot_at: string;
+  total_assets_krw: string | null;
+  securities_value_krw: string | null;
+  cash_value_krw: string | null;
+  total_unrealized_pnl_krw: string | null;
+}
+
+export interface PortfolioHistory {
+  items: PortfolioSnapshotPoint[];
+  days: number;
+}
+
+function accountQuery(accountId?: string | null): string {
+  // "all"(전체 합산)은 서버에 보내지 않는다 — 파라미터가 없으면 전체가 기본이다.
+  return accountId && accountId !== "all"
+    ? `?account_id=${encodeURIComponent(accountId)}`
+    : "";
+}
+
+export function getPortfolioAccounts(): Promise<PortfolioAccountList> {
+  return request<PortfolioAccountList>("/api/v1/portfolio/accounts");
+}
+
+export function getPortfolioConnections(): Promise<PortfolioConnection[]> {
+  return request<PortfolioConnection[]>("/api/v1/portfolio/connections");
+}
+
+export function getPortfolioSummary(
+  accountId?: string | null,
+): Promise<PortfolioSummary> {
+  return request<PortfolioSummary>(
+    `/api/v1/portfolio/summary${accountQuery(accountId)}`,
+  );
+}
+
+export function getPortfolioHoldings(
+  accountId?: string | null,
+): Promise<PortfolioHoldingList> {
+  return request<PortfolioHoldingList>(
+    `/api/v1/portfolio/holdings${accountQuery(accountId)}`,
+  );
+}
+
+export function getPortfolioHistory(
+  accountId?: string | null,
+  days = 90,
+): Promise<PortfolioHistory> {
+  const q = accountQuery(accountId);
+  return request<PortfolioHistory>(
+    `/api/v1/portfolio/history${q ? `${q}&` : "?"}days=${days}`,
+  );
+}

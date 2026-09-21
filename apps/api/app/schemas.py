@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -168,3 +169,106 @@ class LanSummaryOut(BaseModel):
     online: int
     offline: int
     unknown: int
+
+
+# ── 개인 계좌 포트폴리오 ──────────────────────────────────────────────────────
+# 금액은 전부 문자열로 내보낸다. float 로 보내면 브라우저의 IEEE754 반올림이
+# 원 단위에서 드러나고(예: 12345678.9 → 12345678.899999999), 합계와 종목별 수치가
+# 어긋나 보인다. 프런트는 받은 문자열을 표시용으로만 포맷한다.
+
+
+class ConnectionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    broker_code: str
+    broker_name: str
+    connection_name: str
+    environment: str
+    status: str
+    last_connected_at: datetime | None
+    last_synced_at: datetime | None
+    last_error: str | None
+
+
+class AccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    broker_code: str
+    broker_name: str
+    account_name: str | None
+    account_number_masked: str | None
+    account_type: str | None
+    base_currency: str
+    is_active: bool
+    last_synced_at: datetime | None
+
+
+class AccountListOut(BaseModel):
+    items: list[AccountOut]
+    # 계좌가 하나도 없으면 프런트는 "미연동" 안내를 띄운다 — 0원으로 그리지 않는다.
+    connected: bool
+
+
+class PortfolioSummaryOut(BaseModel):
+    """자산 현황 상단 4칸. 값이 없으면 null 이고, 프런트는 "—" 로 그린다."""
+
+    as_of: datetime | None
+    account_count: int
+    position_count: int
+    total_assets_krw: Decimal | None
+    securities_value_krw: Decimal | None
+    cash_krw: Decimal | None
+    available_cash_krw: Decimal | None
+    purchase_amount_krw: Decimal | None
+    unrealized_pnl_krw: Decimal | None
+    # 매입원가 대비 평가손익률. 매입원가가 0이면 null (0% 로 그리면 거짓말이 된다).
+    unrealized_return: Decimal | None
+
+
+class HoldingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    account_id: uuid.UUID
+    account_name: str | None
+    broker_code: str
+    asset_id: uuid.UUID
+    ticker: str
+    name: str | None
+    market: str
+    country: str
+    currency: str
+    asset_type: str | None
+    quantity: Decimal
+    average_purchase_price: Decimal | None
+    current_price: Decimal | None
+    purchase_amount_local: Decimal | None
+    market_value_local: Decimal | None
+    market_value_krw: Decimal | None
+    unrealized_pnl_local: Decimal | None
+    unrealized_pnl_krw: Decimal | None
+    unrealized_return: Decimal | None
+    exchange_rate: Decimal | None
+    as_of: datetime
+
+
+class HoldingListOut(BaseModel):
+    items: list[HoldingOut]
+    total_market_value_krw: Decimal | None
+    as_of: datetime | None
+
+
+class SnapshotPointOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot_at: datetime
+    total_assets_krw: Decimal | None
+    securities_value_krw: Decimal | None
+    cash_value_krw: Decimal | None
+    total_unrealized_pnl_krw: Decimal | None
+
+
+class PortfolioHistoryOut(BaseModel):
+    items: list[SnapshotPointOut]
+    days: int

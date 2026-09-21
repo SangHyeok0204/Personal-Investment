@@ -99,3 +99,94 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   if (day < 7) return `${day}일 전`;
   return formatDateTime(iso);
 }
+
+// ── Decimal 문자열 포맷 ───────────────────────────────────────────────────────
+// 포트폴리오 API 는 금액을 **문자열**로 내보낸다(서버 Decimal). Number 로 바꿔서
+// 표시하면 원 단위에서 IEEE754 반올림이 드러나 합계와 종목별 수치가 어긋나 보인다.
+// 아래 함수들은 소수점을 **문자열 수준에서** 잘라내고 정수부에만 자리 구분을 넣는다.
+
+/** "2480000.00" → "₩2,480,000". null·빈값·비수치는 "—". */
+export function formatKrwString(value: string | null | undefined): string {
+  const parts = splitDecimal(value);
+  if (!parts) return "—";
+  return `${parts.sign}₩${groupDigits(parts.int)}`;
+}
+
+/** 부호를 살려 표시(손익용). "+"를 붙여 준다. */
+export function formatKrwSigned(value: string | null | undefined): string {
+  const parts = splitDecimal(value);
+  if (!parts) return "—";
+  const sign = parts.sign === "-" ? "-" : parts.isZero ? "" : "+";
+  return `${sign}₩${groupDigits(parts.int)}`;
+}
+
+/** "0.1810" → "+18.10%". 수익률용. */
+export function formatPercentString(
+  value: string | null | undefined,
+  digits = 2,
+): string {
+  if (value == null || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  const pct = n * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(digits)}%`;
+}
+
+/** 수량처럼 소수가 의미 있는 값 — 뒤의 0 은 지운다. "10.000000" → "10". */
+export function formatQuantityString(value: string | null | undefined): string {
+  const parts = splitDecimal(value);
+  if (!parts) return "—";
+  const frac = parts.frac.replace(/0+$/, "");
+  return `${parts.sign}${groupDigits(parts.int)}${frac ? `.${frac}` : ""}`;
+}
+
+/** 단가 — 통화에 따라 소수 자리수가 다르다(KRW 0, 그 외 2). */
+export function formatPriceString(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
+  const parts = splitDecimal(value);
+  if (!parts) return "—";
+  if (currency === "KRW" || currency == null) {
+    return `${parts.sign}${groupDigits(parts.int)}`;
+  }
+  const frac = (parts.frac + "00").slice(0, 2);
+  return `${parts.sign}${groupDigits(parts.int)}.${frac}`;
+}
+
+/** 큰 금액 한 줄 요약 — "₩2.48억". 헤드라인 전용이고 표에는 쓰지 않는다. */
+export function formatKrwCompactString(
+  value: string | null | undefined,
+): string {
+  const parts = splitDecimal(value);
+  if (!parts) return "—";
+  const digits = parts.int.length;
+  if (digits > 8) {
+    // 억 단위 — 정수부만으로 계산해도 표시 오차가 없다(소수점 이하는 버린다).
+    const eok = Number(parts.int) / 100_000_000;
+    return `${parts.sign}₩${eok.toFixed(2)}억`;
+  }
+  if (digits > 4) {
+    const man = Math.round(Number(parts.int) / 10_000);
+    return `${parts.sign}₩${groupDigits(String(man))}만`;
+  }
+  return `${parts.sign}₩${groupDigits(parts.int)}`;
+}
+
+function splitDecimal(
+  value: string | null | undefined,
+): { sign: string; int: string; frac: string; isZero: boolean } | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (raw === "" || !/^-?\d+(\.\d+)?$/.test(raw)) return null;
+  const negative = raw.startsWith("-");
+  const body = negative ? raw.slice(1) : raw;
+  const [int, frac = ""] = body.split(".");
+  const isZero = /^0*$/.test(int) && /^0*$/.test(frac);
+  return { sign: negative ? "-" : "", int, frac, isZero };
+}
+
+function groupDigits(int: string): string {
+  return int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
