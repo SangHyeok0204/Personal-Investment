@@ -211,6 +211,15 @@ class AccountListOut(BaseModel):
     connected: bool
 
 
+class CashByCurrencyOut(BaseModel):
+    """통화별 예수금. krw_value 가 null 이면 환율이 없어 KRW 합계에서 빠진 것이다."""
+
+    currency: str
+    cash_balance: Decimal
+    available_cash: Decimal | None
+    krw_value: Decimal | None
+
+
 class PortfolioSummaryOut(BaseModel):
     """자산 현황 상단 4칸. 값이 없으면 null 이고, 프런트는 "—" 로 그린다."""
 
@@ -225,6 +234,9 @@ class PortfolioSummaryOut(BaseModel):
     unrealized_pnl_krw: Decimal | None
     # 매입원가 대비 평가손익률. 매입원가가 0이면 null (0% 로 그리면 거짓말이 된다).
     unrealized_return: Decimal | None
+    # 통화별 예수금. cash_krw 는 환산 가능한 것만 더하므로, 환율 없는 외화가 있으면
+    # 합계에서 빠진다 — 그 돈이 화면에서 사라지지 않게 내역을 같이 내보낸다.
+    cash_by_currency: list[CashByCurrencyOut] = []
 
 
 class HoldingOut(BaseModel):

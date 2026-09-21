@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.schemas import (
     AccountListOut,
+    CashByCurrencyOut,
     AllocationOut,
     AllocationSliceOut,
     AccountOut,
@@ -144,6 +145,7 @@ def get_summary(
             purchase_amount_krw=None,
             unrealized_pnl_krw=None,
             unrealized_return=None,
+            cash_by_currency=[],
         )
 
     # 종목 통화가 필요하다(매입원가는 KRW 환산 컬럼이 없어 여기서 환산해야 한다).
@@ -187,6 +189,16 @@ def get_summary(
         purchase_amount_krw=purchase,
         unrealized_pnl_krw=pnl,
         unrealized_return=ret,
+        cash_by_currency=[
+            CashByCurrencyOut(
+                currency=b.currency,
+                cash_balance=b.cash_balance,
+                available_cash=b.available_cash,
+                krw_value=_cash_krw(b),
+            )
+            for b in sorted(balances, key=lambda x: (x.currency != "KRW", x.currency))
+            if b.cash_balance
+        ],
     )
 
 

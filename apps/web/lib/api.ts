@@ -2620,6 +2620,14 @@ export interface PortfolioConnection {
   last_error: string | null;
 }
 
+export interface CashByCurrency {
+  currency: string;
+  cash_balance: string;
+  available_cash: string | null;
+  // null = 환율이 없어 KRW 합계에서 빠진 금액. 0 이 아니다.
+  krw_value: string | null;
+}
+
 export interface PortfolioSummary {
   as_of: string | null;
   account_count: number;
@@ -2631,6 +2639,7 @@ export interface PortfolioSummary {
   purchase_amount_krw: string | null;
   unrealized_pnl_krw: string | null;
   unrealized_return: string | null;
+  cash_by_currency: CashByCurrency[];
 }
 
 export interface PortfolioHolding {

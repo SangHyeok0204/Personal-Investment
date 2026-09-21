@@ -21,6 +21,7 @@ import {
   getPortfolioHoldings,
   getPortfolioSummary,
   type PortfolioHolding,
+  type PortfolioSummary,
 } from "@/lib/api";
 import {
   formatKrwSigned,
@@ -102,11 +103,9 @@ export default function PortfolioPage() {
           <StatTile
             label="예수금"
             value={formatKrwString(s?.cash_krw)}
-            hint={
-              s?.available_cash_krw != null
-                ? `주문가능 ${formatKrwString(s.available_cash_krw)}`
-                : "주문 가능 금액"
-            }
+            // 환율이 없어 KRW 합계에 못 들어간 외화를 여기서 드러낸다 —
+            // 합계만 보여주면 그 돈이 화면에서 통째로 사라진다.
+            hint={foreignCashHint(s) ?? "주문 가능 금액"}
             loading={loading}
           />
         </StatRow>
@@ -237,4 +236,21 @@ function HoldingRow({
       <Cell tone="muted">{weight}</Cell>
     </tr>
   );
+}
+
+/** KRW 합계에 못 들어간 외화 예수금을 한 줄로. 없으면 null. */
+function foreignCashHint(s: PortfolioSummary | undefined): string | null {
+  if (!s) return null;
+  const unconverted = (s.cash_by_currency ?? []).filter(
+    (c) => c.currency !== "KRW" && c.krw_value == null,
+  );
+  if (unconverted.length === 0) {
+    return s.available_cash_krw != null
+      ? `주문가능 ${formatKrwString(s.available_cash_krw)}`
+      : null;
+  }
+  const parts = unconverted.map(
+    (c) => `${c.currency} ${formatQuantityString(c.cash_balance)}`,
+  );
+  return `+ ${parts.join(" · ")} (환율 없음, 합계 제외)`;
 }

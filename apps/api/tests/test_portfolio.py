@@ -310,3 +310,28 @@ def test_manual_sector_patch_rejects_unknown_asset(client, kiwoom):
         f"/api/v1/portfolio/assets/{uuid.uuid4()}/sector", json={"sector": "반도체"}
     )
     assert r.status_code == 404
+
+
+def test_summary_exposes_foreign_cash_that_cannot_be_converted(client, db, kiwoom):
+    """환율 없는 외화 예수금은 KRW 합계에서 빠지지만 **사라지지는 않는다**.
+
+    실계좌(2026-09-21)에 USD 예수금 $1,180.81 이 환율 없이 들어 있었다. 합계에만
+    의존하면 그 돈이 화면에서 통째로 안 보인다.
+    """
+    from app.models import AccountBalance
+
+    db.add(AccountBalance(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, currency="USD",
+        cash_balance=Decimal("1180.81"), as_of=NOW,
+    ))
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/summary").json()
+    # KRW 합계는 환산 가능한 것만 — 원화 예수금 그대로다.
+    assert Decimal(body["cash_krw"]) == Decimal("500000")
+
+    by_ccy = {c["currency"]: c for c in body["cash_by_currency"]}
+    assert Decimal(by_ccy["USD"]["cash_balance"]) == Decimal("1180.81")
+    # 환율이 없으니 KRW 환산은 null 이다 — 0 이 아니다.
+    assert by_ccy["USD"]["krw_value"] is None
+    assert Decimal(by_ccy["KRW"]["krw_value"]) == Decimal("500000")

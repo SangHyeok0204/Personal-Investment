@@ -220,3 +220,45 @@ def test_environment_selects_paper_host():
     }
     c = EnvCredentialResolver(environ=env).resolve(broker_code="KIWOOM")
     assert c.base_url == "https://mockapi.kiwoom.com"
+
+
+# ── 5. 증권사 경계에서의 단위·필드 변환 ──────────────────────────────────────
+# 실계좌 연동(2026-09-21) 직후 잡은 두 버그를 고정한다. 둘 다 예외가 안 나고
+# **조용히 틀리는** 종류라, 테스트가 없으면 화면을 볼 때까지 모른다.
+
+from decimal import Decimal  # noqa: E402
+
+from brokers.kiwoom.broker import _to_position_row  # noqa: E402
+
+
+def test_position_name_is_read_from_asset_name_key():
+    """어댑터는 'asset_name' 으로 내보낸다. 'name' 으로 읽으면 종목명이 사라진다."""
+    row = _to_position_row({
+        "ticker": "005930", "asset_name": "삼성전자",
+        "quantity": "1", "currency": "KRW",
+    })
+    assert row.name == "삼성전자"
+
+
+def test_kiwoom_percent_return_is_converted_to_ratio():
+    """키움 prft_rt 는 퍼센트(17.45 = 17.45%). 경계 안쪽은 비율로 통일한다.
+
+    변환하지 않으면 화면에 1745% 로 뜬다 — 예외 없이 100배 틀린다.
+    """
+    row = _to_position_row({
+        "ticker": "005930", "asset_name": "삼성전자",
+        "quantity": "1", "currency": "KRW", "unrealized_return": "17.45",
+    })
+    assert row.unrealized_return == Decimal("0.1745")
+
+    loss = _to_position_row({
+        "ticker": "000660", "asset_name": "SK하이닉스",
+        "quantity": "4", "currency": "KRW", "unrealized_return": "-14.71",
+    })
+    assert loss.unrealized_return == Decimal("-0.1471")
+
+
+def test_missing_return_stays_none_not_zero():
+    """수집이 안 된 수익률을 0 으로 바꾸면 '미수집'이 '본전'으로 보인다."""
+    row = _to_position_row({"ticker": "005930", "quantity": "1", "currency": "KRW"})
+    assert row.unrealized_return is None
