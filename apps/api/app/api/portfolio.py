@@ -50,6 +50,9 @@ from app.schemas import (
     BenchmarkPeriodOut,
     BenchmarkPointOut,
     CashflowOut,
+    CostByMonthOut,
+    CostBySideOut,
+    CostByTickerOut,
     FxExposureOut,
     FxPositionOut,
     FxShockOut,
@@ -65,6 +68,7 @@ from app.schemas import (
     LiveQuotesOut,
     OrderListOut,
     OrderOut,
+    TradingCostOut,
     PerformanceAnalyticsOut,
     PeriodReturnOut,
     RiskMetricsOut,
@@ -2005,4 +2009,138 @@ def get_fx_exposure(
             "값입니다. 실제 체결 환율과는 다를 수 있습니다. 실현 환차손익은 증권사가 "
             "매수·매도 환율을 함께 주므로 추정이 아닙니다."
         ),
+    )
+
+
+# ── 거래비용 ────────────────────────────────────────────────────────────────
+
+@router.get("/costs", response_model=TradingCostOut)
+def get_trading_costs(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> TradingCostOut:
+    """수수료·세금 — 매매가 실제로 얼마를 먹었나.
+
+    ★금액은 **USD 그대로** 둔다. 편입비와 같은 이유다 — trades.amount_krw 는
+      82건 전부 비어 있고 거래일 환율도 없다. 오늘 환율을 과거 거래에 곱하면
+      그 숫자는 거짓이 된다.
+
+    ⚠️비용률의 분모는 **거래대금**이다. 평가액이 아니다 — 비용은 사고팔 때
+      발생하므로 얼마를 들고 있느냐가 아니라 얼마를 굴렸느냐에 붙는다.
+
+    ⚠️실현손익과 비용을 **빼거나 더하지 않는다.** 증권사가 주는 실현손익이
+      비용을 이미 반영했는지 확실하지 않다. 두 숫자를 나란히 두고 판단은
+      사용자에게 맡긴다 — 확실하지 않은 계산으로 한 숫자를 만들면 그게 더 나쁘다.
+    """
+    empty = TradingCostOut(
+        currency="USD", trade_count=0, turnover=None, commission=None, tax=None,
+        total_cost=None, cost_ratio=None, by_side=[], by_month=[], by_ticker=[],
+        realized_pnl_krw=None, first_trade_date=None, last_trade_date=None,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(Trade).where(
+            Trade.account_id.in_(account_ids), Trade.trade_date >= since
+        )
+    ).scalars().all()
+    if not rows:
+        return empty
+
+    zero = Decimal("0")
+
+    def cost_of(trade) -> Decimal:
+        return (trade.commission_local or zero) + (trade.tax_local or zero)
+
+    turnover = _sum([t.amount_local for t in rows]) or zero
+    commission = _sum([t.commission_local for t in rows]) or zero
+    tax = _sum([t.tax_local for t in rows]) or zero
+    total_cost = commission + tax
+
+    # 매수/매도별 — 어느 쪽에서 비용이 더 나가는지.
+    sides: dict[str, list] = {}
+    for trade in rows:
+        bucket = sides.setdefault(trade.side, [0, zero, zero, zero])
+        bucket[0] += 1
+        bucket[1] += trade.amount_local or zero
+        bucket[2] += trade.commission_local or zero
+        bucket[3] += trade.tax_local or zero
+
+    months: dict[str, list] = {}
+    tickers: dict[str, list] = {}
+    for trade in rows:
+        key = f"{trade.trade_date.year:04d}-{trade.trade_date.month:02d}"
+        month = months.setdefault(key, [0, zero, zero])
+        month[0] += 1
+        month[1] += trade.amount_local or zero
+        month[2] += cost_of(trade)
+
+        row = tickers.setdefault(trade.ticker, [trade.asset_name, 0, zero, zero])
+        row[0] = row[0] or trade.asset_name
+        row[1] += 1
+        row[2] += trade.amount_local or zero
+        row[3] += cost_of(trade)
+
+    realized = db.execute(
+        select(func.sum(RealizedPnl.pnl_krw)).where(
+            RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= since
+        )
+    ).scalar()
+
+    def ratio(cost: Decimal, base: Decimal) -> Decimal | None:
+        # ⚠️거래대금이 0 이면 비용률을 낼 수 없다. 0% 로 두면 "공짜"로 읽힌다.
+        return (
+            (cost / base).quantize(_RATIO, rounding=ROUND_HALF_UP) if base else None
+        )
+
+    return TradingCostOut(
+        currency="USD",
+        trade_count=len(rows),
+        turnover=turnover,
+        commission=commission,
+        tax=tax,
+        total_cost=total_cost,
+        cost_ratio=ratio(total_cost, turnover),
+        by_side=[
+            CostBySideOut(
+                side=side,
+                trade_count=values[0],
+                turnover=values[1],
+                commission=values[2],
+                tax=values[3],
+                cost_ratio=ratio(values[2] + values[3], values[1]),
+            )
+            for side, values in sorted(sides.items())
+        ],
+        by_month=[
+            CostByMonthOut(
+                month=month,
+                trade_count=values[0],
+                turnover=values[1],
+                cost=values[2],
+            )
+            for month, values in sorted(months.items())
+        ],
+        by_ticker=sorted(
+            [
+                CostByTickerOut(
+                    ticker=ticker,
+                    name=values[0],
+                    trade_count=values[1],
+                    turnover=values[2],
+                    cost=values[3],
+                    cost_ratio=ratio(values[3], values[2]),
+                )
+                for ticker, values in tickers.items()
+            ],
+            key=lambda x: x.cost,
+            reverse=True,
+        ),
+        realized_pnl_krw=realized,
+        first_trade_date=min(t.trade_date for t in rows),
+        last_trade_date=max(t.trade_date for t in rows),
     )

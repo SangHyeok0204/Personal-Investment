@@ -1028,6 +1028,59 @@ class FxExposureOut(BaseModel):
     note: str
 
 
+# ── 거래비용 ─────────────────────────────────────────────────────────────────
+
+class CostBySideOut(BaseModel):
+    side: str
+    trade_count: int
+    turnover: Decimal
+    commission: Decimal
+    tax: Decimal
+    cost_ratio: Decimal | None
+
+
+class CostByMonthOut(BaseModel):
+    month: str
+    trade_count: int
+    turnover: Decimal
+    cost: Decimal
+
+
+class CostByTickerOut(BaseModel):
+    ticker: str
+    name: str | None
+    trade_count: int
+    turnover: Decimal
+    cost: Decimal
+    cost_ratio: Decimal | None
+
+
+class TradingCostOut(BaseModel):
+    """수수료·세금.
+
+    ⚠️비용률의 분모는 **거래대금**이다. 평가액이 아니다 — 비용은 얼마를 들고
+      있느냐가 아니라 얼마를 굴렸느냐에 붙는다.
+    ⚠️`realized_pnl_krw` 는 참고용으로 나란히 둘 뿐, 비용과 **더하거나 빼지
+      않는다**. 증권사 실현손익이 비용을 이미 반영했는지 확실하지 않다 —
+      확실하지 않은 계산으로 한 숫자를 만들면 그게 더 나쁘다.
+    ⚠️금액은 USD 다(거래일 환율이 없어 원화 환산을 만들지 않는다).
+    """
+
+    currency: str
+    trade_count: int
+    turnover: Decimal | None
+    commission: Decimal | None
+    tax: Decimal | None
+    total_cost: Decimal | None
+    cost_ratio: Decimal | None
+    by_side: list[CostBySideOut]
+    by_month: list[CostByMonthOut]
+    by_ticker: list[CostByTickerOut]
+    realized_pnl_krw: Decimal | None
+    first_trade_date: date | None
+    last_trade_date: date | None
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

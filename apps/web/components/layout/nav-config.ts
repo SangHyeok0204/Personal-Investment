@@ -116,7 +116,12 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "진입 근거 · 복기 — 체결·손익과 함께",
       },
-      { label: "수수료/세금", status: "planned", hint: "거래비용 집계" },
+      {
+        label: "수수료/세금",
+        href: "/trading/costs",
+        status: "live",
+        hint: "거래비용 · 비용률 · 종목별",
+      },
     ],
   },
   {

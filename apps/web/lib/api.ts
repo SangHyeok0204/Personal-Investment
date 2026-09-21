@@ -3564,6 +3564,61 @@ export function getFxExposure(accountId?: string | null): Promise<FxExposure> {
   return request<FxExposure>(`/api/v1/portfolio/fx-exposure${accountQuery(accountId)}`);
 }
 
+// ── 거래비용 ─────────────────────────────────────────────────────────────────
+
+export interface CostBySide {
+  side: string;
+  trade_count: number;
+  turnover: string;
+  commission: string;
+  tax: string;
+  cost_ratio: string | null;
+}
+
+export interface CostByMonth {
+  month: string;
+  trade_count: number;
+  turnover: string;
+  cost: string;
+}
+
+export interface CostByTicker {
+  ticker: string;
+  name: string | null;
+  trade_count: number;
+  turnover: string;
+  cost: string;
+  cost_ratio: string | null;
+}
+
+export interface TradingCost {
+  currency: string;
+  trade_count: number;
+  turnover: string | null;
+  commission: string | null;
+  tax: string | null;
+  total_cost: string | null;
+  /** 분모는 거래대금이다(평가액이 아니다). */
+  cost_ratio: string | null;
+  by_side: CostBySide[];
+  by_month: CostByMonth[];
+  by_ticker: CostByTicker[];
+  /** 참고용으로 나란히 둘 뿐, 비용과 더하거나 빼지 않는다. */
+  realized_pnl_krw: string | null;
+  first_trade_date: string | null;
+  last_trade_date: string | null;
+}
+
+export function getTradingCosts(
+  accountId?: string | null,
+  days = 1095,
+): Promise<TradingCost> {
+  const q = accountQuery(accountId);
+  return request<TradingCost>(
+    `/api/v1/portfolio/costs${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,
