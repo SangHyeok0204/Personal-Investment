@@ -129,15 +129,16 @@ export const navItems: NavItem[] = [
         hint: "KOSPI · S&P500 대비 초과수익",
       },
       {
+        label: "성과 분석",
+        href: "/performance/analysis",
+        status: "live",
+        hint: "위험지표 · 월별 · 종목 기여도",
+      },
+      {
         label: "리스크 지표",
         href: "/performance/risk",
         status: "placeholder",
         hint: "변동성 · MDD · 샤프",
-      },
-      {
-        label: "기여도 분석",
-        status: "planned",
-        hint: "종목/섹터별 수익 기여",
       },
       { label: "기간 리포트", status: "planned", hint: "월간 · 분기 요약" },
     ],

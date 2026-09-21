@@ -391,6 +391,94 @@ class PerformanceSeriesOut(BaseModel):
     gain_krw: Decimal | None
 
 
+# ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
+
+class PeriodReturnOut(BaseModel):
+    """기간별 수익률 한 칸. 데이터가 모자란 기간은 ratio 가 None 이다."""
+
+    label: str
+    days: int
+    return_ratio: Decimal | None
+    start_date: date | None
+    end_date: date | None
+    observations: int
+
+
+class RiskMetricsOut(BaseModel):
+    """한 구간의 위험지표 묶음. 계산 불가한 항목은 None (0 이 아니다)."""
+
+    label: str
+    observations: int
+    annualized_return: Decimal | None
+    volatility: Decimal | None
+    downside_volatility: Decimal | None
+    max_drawdown: Decimal | None
+    max_drawdown_peak_date: date | None
+    max_drawdown_trough_date: date | None
+    sharpe: Decimal | None
+    sortino: Decimal | None
+    hit_ratio: Decimal | None
+
+
+class MonthlyReturnOut(BaseModel):
+    month: str
+    return_ratio: Decimal
+
+
+class DrawdownPointOut(BaseModel):
+    base_date: date
+    drawdown: Decimal
+
+
+class ContributionOut(BaseModel):
+    """종목별 절대 기여도.
+
+    contribution = 종목 평가손익 / **전체 매입원가**. 그래서 전 종목을 더하면
+    포트폴리오 평가수익률과 정확히 같아진다 — 화면에서 검산이 된다.
+    """
+
+    asset_id: uuid.UUID
+    ticker: str
+    name: str | None
+    sector: str | None
+    tech_l1: str | None
+    weight: Decimal | None
+    purchase_krw: Decimal | None
+    market_value_krw: Decimal | None
+    unrealized_pnl_krw: Decimal | None
+    unrealized_return: Decimal | None
+    dividend_krw: Decimal | None
+    contribution: Decimal | None
+
+
+class FlowShiftOut(BaseModel):
+    """다음 날로 밀려 기록돼 있던 입출금을 하루 앞으로 당긴 기록.
+
+    조용히 고치지 않는다 — 몇 건을 어떻게 건드렸는지 화면에 그대로 띄운다.
+    """
+
+    moved_from: date
+    moved_to: date
+    amount: Decimal
+
+
+class PerformanceAnalyticsOut(BaseModel):
+    first_date: date | None
+    last_date: date | None
+    periods: list[PeriodReturnOut]
+    risk: list[RiskMetricsOut]
+    monthly: list[MonthlyReturnOut]
+    drawdown: list[DrawdownPointOut]
+    contributions: list[ContributionOut]
+    # 검산용 — contributions 의 합과 같아야 한다.
+    total_purchase_krw: Decimal | None
+    total_unrealized_pnl_krw: Decimal | None
+    total_return: Decimal | None
+    realized_pnl_krw: Decimal | None
+    dividend_krw: Decimal | None
+    flow_shifts: list[FlowShiftOut]
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

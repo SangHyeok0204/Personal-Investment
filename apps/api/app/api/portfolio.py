@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
+from app.core import performance_analytics as pa
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
@@ -38,6 +39,13 @@ from app.models import (
 from app.schemas import (
     AccountListOut,
     CashByCurrencyOut,
+    ContributionOut,
+    DrawdownPointOut,
+    MonthlyReturnOut,
+    FlowShiftOut,
+    PerformanceAnalyticsOut,
+    PeriodReturnOut,
+    RiskMetricsOut,
     AllocationOut,
     AllocationSliceOut,
     AccountOut,
@@ -857,3 +865,228 @@ def list_dividends(
         first_pay_date=min((i.pay_date for i in items), default=None),
         last_pay_date=max((i.pay_date for i in items), default=None),
     )
+
+
+# ── 성과분석 ────────────────────────────────────────────────────────────────
+
+# 화면에 세워 둘 기간 칸. 데이터가 모자란 칸은 None 으로 비워 둔다(0% 가 아니다).
+_PERIODS: list[tuple[str, int]] = [
+    ("1개월", 30),
+    ("3개월", 91),
+    ("6개월", 182),
+    ("1년", 365),
+    ("전체", 36500),
+]
+
+# 기간별 위험지표는 이 두 구간만 낸다. 3년 칸은 만들지 않았다 —
+# 키움이 주는 일별 시계열이 약 530일(2년)이라 3년 칸은 영원히 빈 칸이 된다.
+_RISK_WINDOWS: list[tuple[str, int]] = [("최근 1년", 365), ("전체", 36500)]
+
+
+def _ratio(value: Decimal | None) -> Decimal | None:
+    """비율을 소수 6자리로 자른다 — 화면에서 쓰는 정밀도보다 넉넉하다."""
+    if value is None:
+        return None
+    return value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+
+
+def _risk_block(label: str, rows: list[pa.DailyReturn]) -> RiskMetricsOut:
+    dd = pa.max_drawdown(rows)
+    return RiskMetricsOut(
+        label=label,
+        observations=len(rows),
+        annualized_return=_ratio(pa.annualized_return(rows)),
+        volatility=_ratio(pa.volatility(rows)),
+        downside_volatility=_ratio(pa.downside_volatility(rows)),
+        max_drawdown=_ratio(dd.value) if dd else None,
+        max_drawdown_peak_date=dd.peak_date if dd else None,
+        max_drawdown_trough_date=dd.trough_date if dd else None,
+        sharpe=_ratio(pa.sharpe(rows)),
+        sortino=_ratio(pa.sortino(rows)),
+        hit_ratio=_ratio(pa.hit_ratio(rows)),
+    )
+
+
+@router.get("/performance/analytics", response_model=PerformanceAnalyticsOut)
+def get_performance_analytics(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> PerformanceAnalyticsOut:
+    """성과·위험 지표 + 종목별 절대 기여도.
+
+    `ETF성과분석_양식_v2.html` 의 구성을 따르되, 벤치마크/Peer 대비 항목은 뺐다 —
+    개인 계좌에는 비교 기준이 정의돼 있지 않아서 상대성과는 만들 수 없다.
+
+    수익률은 **일별 TWR** 로 계산한다. 입출금이 수익으로 잡히지 않게 하려는 것이고,
+    계산 규칙과 그 가정은 `app.core.performance_analytics` 모듈 주석에 적어 뒀다.
+    """
+    empty = PerformanceAnalyticsOut(
+        first_date=None, last_date=None, periods=[], risk=[], monthly=[],
+        drawdown=[], contributions=[], total_purchase_krw=None,
+        total_unrealized_pnl_krw=None, total_return=None,
+        realized_pnl_krw=None, dividend_krw=None, flow_shifts=[],
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+
+    # ⚠️수익률을 내기 전에 **입출금 날짜 어긋남을 먼저 바로잡는다**.
+    #   키움은 입금을 자산 반영일보다 하루 늦게 기록해 주는 경우가 있는데,
+    #   그대로 계산하면 입금이 하루짜리 +140% 수익으로 둔갑한다(실측 사례).
+    points = [
+        pa.DailyPoint(base_date=d, assets_krw=a, deposit_krw=dep, withdrawal_krw=wd)
+        for d, a, dep, wd in rows
+    ]
+    points, shifts = pa.reconcile_flows(points)
+    returns = pa.daily_returns(points)
+
+    periods = []
+    for label, span in _PERIODS:
+        sliced = pa.window(returns, span)
+        periods.append(
+            PeriodReturnOut(
+                label=label,
+                days=span,
+                return_ratio=_ratio(pa.cumulative_return(sliced)),
+                start_date=sliced[0].base_date if sliced else None,
+                end_date=sliced[-1].base_date if sliced else None,
+                observations=len(sliced),
+            )
+        )
+
+    risk = [_risk_block(label, pa.window(returns, span)) for label, span in _RISK_WINDOWS]
+
+    monthly = [
+        MonthlyReturnOut(month=month, return_ratio=_ratio(value) or Decimal("0"))
+        for month, value in pa.monthly_returns(returns)
+    ]
+
+    # 낙폭 추이 — 고점 대비 몇 % 아래인지. 차트가 0 아래로만 그려진다.
+    drawdown: list[DrawdownPointOut] = []
+    peak = Decimal("0")
+    for r in returns:
+        peak = max(peak, r.index)
+        if peak > 0:
+            drawdown.append(
+                DrawdownPointOut(base_date=r.base_date, drawdown=_ratio(r.index / peak - Decimal("1")) or Decimal("0"))
+            )
+
+    contributions, totals = _contributions(db, account_ids)
+
+    realized = db.execute(
+        select(func.sum(RealizedPnl.pnl_krw)).where(
+            RealizedPnl.account_id.in_(account_ids),
+            RealizedPnl.sell_date >= since,
+        )
+    ).scalar()
+    dividend = db.execute(
+        select(func.sum(Dividend.amount_krw)).where(
+            Dividend.account_id.in_(account_ids),
+            Dividend.pay_date >= since,
+        )
+    ).scalar()
+
+    return PerformanceAnalyticsOut(
+        first_date=returns[0].base_date if returns else None,
+        last_date=returns[-1].base_date if returns else None,
+        periods=periods,
+        risk=risk,
+        monthly=monthly,
+        drawdown=drawdown,
+        contributions=contributions,
+        total_purchase_krw=totals[0],
+        total_unrealized_pnl_krw=totals[1],
+        total_return=totals[2],
+        realized_pnl_krw=realized,
+        dividend_krw=dividend,
+        flow_shifts=[
+            FlowShiftOut(moved_from=f.moved_from, moved_to=f.moved_to, amount=f.amount)
+            for f in shifts
+        ],
+    )
+
+
+def _contributions(
+    db: Session, account_ids: list[uuid.UUID]
+) -> tuple[list[ContributionOut], tuple[Decimal | None, Decimal | None, Decimal | None]]:
+    """종목별 절대 기여도.
+
+    분모는 **전체 매입원가**다. 그래야 종목 기여도를 다 더하면 포트폴리오
+    평가수익률과 정확히 같아진다 — 화면에서 바로 검산할 수 있다.
+
+    ⚠️매입원가를 KRW 로 환산할 수 없는 종목이 하나라도 있으면 그 종목의 기여도는
+      None 이다. 0 으로 채우면 합계 검산이 조용히 어긋난다.
+    """
+    rows = db.execute(
+        select(CurrentPosition, Asset)
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+        .order_by(CurrentPosition.unrealized_pnl_krw.desc().nullslast())
+    ).all()
+    if not rows:
+        return [], (None, None, None)
+
+    # 종목별 누적 배당 — 기여도 분자에는 넣지 않고 참고 열로만 보여 준다.
+    # (평가손익은 '아직 안 판 것', 배당은 '이미 받은 현금'이라 성격이 다르다.)
+    dividends = dict(
+        db.execute(
+            select(Dividend.ticker, func.sum(Dividend.amount_krw))
+            .where(Dividend.account_id.in_(account_ids))
+            .group_by(Dividend.ticker)
+        ).all()
+    )
+
+    purchases = [_purchase_krw(p, a.currency) for p, a in rows]
+    total_purchase = _sum(purchases)
+    total_pnl = _sum([p.unrealized_pnl_krw for p, _ in rows])
+    total_value = _sum([p.market_value_krw for p, _ in rows])
+
+    items = [
+        ContributionOut(
+            asset_id=asset.id,
+            ticker=asset.ticker,
+            name=asset.name,
+            sector=asset.sector,
+            tech_l1=asset.tech_l1,
+            weight=(
+                _ratio(position.market_value_krw / total_value)
+                if position.market_value_krw is not None and total_value
+                else None
+            ),
+            purchase_krw=purchase,
+            market_value_krw=position.market_value_krw,
+            unrealized_pnl_krw=position.unrealized_pnl_krw,
+            unrealized_return=position.unrealized_return,
+            dividend_krw=dividends.get(asset.ticker),
+            contribution=(
+                _ratio(position.unrealized_pnl_krw / total_purchase)
+                if position.unrealized_pnl_krw is not None and total_purchase
+                else None
+            ),
+        )
+        for (position, asset), purchase in zip(rows, purchases)
+    ]
+
+    total_return = (
+        _ratio(total_pnl / total_purchase)
+        if total_pnl is not None and total_purchase
+        else None
+    )
+    return items, (total_purchase, total_pnl, total_return)

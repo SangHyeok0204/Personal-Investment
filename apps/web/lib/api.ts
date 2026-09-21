@@ -2912,6 +2912,89 @@ export function getPerformance(
   );
 }
 
+// ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
+
+export interface PeriodReturn {
+  label: string;
+  days: number;
+  return_ratio: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  observations: number;
+}
+
+export interface RiskMetrics {
+  label: string;
+  observations: number;
+  annualized_return: string | null;
+  volatility: string | null;
+  downside_volatility: string | null;
+  max_drawdown: string | null;
+  max_drawdown_peak_date: string | null;
+  max_drawdown_trough_date: string | null;
+  sharpe: string | null;
+  sortino: string | null;
+  hit_ratio: string | null;
+}
+
+export interface MonthlyReturn {
+  month: string;
+  return_ratio: string;
+}
+
+export interface DrawdownPoint {
+  base_date: string;
+  drawdown: string;
+}
+
+export interface Contribution {
+  asset_id: string;
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  tech_l1: string | null;
+  weight: string | null;
+  purchase_krw: string | null;
+  market_value_krw: string | null;
+  unrealized_pnl_krw: string | null;
+  unrealized_return: string | null;
+  dividend_krw: string | null;
+  contribution: string | null;
+}
+
+/** 다음 날로 밀려 기록돼 있던 입출금을 하루 앞으로 당긴 기록. 화면에 드러낸다. */
+export interface FlowShift {
+  moved_from: string;
+  moved_to: string;
+  amount: string;
+}
+
+export interface PerformanceAnalytics {
+  first_date: string | null;
+  last_date: string | null;
+  periods: PeriodReturn[];
+  risk: RiskMetrics[];
+  monthly: MonthlyReturn[];
+  drawdown: DrawdownPoint[];
+  contributions: Contribution[];
+  total_purchase_krw: string | null;
+  total_unrealized_pnl_krw: string | null;
+  total_return: string | null;
+  realized_pnl_krw: string | null;
+  dividend_krw: string | null;
+  flow_shifts: FlowShift[];
+}
+
+export function getPerformanceAnalytics(
+  accountId?: string | null,
+  days = 1095,
+): Promise<PerformanceAnalytics> {
+  const q = accountQuery(accountId);
+  return request<PerformanceAnalytics>(
+    `/api/v1/portfolio/performance/analytics${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,
