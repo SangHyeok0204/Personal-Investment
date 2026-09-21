@@ -540,6 +540,44 @@ class InclusionOut(BaseModel):
     exited_count: int
 
 
+# ── 실시간 시세 (보유 종목) ──────────────────────────────────────────────────
+
+class LiveQuoteOut(BaseModel):
+    """한 종목의 실시간 시세 + 그 가격으로 다시 계산한 평가금액."""
+
+    ticker: str
+    name: str | None
+    price: Decimal
+    currency: str
+    previous_close: Decimal | None
+    change: Decimal | None
+    change_rate: Decimal | None
+    as_of: datetime | None
+    source: str
+    quantity: Decimal | None
+    market_value_local: Decimal | None
+    market_value_krw: Decimal | None
+    unrealized_pnl_krw: Decimal | None
+
+
+class LiveQuotesOut(BaseModel):
+    """보유 종목 실시간 시세.
+
+    ⚠️KRW 환산에는 **수집 시점에 증권사가 준 환율을 그대로** 쓴다. 여기서 환율을
+      새로 받아오지 않는다 — 가격과 환율이 서로 다른 시점의 값이면 합계가
+      종목별 수치와 어긋나고, 그 차이는 화면에서 "합이 안 맞는다"로 보인다.
+      움직이는 건 가격뿐이고 환율은 마지막 동기화 값에 고정돼 있다.
+    """
+
+    items: list[LiveQuoteOut]
+    total_market_value_krw: Decimal | None
+    total_unrealized_pnl_krw: Decimal | None
+    # 시세를 못 받은 종목 — 숨기지 않고 개수로 알린다.
+    missing: list[str]
+    fetched: int
+    as_of: datetime | None
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

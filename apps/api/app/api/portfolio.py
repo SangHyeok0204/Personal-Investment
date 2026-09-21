@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.core import performance_analytics as pa
 from app.core import position_timeline as pt
 from app.core.etf_exposure import ETF_EXPOSURE
+from app.core import quote_cache
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
@@ -49,6 +50,8 @@ from app.schemas import (
     InclusionHoldingOut,
     InclusionOut,
     InclusionWeightPointOut,
+    LiveQuoteOut,
+    LiveQuotesOut,
     PerformanceAnalyticsOut,
     PeriodReturnOut,
     RiskMetricsOut,
@@ -1271,4 +1274,93 @@ def get_inclusion(
         total_cost=total_cost,
         open_count=sum(1 for h in holdings if h.status == "OPEN"),
         exited_count=sum(1 for h in holdings if h.status != "OPEN"),
+    )
+
+
+# ── 실시간 시세 ─────────────────────────────────────────────────────────────
+
+@router.get("/quotes", response_model=LiveQuotesOut)
+def get_live_quotes(
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> LiveQuotesOut:
+    """보유 종목의 **실시간 현재가**와 그 가격으로 다시 계산한 평가금액.
+
+    ★왜 따로 있나(2026-09-22): 잔고 동기화(/sync/quick)는 키움 TR 을 4개 써서
+      30초 주기로만 돌린다. 그래서 가격도 30초마다만 움직였다. 여기는 시세만
+      받아오므로 5초 주기로 돌려도 가볍다 — 실측 17종목 0.60초(동시 요청).
+
+    ⚠️환율은 **마지막 동기화 때 증권사가 준 값에 고정**이다. 여기서 새로 받지
+      않는다. 가격과 환율이 다른 시점 값이면 합계가 종목별 수치와 어긋난다.
+      움직이는 건 가격뿐이다.
+
+    ⚠️시세를 못 받은 종목은 0 으로 채우지 않고 `missing` 에 담아 내보낸다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return LiveQuotesOut(
+            items=[], total_market_value_krw=None, total_unrealized_pnl_krw=None,
+            missing=[], fetched=0, as_of=None,
+        )
+
+    rows = db.execute(
+        select(CurrentPosition, Asset)
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+        .order_by(CurrentPosition.market_value_krw.desc().nullslast())
+    ).all()
+    if not rows:
+        return LiveQuotesOut(
+            items=[], total_market_value_krw=None, total_unrealized_pnl_krw=None,
+            missing=[], fetched=0, as_of=None,
+        )
+
+    quotes, fetched = quote_cache.get_quotes([a.ticker for _, a in rows])
+
+    items: list[LiveQuoteOut] = []
+    missing: list[str] = []
+    for position, asset in rows:
+        quote = quotes.get(asset.ticker)
+        if quote is None:
+            missing.append(asset.ticker)
+            continue
+
+        quantity = position.quantity
+        value_local = quantity * quote.price if quantity is not None else None
+        rate = position.exchange_rate
+        value_krw = (
+            (value_local * rate).quantize(_MONEY, rounding=ROUND_HALF_UP)
+            if value_local is not None and rate is not None
+            else None
+        )
+        purchase_krw = _purchase_krw(position, asset.currency)
+        items.append(
+            LiveQuoteOut(
+                ticker=asset.ticker,
+                name=asset.name,
+                price=quote.price,
+                currency=quote.currency,
+                previous_close=quote.previous_close,
+                change=quote.change,
+                change_rate=quote.change_rate,
+                as_of=quote.as_of,
+                source=quote.source,
+                quantity=quantity,
+                market_value_local=value_local,
+                market_value_krw=value_krw,
+                unrealized_pnl_krw=(
+                    (value_krw - purchase_krw)
+                    if value_krw is not None and purchase_krw is not None
+                    else None
+                ),
+            )
+        )
+
+    return LiveQuotesOut(
+        items=items,
+        total_market_value_krw=_sum([i.market_value_krw for i in items]),
+        total_unrealized_pnl_krw=_sum([i.unrealized_pnl_krw for i in items]),
+        missing=missing,
+        fetched=fetched,
+        as_of=max((i.as_of for i in items if i.as_of), default=None),
     )

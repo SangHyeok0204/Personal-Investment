@@ -236,7 +236,7 @@ export function StubTable({
             {columns.map((c) => (
               <th
                 key={c}
-                className="whitespace-nowrap px-3 py-2 text-[11px] font-bold text-ink"
+                className="whitespace-nowrap px-2.5 py-2 text-[11px] font-bold text-ink"
               >
                 {c}
               </th>
@@ -339,7 +339,7 @@ export function Cell({
     <td
       className={cn(
         // 가이드 §7.2 — 표 본문 9p Regular #595959. 강조 행만 Bold Black.
-        "whitespace-nowrap px-3 py-2.5 text-[12px] tabular-nums",
+        "whitespace-nowrap px-2.5 py-2.5 text-[12px] tabular-nums",
         left ? "text-left" : "text-right",
         strong ? "font-bold text-ink" : "font-normal text-ink-secondary",
         tone === "up" && "text-bid",

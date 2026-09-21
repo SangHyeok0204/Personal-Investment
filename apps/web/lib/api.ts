@@ -3056,6 +3056,40 @@ export function getInclusion(
   );
 }
 
+// ── 실시간 시세 (보유 종목) ──────────────────────────────────────────────────
+// 잔고 동기화(30초)와 **별개**로 돈다. 시세만 받아오므로 5초 주기여도 가볍다
+// (실측 17종목 0.60초, 서버에 4초 TTL 캐시).
+
+export interface LiveQuote {
+  ticker: string;
+  name: string | null;
+  price: string;
+  currency: string;
+  previous_close: string | null;
+  change: string | null;
+  change_rate: string | null;
+  as_of: string | null;
+  source: string;
+  quantity: string | null;
+  market_value_local: string | null;
+  market_value_krw: string | null;
+  unrealized_pnl_krw: string | null;
+}
+
+export interface LiveQuotes {
+  items: LiveQuote[];
+  total_market_value_krw: string | null;
+  total_unrealized_pnl_krw: string | null;
+  /** 시세를 못 받은 종목. 숨기지 않는다. */
+  missing: string[];
+  fetched: number;
+  as_of: string | null;
+}
+
+export function getLiveQuotes(accountId?: string | null): Promise<LiveQuotes> {
+  return request<LiveQuotes>(`/api/v1/portfolio/quotes${accountQuery(accountId)}`);
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

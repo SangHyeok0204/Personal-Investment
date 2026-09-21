@@ -20,11 +20,13 @@ import {
   toneOf,
 } from "@/components/stub";
 import {
+  getLiveQuotes,
   getPerformance,
   getPortfolioAllocation,
   getPortfolioHoldings,
   getPortfolioSummary,
   type AllocationDimension,
+  type LiveQuote,
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
@@ -90,10 +92,32 @@ export default function PortfolioPage() {
     queryFn: () => getPerformance(accountId, 365),
     staleTime: 60_000,
   });
+  // ★실시간 시세(2026-09-22). 잔고 동기화는 키움 TR 이 무거워 30초 주기인데,
+  //   시세만 따로 받으면 5초 주기여도 가볍다(실측 17종목 0.60초 + 서버 4초 캐시).
+  //   가격이 30초 동안 멈춰 보이던 문제를 이게 메운다.
+  const quotes = useQuery({
+    queryKey: ["liveQuotes", accountId],
+    queryFn: () => getLiveQuotes(accountId),
+    staleTime: 3_000,
+    ...live,
+  });
 
   const s = summary.data;
   const rows = holdings.data?.items ?? [];
-  const totalKrw = holdings.data?.total_market_value_krw ?? null;
+
+  // 티커 → 실시간 시세. 못 받은 종목은 여기 없고, 화면은 증권사 값을 그대로 쓴다.
+  const liveByTicker = useMemo(() => {
+    const map = new Map<string, LiveQuote>();
+    for (const q of quotes.data?.items ?? []) map.set(q.ticker, q);
+    return map;
+  }, [quotes.data]);
+
+  // ⚠️합계는 **실시간으로 전 종목을 다 받았을 때만** 갈아끼운다. 일부만 실시간이면
+  //   실시간 값과 증권사 값이 섞여 합계가 어느 시점 것인지 알 수 없어진다.
+  const allLive =
+    (quotes.data?.missing.length ?? 1) === 0 && liveByTicker.size === rows.length;
+  const liveTotalKrw = allLive ? (quotes.data?.total_market_value_krw ?? null) : null;
+  const totalKrw = liveTotalKrw ?? holdings.data?.total_market_value_krw ?? null;
 
   const holdingSlices: DonutSlice[] = useMemo(
     () =>
@@ -143,7 +167,10 @@ export default function PortfolioPage() {
           />
           <StatTile
             label="평가손익"
-            value={formatKrwSigned(s?.unrealized_pnl_krw)}
+            value={formatKrwSigned(
+              (allLive ? quotes.data?.total_unrealized_pnl_krw : null) ??
+                s?.unrealized_pnl_krw,
+            )}
             hint={
               s?.unrealized_return != null
                 ? `매입원가 대비 ${formatPercentString(s.unrealized_return)}`
@@ -156,8 +183,14 @@ export default function PortfolioPage() {
           />
           <StatTile
             label="보유종목 평가액"
-            value={formatKrwString(s?.securities_value_krw)}
-            hint={s?.position_count ? `${s.position_count}종목` : "보유 종목 평가액"}
+            value={formatKrwString(liveTotalKrw ?? s?.securities_value_krw)}
+            hint={
+              allLive
+                ? `${rows.length}종목 · 실시간`
+                : s?.position_count
+                  ? `${s.position_count}종목`
+                  : "보유 종목 평가액"
+            }
             loading={summary.isLoading}
           />
           <StatTile
@@ -177,7 +210,8 @@ export default function PortfolioPage() {
             //   이걸 주면 남는 높이를 행들이 나눠 갖고, 넘치는 건 카드 안에서 스크롤한다.
             "grid-cols-1 auto-rows-[minmax(0,1fr)]",
             "md:grid-cols-2 lg:auto-rows-auto",
-            "lg:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.2fr)]",
+            // 상세 표가 6열이라 좁으면 손익·비중이 잘린다. 도넛 둘을 줄이고 표에 더 준다.
+            "lg:grid-cols-[minmax(0,0.78fr)_minmax(0,0.78fr)_minmax(0,1.6fr)]",
           )}
         >
           <StubCard
@@ -240,7 +274,7 @@ export default function PortfolioPage() {
 
           <StubCard title="보유 종목 상세" subtitle="평가금액 순" scrollBody>
             <DataTable
-              columns={["종목", "수량", "평가금액", "손익", "수익률", "비중"]}
+              columns={["종목", "현재가", "당일", "평가금액", "손익", "비중"]}
               align={["left", "right", "right", "right", "right", "right"]}
               empty={
                 holdings.isLoading
@@ -254,6 +288,7 @@ export default function PortfolioPage() {
                 <HoldingRow
                   key={`${h.account_id}-${h.asset_id}`}
                   holding={h}
+                  live={liveByTicker.get(h.ticker)}
                   totalKrw={totalKrw}
                   onClick={() => setPicked(h)}
                 />
@@ -416,17 +451,25 @@ function Small({ label, value }: { label: string; value: string }) {
 
 function HoldingRow({
   holding: h,
+  live,
   totalKrw,
   onClick,
 }: {
   holding: PortfolioHolding;
+  /** 실시간 시세. 없으면(못 받은 종목) 증권사 값을 그대로 쓴다. */
+  live?: LiveQuote;
   totalKrw: string | null;
   onClick: () => void;
 }) {
+  // 실시간 값이 있으면 그걸, 없으면 증권사 값을 쓴다. 둘 다 없으면 "—".
+  const valueKrw = live?.market_value_krw ?? h.market_value_krw;
+  const pnlKrw = live?.unrealized_pnl_krw ?? h.unrealized_pnl_krw;
   const weight =
-    totalKrw && h.market_value_krw && Number(totalKrw) !== 0
-      ? `${((Number(h.market_value_krw) / Number(totalKrw)) * 100).toFixed(1)}%`
+    totalKrw && valueKrw && Number(totalKrw) !== 0
+      ? `${((Number(valueKrw) / Number(totalKrw)) * 100).toFixed(1)}%`
       : "—";
+  const dayRate = live?.change_rate == null ? null : Number(live.change_rate) * 100;
+
   return (
     <tr
       onClick={onClick}
@@ -440,14 +483,19 @@ function HoldingRow({
           </span>
         </span>
       </Cell>
-      <Cell>{formatQuantityString(h.quantity)}</Cell>
-      <Cell strong>{formatKrwString(h.market_value_krw)}</Cell>
-      <Cell tone={toneOf(h.unrealized_pnl_krw)}>
-        {formatKrwSigned(h.unrealized_pnl_krw)}
+      <Cell>
+        {live
+          ? `$${Number(live.price).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`
+          : formatPriceString(h.current_price, h.currency)}
       </Cell>
-      <Cell tone={toneOf(h.unrealized_return)}>
-        {formatPercentString(h.unrealized_return)}
+      <Cell tone={dayRate == null ? undefined : dayRate > 0 ? "up" : dayRate < 0 ? "down" : "muted"}>
+        {dayRate == null ? "—" : `${dayRate > 0 ? "+" : ""}${dayRate.toFixed(2)}%`}
       </Cell>
+      <Cell strong>{formatKrwString(valueKrw)}</Cell>
+      <Cell tone={toneOf(pnlKrw)}>{formatKrwSigned(pnlKrw)}</Cell>
       <Cell tone="muted">{weight}</Cell>
     </tr>
   );

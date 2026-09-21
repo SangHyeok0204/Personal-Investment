@@ -5,3 +5,4 @@
 계좌 연동을 건드리지 않는다.
 """
 from .base import CompositePriceSource, PriceSource, Quote  # noqa: F401
+from .yahoo import YahooPriceSource  # noqa: F401
