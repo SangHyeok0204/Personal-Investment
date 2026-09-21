@@ -144,6 +144,34 @@ http://localhost:3000
 
 http://localhost:8000/docs (Swagger UI)
 
+### Docker 없이 로컬에서 직접 돌리기
+
+개발 중에는 컨테이너 없이 네이티브 Postgres + uvicorn + next dev 로도 돌린다.
+
+```bash
+# API — ★포트는 8000 을 쓴다
+cd apps/api
+DATABASE_URL="postgresql+psycopg://<user>@localhost:5432/investment" \
+  ../../.venv/bin/python -m uvicorn app.main:app --port 8000 --reload
+
+# 웹 (별도 터미널)
+cd apps/web && npm run dev
+```
+
+⚠️**API 포트를 8000 이외로 바꾸지 말 것.** 웹은 `NEXT_PUBLIC_API_BASE_URL` 이
+없으면 `http://localhost:8000` 을 쓰고, 이 값은 **빌드 시점에 번들에 박힌다**.
+포트를 바꾸면 dev 는 환경변수로 넘길 수 있어도 프로덕션 빌드는 조용히 8000 을
+가리킨 채 나온다(실제로 그런 번들이 나왔다).
+⚠️`8010` 은 `tools/perf-brief-runner` 가 쓰는 포트다. API 를 거기 올리면 충돌한다.
+
+```bash
+# 빌드 검증 — dev 서버의 .next 를 덮지 않도록 출력 폴더를 가른다
+cd apps/web && npm run build:check
+
+# 화면 간 숫자 정합성 대조 (서버가 떠 있어야 한다)
+.venv/bin/python scripts/audit_consistency.py
+```
+
 ## 10. n8n 접속 주소
 
 http://localhost:5678

@@ -5,7 +5,7 @@
 되므로, 같은 뜻의 숫자를 엔드포인트별로 뽑아 맞는지 본다.
 
 실행:
-    .venv/bin/python scripts/audit_consistency.py [--base http://localhost:8010]
+    .venv/bin/python scripts/audit_consistency.py [--base http://localhost:8000]
 
 ⚠️서버가 떠 있고 계좌 데이터가 적재돼 있어야 한다. 데이터가 없으면 비교할 게
   없으므로 '건너뜀'으로 끝난다(실패가 아니다).
@@ -177,7 +177,7 @@ class Audit:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default="http://localhost:8010")
+    parser.add_argument("--base", default="http://localhost:8000")
     args = parser.parse_args()
 
     audit = Audit(args.base)
