@@ -18,13 +18,18 @@ import { runQuickSync } from "@/lib/api";
 // ★2026-09-21 사용자 요청: "5초마다 데이터 불러오고 계좌 잔고도 업데이트,
 //   노트북에 무리 가지 않는 선에서."
 //
-// 두 가지를 **다른 주기**로 나눴다. 하나로 묶으면 둘 중 하나가 반드시 과하다:
+// 세 가지가 돈다:
 //
-//   ① 화면 갱신 (우리 API 읽기) — 5초.
-//      로컬 Postgres 읽기라 가볍다. 동기화가 끝나는 순간 화면이 바로 따라온다.
-//   ② 증권사 잔고 동기화 (/sync/quick) — 30초.
-//      실측 1.6초 걸리고 키움 TR 을 4개 쓴다. 5초마다 돌리면 분당 48회 호출에
-//      듀티 사이클 32% 다 — 유량제한과 노트북 양쪽에 과하다. 30초면 분당 8회.
+//   ① 화면 갱신 (우리 API 읽기) — 5초. 로컬 Postgres 읽기라 가볍다.
+//   ② 보유 종목 시세 (/portfolio/quotes) — 5초. 야후에서 받고 서버에 4초 캐시.
+//      실측 17종목 0.60초.
+//   ③ 증권사 잔고 동기화 (/sync/quick) — 5초. ★2026-09-22 사용자 요청으로
+//      30초에서 내렸다. 실측 1.6초 / 키움 TR 4개 → 분당 48회, 듀티 사이클 32%.
+//      5회 연속(간격 2.6초, 요청 주기보다 빠름) 호출에도 유량 에러가 없었다.
+//
+// ⚠️5초 주기에서는 **실패 시 백오프가 필수**다. 유량제한(1700~1702)이나 IP 차단에
+//   걸린 상태로 5초마다 계속 때리면 차단이 풀리지 않고, 로그만 쌓인다.
+//   실패하면 5→10→20→40→60초로 물러났다가 성공하면 즉시 원래 주기로 돌아온다.
 //
 // ⚠️전체 동기화(/sync, 체결·배당 포함 2분)는 **자동으로 돌리지 않는다.** 그 값들은
 //   몇 초마다 바뀌지 않는다. 필요할 때 연동 팝업에서 수동으로 돌린다.
@@ -35,7 +40,9 @@ import { runQuickSync } from "@/lib/api";
 //   · 사용자가 끄면 둘 다 멈춘다. 선택은 이 브라우저에 기억된다.
 
 const VIEW_REFRESH_MS = 5_000;
-const BROKER_SYNC_MS = 30_000;
+const BROKER_SYNC_MS = 5_000;
+// 실패가 이어질 때 물러나는 한계. 60초를 넘기면 "멈춘 것"과 구분이 안 된다.
+const MAX_BACKOFF_MS = 60_000;
 const STORAGE_KEY = "pi:auto-refresh";
 
 type AutoRefreshCtx = {
@@ -46,6 +53,8 @@ type AutoRefreshCtx = {
   syncing: boolean;
   lastSyncAt: Date | null;
   lastError: string | null;
+  /** 연속 실패로 물러나 있는 중이면 다음 시도까지 남은 ms. 아니면 0. */
+  backoffRemainingMs: number;
   syncNow: () => void;
 };
 
@@ -70,7 +79,11 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   // 동기화가 겹치지 않게 한다 — 앞의 호출이 느리면 큐가 쌓인다.
+  //   5초 주기 + 실측 1.6초라 평소엔 겹치지 않지만, 증권사가 느려지면 겹친다.
   const inFlight = useRef(false);
+  // 연속 실패 시 다음 시도 시각. 성공하면 0 으로 되돌린다.
+  const nextAllowedAt = useRef(0);
+  const backoffMs = useRef(0);
 
   useEffect(() => {
     try {
@@ -98,10 +111,19 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
       .then(() => {
         setLastSyncAt(new Date());
         setLastError(null);
+        // 성공하면 즉시 원래 주기로 복귀한다 — 한 번 실패했다고 계속 느리면 안 된다.
+        backoffMs.current = 0;
+        nextAllowedAt.current = 0;
         void queryClient.invalidateQueries();
       })
       .catch((err: unknown) => {
         setLastError(err instanceof Error ? err.message : "동기화 실패");
+        // 5 → 10 → 20 → 40 → 60초. 유량제한·IP 차단을 5초마다 때리지 않기 위해서다.
+        backoffMs.current = Math.min(
+          backoffMs.current === 0 ? BROKER_SYNC_MS * 2 : backoffMs.current * 2,
+          MAX_BACKOFF_MS,
+        );
+        nextAllowedAt.current = Date.now() + backoffMs.current;
       })
       .finally(() => {
         inFlight.current = false;
@@ -115,6 +137,8 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       if (!marketLikelyOpen(new Date())) return;
+      // 백오프 중이면 건너뛴다. 타이머는 계속 돌되 호출만 막는다.
+      if (Date.now() < nextAllowedAt.current) return;
       syncNow();
     };
     const id = window.setInterval(tick, BROKER_SYNC_MS);
@@ -129,6 +153,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
       syncing,
       lastSyncAt,
       lastError,
+      backoffRemainingMs: Math.max(0, nextAllowedAt.current - Date.now()),
       syncNow,
     }),
     [enabled, setEnabled, syncing, lastSyncAt, lastError, syncNow],
