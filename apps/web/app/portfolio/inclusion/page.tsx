@@ -64,7 +64,7 @@ function days(n: number): string {
 }
 
 export default function InclusionPage() {
-  const { accountId } = useAccount();
+  const { accountId, connected } = useAccount();
   const live = useLiveQueryOptions();
   const [picked, setPicked] = useState<InclusionHolding | null>(null);
   const [eventsOpen, setEventsOpen] = useState(false);
@@ -105,7 +105,11 @@ export default function InclusionPage() {
     <>
       <Topbar title="편입비" subtitle="매매 이력 복원 · 원가(USD) 기준" />
       <PageContainer fit>
-        {isError && !isLoading && <NotConnectedBanner what="매매 이력" />}
+        {/* ⚠️`isError` 만 보면 안 된다. 계좌가 없을 때 API 는 **200 에 빈 목록**을
+            돌려주므로 에러가 아니다 → 배너가 안 뜨고 화면은 "매매 이력이
+            없습니다"라고만 말한다. 거래를 안 한 건지 연동을 안 한 건지 구분이
+            안 된다(빈 DB 로 실제 확인했다). 다른 화면들처럼 `connected` 를 본다. */}
+        {!connected && !isLoading && <NotConnectedBanner what="매매 이력" />}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
@@ -154,7 +158,11 @@ export default function InclusionPage() {
             ) : (
               <DataTable
                 columns={["종목", "편입비", "원가", "보유기간"]}
-                empty="매매 이력이 없습니다"
+                empty={
+                  connected
+                    ? "매매 이력이 없습니다"
+                    : "계좌를 연동하면 편입 현황이 표시됩니다"
+                }
               >
                 {open.map((h) => (
                   <tr
@@ -215,7 +223,13 @@ export default function InclusionPage() {
             {isLoading ? (
               <Empty text="불러오는 중" />
             ) : structural.length === 0 ? (
-              <Empty text="편입·청산 이력이 없습니다" />
+              <Empty
+                text={
+                  connected
+                    ? "편입·청산 이력이 없습니다"
+                    : "계좌를 연동하면 편입·청산 이력이 표시됩니다"
+                }
+              />
             ) : (
               <ul className="space-y-1.5">
                 {structural.slice(0, 14).map((e, i) => (
