@@ -848,6 +848,44 @@ class MacroMonitorOut(BaseModel):
     notes: list[str]
 
 
+# ── 벤치마크 비교 ────────────────────────────────────────────────────────────
+
+class BenchmarkPointOut(BaseModel):
+    """차트 한 점. 구간 시작을 100 으로 맞춘 지수다."""
+
+    base_date: date
+    portfolio: Decimal | None
+    benchmarks: dict[str, Decimal | None]
+
+
+class BenchmarkPeriodOut(BaseModel):
+    """기간별 비교.
+
+    ⚠️`benchmarks_krw` 가 비교의 정본이다. 내 계좌 수익률이 원화 기준이라
+      달러 지수(`benchmarks_usd`)와 그대로 견주면 환율 변동이 실력처럼 보인다.
+      USD 값은 "환율을 빼면 얼마였나"를 보려고 같이 낸다.
+    """
+
+    label: str
+    start_date: date
+    end_date: date
+    observations: int
+    portfolio: Decimal | None
+    benchmarks_krw: dict[str, Decimal | None]
+    benchmarks_usd: dict[str, Decimal | None]
+    # 내 수익률 − 원화 환산 지수 수익률.
+    excess: dict[str, Decimal | None]
+
+
+class BenchmarkOut(BaseModel):
+    series: list[BenchmarkPointOut]
+    periods: list[BenchmarkPeriodOut]
+    benchmarks: list[str]
+    currency_note: str
+    first_date: date | None
+    last_date: date | None
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

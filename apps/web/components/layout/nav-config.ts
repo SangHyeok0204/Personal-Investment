@@ -131,8 +131,8 @@ export const navItems: NavItem[] = [
       {
         label: "벤치마크 비교",
         href: "/performance/benchmark",
-        status: "placeholder",
-        hint: "기준 지수를 먼저 정해야 함 (시장 지표에 S&P500·나스닥·SOX 있음)",
+        status: "live",
+        hint: "S&P 500 · 반도체(SOX) 대비 — 원화 환산",
       },
       {
         label: "성과 분석",

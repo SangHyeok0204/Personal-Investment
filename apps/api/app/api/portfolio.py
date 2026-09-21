@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core import performance_analytics as pa
 from app.core import position_timeline as pt
+from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
 from app.core.errors import AppError
@@ -45,6 +46,9 @@ from app.schemas import (
     CashByCurrencyOut,
     CashflowEventOut,
     CashflowMonthOut,
+    BenchmarkOut,
+    BenchmarkPeriodOut,
+    BenchmarkPointOut,
     CashflowOut,
     ContributionOut,
     DrawdownPointOut,
@@ -1618,4 +1622,185 @@ def get_cashflow(
         ),
         first_date=rows[0][0],
         last_date=rows[-1][0],
+    )
+
+
+# ── 벤치마크 비교 ───────────────────────────────────────────────────────────
+
+# 기준 지수. 보유의 47%가 컴퓨팅 인프라고 최대 비중이 SOXL(반도체 3배)이라
+# 시장 전체(S&P 500)와 반도체(SOX) 둘을 세운다.
+_BENCHMARKS: list[tuple[str, str]] = [
+    ("^GSPC", "S&P 500"),
+    ("^SOX", "필라델피아 반도체"),
+]
+_FX_SYMBOL = "KRW=X"
+
+_BENCH_PERIODS: list[tuple[str, int]] = [
+    ("1M", 30), ("3M", 91), ("6M", 182), ("1Y", 365), ("전체", 36500),
+]
+
+
+@router.get("/benchmark", response_model=BenchmarkOut)
+def get_benchmark(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> BenchmarkOut:
+    """내 계좌 수익률 vs 기준 지수.
+
+    ★**통화를 맞춘다.** 내 계좌 수익률은 원화 기준(키움이 KRW 로 준다)이고 지수는
+      달러 기준이다. 그대로 비교하면 환율 변동이 통째로 내 실력처럼 보인다.
+      그래서 지수를 **원화로 환산해서** 비교한다 — "그 지수에 원화로 투자했다면"
+      이 올바른 비교 대상이다. USD 기준 수익률도 같이 내보내 차이를 볼 수 있게 한다.
+
+    ⚠️계좌 시계열은 주말 행까지 있고(실측 530행 중 152행) 지수는 거래일만 있다.
+      **양쪽에 다 있는 날짜만** 써서 맞춘다 — 한쪽을 앞으로 채우면 없는 날의
+      움직임이 생긴다.
+
+    ⚠️기간을 자를 때마다 **그 구간 시작으로 다시 기준을 잡는다**(rebase).
+      전체 구간 지수를 그대로 잘라 쓰면 1개월 수익률이 누적값 차이로 나온다.
+    """
+    empty = BenchmarkOut(
+        series=[], periods=[], benchmarks=[m[1] for m in _BENCHMARKS],
+        currency_note="", first_date=None, last_date=None,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+    if not rows:
+        return empty
+
+    points, _shifts = pa.reconcile_flows(
+        [
+            pa.DailyPoint(base_date=d, assets_krw=a, deposit_krw=dep, withdrawal_krw=wd)
+            for d, a, dep, wd in rows
+        ]
+    )
+    returns = pa.daily_returns(points)
+    if not returns:
+        return empty
+    mine = {r.base_date: r.index for r in returns}
+
+    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
+    fx = history.get(_FX_SYMBOL)
+
+    # 양쪽에 다 있는 날만 쓴다.
+    usable = sorted(
+        d
+        for d in mine
+        if all(
+            (series := history.get(symbol)) is not None
+            and series.close_on_or_before(d) is not None
+            for symbol, _ in _BENCHMARKS
+        )
+        and (fx is None or fx.close_on_or_before(d) is not None)
+    )
+    if not usable:
+        return empty
+
+    def level(symbol: str, when: date, in_krw: bool) -> Decimal | None:
+        series = history.get(symbol)
+        if series is None:
+            return None
+        value = series.close_on_or_before(when)
+        if value is None or not in_krw:
+            return value
+        rate = fx.close_on_or_before(when) if fx else None
+        return None if rate is None else value * rate
+
+    def ratio(a: Decimal | None, b: Decimal | None) -> Decimal | None:
+        if a is None or b is None or b == 0:
+            return None
+        return (a / b - Decimal("1")).quantize(_RATIO, rounding=ROUND_HALF_UP)
+
+    # 차트용 시계열 — 구간 시작을 100 으로 맞춘 지수.
+    base_day = usable[0]
+    series_out: list[BenchmarkPointOut] = []
+    for day in usable:
+        values: dict[str, Decimal | None] = {}
+        for symbol, name in _BENCHMARKS:
+            change = ratio(level(symbol, day, True), level(symbol, base_day, True))
+            values[name] = (
+                (Decimal("100") * (Decimal("1") + change)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                if change is not None
+                else None
+            )
+        mine_change = ratio(mine.get(day), mine.get(base_day))
+        series_out.append(
+            BenchmarkPointOut(
+                base_date=day,
+                portfolio=(
+                    (Decimal("100") * (Decimal("1") + mine_change)).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
+                    if mine_change is not None
+                    else None
+                ),
+                benchmarks=values,
+            )
+        )
+
+    last = usable[-1]
+    periods_out: list[BenchmarkPeriodOut] = []
+    for label, span in _BENCH_PERIODS:
+        cutoff = last - timedelta(days=span)
+        # ⚠️구간 시작은 **usable 안에서** 고른다. 지수에 없는 날을 기준으로
+        #   잡으면 내 수익률만 그 날부터 세어져 비교가 어긋난다.
+        window = [d for d in usable if d >= cutoff]
+        if len(window) < 2:
+            continue
+        start = window[0]
+        mine_change = ratio(mine.get(last), mine.get(start))
+        krw: dict[str, Decimal | None] = {}
+        usd: dict[str, Decimal | None] = {}
+        excess: dict[str, Decimal | None] = {}
+        for symbol, name in _BENCHMARKS:
+            in_krw = ratio(level(symbol, last, True), level(symbol, start, True))
+            krw[name] = in_krw
+            usd[name] = ratio(level(symbol, last, False), level(symbol, start, False))
+            excess[name] = (
+                (mine_change - in_krw) if mine_change is not None and in_krw is not None
+                else None
+            )
+        periods_out.append(
+            BenchmarkPeriodOut(
+                label=label,
+                start_date=start,
+                end_date=last,
+                observations=len(window),
+                portfolio=mine_change,
+                benchmarks_krw=krw,
+                benchmarks_usd=usd,
+                excess=excess,
+            )
+        )
+
+    return BenchmarkOut(
+        series=series_out,
+        periods=periods_out,
+        benchmarks=[name for _, name in _BENCHMARKS],
+        currency_note=(
+            "지수는 원화로 환산해 비교합니다 — 내 계좌 수익률이 원화 기준이라 "
+            "달러 지수와 그대로 견주면 환율 변동이 실력처럼 보입니다."
+        ),
+        first_date=usable[0],
+        last_date=last,
     )

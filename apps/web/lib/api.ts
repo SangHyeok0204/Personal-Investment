@@ -3400,6 +3400,43 @@ export function getMacro(): Promise<MacroMonitor> {
   return request<MacroMonitor>("/api/v1/market/macro");
 }
 
+// ── 벤치마크 비교 ────────────────────────────────────────────────────────────
+
+export interface BenchmarkPoint {
+  base_date: string;
+  portfolio: string | null;
+  benchmarks: Record<string, string | null>;
+}
+
+export interface BenchmarkPeriod {
+  label: string;
+  start_date: string;
+  end_date: string;
+  observations: number;
+  portfolio: string | null;
+  /** 비교의 정본 — 원화 환산. 내 수익률이 원화 기준이기 때문이다. */
+  benchmarks_krw: Record<string, string | null>;
+  /** "환율을 빼면 얼마였나"를 보려고 같이 낸다. */
+  benchmarks_usd: Record<string, string | null>;
+  excess: Record<string, string | null>;
+}
+
+export interface Benchmark {
+  series: BenchmarkPoint[];
+  periods: BenchmarkPeriod[];
+  benchmarks: string[];
+  currency_note: string;
+  first_date: string | null;
+  last_date: string | null;
+}
+
+export function getBenchmark(accountId?: string | null, days = 1095): Promise<Benchmark> {
+  const q = accountQuery(accountId);
+  return request<Benchmark>(
+    `/api/v1/portfolio/benchmark${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,
