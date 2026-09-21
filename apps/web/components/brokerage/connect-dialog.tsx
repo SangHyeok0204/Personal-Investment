@@ -39,7 +39,11 @@ export function ConnectDialog({
   // IP 차단일 때 등록해야 할 서버 공인 IP. 값을 보여줘야 사용자가 찾아 헤매지 않는다.
   const [blockedIp, setBlockedIp] = useState<string | null>(null);
   const [phase, setPhase] = useState<"form" | "syncing" | "done">("form");
-  const [synced, setSynced] = useState<{ positions: number; trades: number } | null>(null);
+  const [synced, setSynced] = useState<{
+    positions: number;
+    trades: number;
+    dividends: number;
+  } | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // 이미 등록된 키가 있으면 그 키에 묶인 계좌를 보여준다(사용자 요청).
@@ -76,7 +80,11 @@ export function ConnectDialog({
       setAppKey("");
       setSecretKey("");
       setError(null);
-      setSynced({ positions: result.positions, trades: result.trades });
+      setSynced({
+        positions: result.positions,
+        trades: result.trades,
+        dividends: result.dividends,
+      });
       setPhase("done");
       // 대시보드 전체를 새로 읽는다.
       void queryClient.invalidateQueries();
@@ -95,7 +103,11 @@ export function ConnectDialog({
   const syncOnly = useMutation({
     mutationFn: runBrokerageSync,
     onSuccess: (result) => {
-      setSynced({ positions: result.positions, trades: result.trades });
+      setSynced({
+        positions: result.positions,
+        trades: result.trades,
+        dividends: result.dividends,
+      });
       setPhase("done");
       void queryClient.invalidateQueries();
     },
@@ -165,8 +177,8 @@ export function ConnectDialog({
                   동기화 완료
                 </p>
                 <p className="mt-0.5 text-[12px] font-semibold text-ink-secondary">
-                  보유 {synced.positions}종목 · 체결 {synced.trades}건을 불러왔습니다.
-                  대시보드에 반영됐습니다.
+                  보유 {synced.positions}종목 · 체결 {synced.trades}건 · 배당{" "}
+                  {synced.dividends}건을 불러왔습니다. 대시보드에 반영됐습니다.
                 </p>
               </div>
             </div>

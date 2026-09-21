@@ -21,19 +21,15 @@ import sys
 from sqlalchemy import create_engine, text
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-MIGRATION = ROOT / "database/migrations/versions/0006_asset_sector.py"
+SEED_MODULE = ROOT / "database/seeds/sectors.py"
 
 
 def load_seed() -> dict:
-    """분류 목록의 정본은 마이그레이션이다 — 여기 복제하지 않고 읽어 온다."""
-    spec = importlib.util.spec_from_file_location("m0006", MIGRATION)
+    """분류 목록의 정본은 database/seeds/sectors.py 다 — 여기 복제하지 않는다."""
+    spec = importlib.util.spec_from_file_location("_sector_seed", SEED_MODULE)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["m0006"] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        # alembic 심볼(op)이 없어 import 가 실패해도 모듈 전역은 이미 채워져 있다.
-        pass
+    sys.modules["_sector_seed"] = module
+    spec.loader.exec_module(module)
     return module.SECTOR_SEED
 
 

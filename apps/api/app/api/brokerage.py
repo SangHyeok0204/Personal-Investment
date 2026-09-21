@@ -75,6 +75,7 @@ class SyncResultOut(BaseModel):
     trades: int = 0
     daily_performance: int = 0
     realized_pnl: int = 0
+    dividends: int = 0
     message: str | None = None
 
 
@@ -238,6 +239,7 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
         trades=result.get("trades", 0),
         daily_performance=result.get("daily_performance", 0),
         realized_pnl=result.get("realized_pnl", 0),
+        dividends=result.get("dividends", 0),
     )
 
 

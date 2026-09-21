@@ -2946,6 +2946,7 @@ export interface SyncResult {
   trades: number;
   daily_performance: number;
   realized_pnl: number;
+  dividends: number;
   message: string | null;
 }
 

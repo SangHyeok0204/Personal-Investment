@@ -36,6 +36,7 @@ from repositories import balances as balances_repo
 from repositories import positions as positions_repo
 from repositories import raw_responses as raw_repo
 from repositories import history as history_repo
+from repositories import sectors as sectors_repo
 from repositories import snapshots as snapshots_repo
 
 DEFAULT_BASE_URL = "https://api.kiwoom.com"
@@ -412,6 +413,21 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         conn, snapshot_id, account_id, asset_id, position
                     )
                 snapshots_created += 1
+        # ★2026-09-21: 종목 마스터를 만든 직후 기본 섹터를 붙인다. 증권사가 섹터를
+        #   주지 않아 그대로 두면 새로 산 종목이 영영 미분류로 남는다(동기화할 때마다
+        #   섹터 비중이 100% 미분류로 떨어지던 원인). 화면에서 지정한 MANUAL 값은
+        #   건드리지 않는다.
+        with engine.begin() as conn:
+            seeded = sectors_repo.apply_sector_seed(conn)
+            unclassified = sectors_repo.unclassified_held_count(conn)
+        if seeded or unclassified:
+            log_job(
+                engine, job_id, "INFO", "classify_assets",
+                f"Seeded {seeded} sector(s)"
+                + (f"; {unclassified} held ticker(s) still unclassified"
+                   if unclassified else ""),
+            )
+
         log_job(engine, job_id, "INFO", "upsert_positions",
                 f"Upserted {total_positions} position(s)")
         log_job(engine, job_id, "INFO", "create_snapshots",
