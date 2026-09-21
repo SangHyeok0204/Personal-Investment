@@ -715,3 +715,111 @@ def test_monthly_cashflow_does_not_count_an_empty_month_as_covered(client, db, k
     body = client.get("/api/v1/portfolio/monthly-cashflow").json()
     assert body["months_total"] == 1
     assert body["months_dividend_covered_cost"] == 0
+
+
+# ── 세금 (해외주식 양도소득) ─────────────────────────────────────────────────
+
+def _add_sale(db, account_id, **kw):
+    from app.models import RealizedPnl
+    from datetime import date as _date
+
+    defaults = dict(
+        id=uuid.uuid4(), account_id=account_id, ticker="NVDA", asset_name="엔비디아",
+        sell_date=_date(2026, 9, 18), quantity=Decimal("4"), currency="USD",
+        buy_amount_local=Decimal("836.37"), sell_amount_local=Decimal("877.24"),
+        commission_tax_local=Decimal("4.30"),
+        buy_exchange_rate=Decimal("1524.85"), sell_exchange_rate=Decimal("1380.30"),
+        # 증권사가 같은 환율로 환산해 준 값 — **취득가액이 아니다.**
+        buy_amount_krw=Decimal("1147793"), sell_amount_krw=Decimal("1203880"),
+        pnl_krw=Decimal("50182"), fx_pnl_krw=Decimal("-121201"),
+    )
+    defaults.update(kw)
+    db.add(RealizedPnl(**defaults))
+    db.commit()
+
+
+def test_tax_uses_trade_date_rates_not_the_brokers_common_rate(client, db, kiwoom):
+    """취득가액은 **매수일 환율**로 환산한다.
+
+    `buy_amount_krw`(1,147,793)를 쓰면 환율 1,372 로 환산한 값이라 세법상
+    취득가액이 아니다. 매수일 환율 1,524.85 를 쓰면 1,275,322 다 — 12만원 차이고,
+    이 한 건의 부호가 이익에서 손실로 뒤집힌다.
+    """
+    _add_sale(db, kiwoom["account"].id)
+
+    body = client.get("/api/v1/portfolio/tax?year=2026").json()
+    sale = body["current"]["sales"][0]
+    # API 는 원 단위 소수 둘째 자리로 반올림한다.
+    cents = Decimal("0.01")
+    assert Decimal(sale["cost_basis_krw"]) == (
+        Decimal("836.37") * Decimal("1524.85")
+    ).quantize(cents)
+    assert Decimal(sale["proceeds_krw"]) == (
+        Decimal("877.24") * Decimal("1380.30")
+    ).quantize(cents)
+    # 주가로는 벌었지만(+50,182) 환율 때문에 양도차익은 **손실**이다.
+    assert Decimal(sale["gain_krw"]) < 0
+
+
+def test_tax_includes_fx_in_the_gain(client, db, kiwoom):
+    """이 화면에서만 환차를 더한다 — 세법의 양도차익은 원화 기준이기 때문이다."""
+    _add_sale(db, kiwoom["account"].id)
+
+    current = client.get("/api/v1/portfolio/tax?year=2026").json()["current"]
+    # 증권사 값(주가손익 + 환차손익)과 같은 방향이어야 한다. 주가손익만 봤다면 +다.
+    assert Decimal(current["gain_krw_broker"]) == Decimal("50182") + Decimal("-121201")
+    assert Decimal(current["gain_krw"]) < 0
+    # 두 방식의 차이를 **숨기지 않는다.**
+    assert Decimal(current["method_diff_krw"]) == (
+        Decimal(current["gain_krw"]) - Decimal(current["gain_krw_broker"])
+    )
+
+
+def test_tax_base_is_never_negative_and_loss_does_not_carry(client, db, kiwoom):
+    """손실이면 과세표준은 0 이다. 음수를 다음 해로 넘기지 않는다."""
+    _add_sale(db, kiwoom["account"].id)
+
+    current = client.get("/api/v1/portfolio/tax?year=2026").json()["current"]
+    assert Decimal(current["gain_krw"]) < 0
+    assert Decimal(current["taxable_base_krw"]) == Decimal("0")
+    assert Decimal(current["tax_krw"]) == Decimal("0")
+    # 공제 여유는 손실만큼 **늘어난다**(250만원보다 크다).
+    assert Decimal(current["headroom_krw"]) > Decimal("2500000")
+
+
+def test_tax_applies_deduction_then_rate(client, db, kiwoom):
+    """양도차익 300만 → 과세표준 50만 → 세액 11만(22%)."""
+    from datetime import date as _date
+
+    _add_sale(
+        db, kiwoom["account"].id, ticker="AVGO", asset_name="브로드컴",
+        sell_date=_date(2026, 4, 14),
+        buy_amount_local=Decimal("1000"), sell_amount_local=Decimal("4000"),
+        commission_tax_local=Decimal("0"),
+        buy_exchange_rate=Decimal("1000"), sell_exchange_rate=Decimal("1000"),
+        pnl_krw=Decimal("3000000"), fx_pnl_krw=Decimal("0"),
+    )
+
+    current = client.get("/api/v1/portfolio/tax?year=2026").json()["current"]
+    assert Decimal(current["gain_krw"]) == Decimal("3000000")
+    assert Decimal(current["taxable_base_krw"]) == Decimal("500000")
+    assert Decimal(current["tax_krw"]) == Decimal("110000")
+    # 이미 과세 구간이면 여유는 음수다.
+    assert Decimal(current["headroom_krw"]) == Decimal("-500000")
+
+
+def test_tax_skips_a_sale_without_exchange_rates(client, db, kiwoom):
+    """환율이 없으면 그 건은 **뺀다.** 오늘 환율로 메우면 과세표준이 거짓이 된다."""
+    _add_sale(db, kiwoom["account"].id, buy_exchange_rate=None)
+
+    current = client.get("/api/v1/portfolio/tax?year=2026").json()["current"]
+    assert current["sale_count"] == 0
+    assert Decimal(current["gain_krw"]) == Decimal("0")
+
+
+def test_tax_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/tax").json()
+    assert body["years"] == []
+    assert body["current"] is None
+    # 한계 문구는 계좌가 없어도 보여야 한다 — 빈 화면이 "세금 없음"으로 읽히면 안 된다.
+    assert len(body["notes"]) > 0

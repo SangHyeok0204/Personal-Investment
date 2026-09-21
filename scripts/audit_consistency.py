@@ -96,6 +96,8 @@ class Audit:
         realized = self.get("/portfolio/realized?days=1095")
         dividends = self.get("/portfolio/dividends?days=1095")
         monthly = self.get("/portfolio/monthly-cashflow?days=1095")
+        tax_years = self.get("/portfolio/tax")["years"]
+        taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
         print("\n[평가금액·손익]")
         self.same(
@@ -183,6 +185,26 @@ class Audit:
             Decimal(monthly["total_deposit_krw"]) - Decimal(monthly["total_withdrawal_krw"]),
             "cashflow", "monthly-cashflow",
         )
+
+        # ── 세금 ───────────────────────────────────────────────────────
+        # ⚠️연도별로 나눠 본 값의 합이 전체와 같아야 한다. 연도 경계에서
+        #   빠지거나 겹치는 건이 있으면 여기서 걸린다.
+        print("\n[세금]")
+        if taxes:
+            self.same(
+                "배당 (연도 합)",
+                dividends["total_amount_krw"],
+                sum(Decimal(t["dividend_krw"]) for t in taxes),
+                "dividends", "tax",
+            )
+            self.same(
+                "실현 건수 (연도 합)",
+                Decimal(len(realized["items"])),
+                Decimal(sum(t["sale_count"] for t in taxes)),
+                "realized", "tax",
+            )
+        else:
+            print("  ·  세금: 실현 내역이 없어 건너뜀")
 
         print(f"\n{'=' * 56}")
         if self.failures:

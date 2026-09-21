@@ -254,7 +254,12 @@ export const navItems: NavItem[] = [
         //   여기는 "한 달 동안 돈이 어디서 들어오고 어디로 나갔나"다.
         hint: "배당 − 비용 · 순납입 · 매매 회전",
       },
-      { label: "세금", status: "planned", hint: "양도소득세 · 배당소득세 추정" },
+      {
+        label: "세금",
+        href: "/income/tax",
+        status: "live",
+        hint: "해외주식 양도소득 · 배당소득 (추정)",
+      },
     ],
   },
   {

@@ -68,6 +68,9 @@ from app.schemas import (
     LiveQuotesOut,
     MonthlyCashflowOut,
     MonthlyCashflowRowOut,
+    TaxOut,
+    TaxSaleOut,
+    TaxYearOut,
     OrderListOut,
     OrderOut,
     TradingCostOut,
@@ -2288,4 +2291,148 @@ def get_monthly_cashflow(
         first_month=months[0],
         last_month=months[-1],
         note=_FX_NOTE,
+    )
+
+
+# ── 세금 (해외주식 양도소득 · 배당소득) ──────────────────────────────────────
+
+# 해외주식 양도소득 기본공제(연 1회)와 세율(양도소득세 20% + 지방소득세 2%).
+_TAX_DEDUCTION = Decimal("2500000")
+_TAX_RATE = Decimal("0.22")
+# 금융소득종합과세 기준. 이자+배당이 이 선을 넘으면 분리과세로 끝나지 않는다.
+_COMPREHENSIVE_THRESHOLD = Decimal("20000000")
+
+_TAX_NOTES = [
+    "이 화면은 **신고 자료가 아닙니다.** 세액이 맞는지는 증권사 양도소득 원장과"
+    " 세무 전문가를 통해 확인하세요.",
+    "양도차익을 **체결일 환율**로 계산했습니다(양도가액은 매도일, 취득가액은"
+    " 매수일 환율). 세법이 쓰는 기준환율과 증권사가 준 체결 환율이 다를 수 있습니다.",
+    "**환차손익을 양도차익에 포함했습니다.** 다른 화면에서는 주가 손익과 환차를"
+    " 섞지 않지만, 세법의 양도차익은 원화 기준 양도가액 − 취득가액이라 환율 변동이"
+    " 과세 대상 그 자체입니다.",
+    "증권사가 준 값(주가손익 + 환차손익)과 체결일 환율로 계산한 값이 조금 다릅니다."
+    " 둘 다 적어 두었으니 차이를 보고 판단하세요.",
+    "배당이 **세전인지 세후인지 확인할 수 없습니다.** 키움은 배당 전용 TR 없이"
+    " 일별 수익률 응답에 금액만 섞어 주고, 원천징수액을 따로 주지 않습니다."
+    " 미국 배당은 통상 15%가 현지에서 원천징수됩니다.",
+    "손실은 **같은 해 안에서만** 통산되고 다음 해로 이월되지 않습니다.",
+    "국내주식은 대주주가 아니면 양도세 대상이 아니라 여기에 넣지 않았습니다"
+    " (현재 실현 내역 17건은 전부 해외주식입니다).",
+]
+
+
+@router.get("/tax", response_model=TaxOut)
+def get_tax(
+    account_id: uuid.UUID | None = Query(default=None),
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    db: Session = Depends(get_db),
+) -> TaxOut:
+    """해외주식 양도소득세 · 배당소득 추정.
+
+    ★취득가액을 `realized_pnl.buy_amount_krw` 로 잡지 않는다. 그 칸은 매수·매도를
+      **같은 환율**로 환산한 값이다(실측: NVDA 매수 836.37달러 → 1,147,793원이면
+      환율 1,372 인데, 실제 매수일 환율은 1,524.85 로 따로 들어와 있다).
+      세법의 취득가액은 **매수일 환율**로 환산한 값이므로 체결 환율을 직접 쓴다.
+
+    ★**환차를 양도차익에 더한다.** 다른 화면에서는 절대 섞지 말라고 한 두 값이다.
+      모순이 아니라 질문이 다르다 — "종목 선택이 좋았나"는 주가만 봐야 하고,
+      "세금을 얼마 내나"는 원화 기준 차익이라 환율이 과세 대상에 들어온다.
+      실측 NVDA: 주가로 +50,182 벌었지만 환율로 −121,201 이라 양도차익은 −70,420.
+
+    ⚠️세액이 0 이어도 "신고 안 해도 된다"고 말하지 않는다. 기본공제는 신고를
+      통해 적용되는 것이고, 이 화면은 세무 판단을 할 수 있는 자리가 아니다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return TaxOut(years=[], current=None, notes=_TAX_NOTES)
+
+    rows = db.execute(
+        select(RealizedPnl).where(RealizedPnl.account_id.in_(account_ids))
+    ).scalars().all()
+    dividends = db.execute(
+        select(Dividend).where(Dividend.account_id.in_(account_ids))
+    ).scalars().all()
+
+    years = sorted(
+        {r.sell_date.year for r in rows} | {d.pay_date.year for d in dividends},
+        reverse=True,
+    )
+    if not years:
+        return TaxOut(years=[], current=None, notes=_TAX_NOTES)
+
+    target = year if year in years else years[0]
+    zero = Decimal("0")
+
+    proceeds = cost_basis = expense = zero
+    broker_gain = zero
+    sales: list[TaxSaleOut] = []
+
+    for r in rows:
+        if r.sell_date.year != target:
+            continue
+        # 환율이 없으면 그 건은 **세금 계산에서 뺀다.** 오늘 환율로 메우면
+        # 과세표준이 거짓이 된다(현재 17건 전부 환율이 들어와 있다).
+        if r.buy_exchange_rate is None or r.sell_exchange_rate is None:
+            continue
+        sell_local = r.sell_amount_local or zero
+        buy_local = r.buy_amount_local or zero
+        cost_local = r.commission_tax_local or zero
+
+        sale_proceeds = (sell_local * r.sell_exchange_rate).quantize(
+            _MONEY, rounding=ROUND_HALF_UP
+        )
+        sale_cost = (buy_local * r.buy_exchange_rate).quantize(
+            _MONEY, rounding=ROUND_HALF_UP
+        )
+        # 필요경비(수수료·세금)는 매도 시점에 나간 돈이므로 매도일 환율로 본다.
+        sale_expense = (cost_local * r.sell_exchange_rate).quantize(
+            _MONEY, rounding=ROUND_HALF_UP
+        )
+
+        proceeds += sale_proceeds
+        cost_basis += sale_cost
+        expense += sale_expense
+        broker_gain += (r.pnl_krw or zero) + (r.fx_pnl_krw or zero)
+
+        sales.append(
+            TaxSaleOut(
+                ticker=r.ticker,
+                name=r.asset_name,
+                sell_date=r.sell_date,
+                quantity=r.quantity,
+                proceeds_krw=sale_proceeds,
+                cost_basis_krw=sale_cost,
+                expense_krw=sale_expense,
+                gain_krw=sale_proceeds - sale_cost - sale_expense,
+            )
+        )
+
+    gain = proceeds - cost_basis - expense
+    # ⚠️과세표준은 음수가 되지 않는다. 손실이면 0 이고, **다음 해로 이월되지 않는다.**
+    taxable = max(gain - _TAX_DEDUCTION, zero)
+    dividend_rows = [d for d in dividends if d.pay_date.year == target]
+
+    return TaxOut(
+        years=years,
+        current=TaxYearOut(
+            year=target,
+            sale_count=len(sales),
+            proceeds_krw=proceeds,
+            cost_basis_krw=cost_basis,
+            expense_krw=expense,
+            gain_krw=gain,
+            gain_krw_broker=broker_gain,
+            method_diff_krw=gain - broker_gain,
+            deduction_krw=_TAX_DEDUCTION,
+            taxable_base_krw=taxable,
+            tax_rate=_TAX_RATE,
+            tax_krw=(taxable * _TAX_RATE).quantize(_MONEY, rounding=ROUND_HALF_UP),
+            headroom_krw=_TAX_DEDUCTION - gain,
+            dividend_krw=sum((d.amount_krw for d in dividend_rows), zero),
+            dividend_count=len(dividend_rows),
+            comprehensive_threshold_krw=_COMPREHENSIVE_THRESHOLD,
+            # 손실이 큰 건이 위로 — 통산에 무엇이 들어갔는지가 먼저 궁금하다.
+            sales=sorted(sales, key=lambda s: s.gain_krw),
+        ),
+        notes=_TAX_NOTES,
     )

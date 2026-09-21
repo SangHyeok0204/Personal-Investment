@@ -1207,3 +1207,68 @@ class MonthlyCashflowOut(BaseModel):
     first_month: str | None
     last_month: str | None
     note: str
+
+
+# ── 세금 (해외주식 양도소득 · 배당소득) ──────────────────────────────────────
+
+class TaxSaleOut(BaseModel):
+    """매도 한 건의 양도차익. **체결일 환율로 환산한 원화 기준이다.**
+
+    ⚠️`realized_pnl.buy_amount_krw` 를 취득가액으로 쓰면 안 된다. 그 칸은
+      매수·매도를 **같은 환율**(실측 ≈1,372)로 환산한 값이라, 세법이 말하는
+      "매수일 환율로 환산한 취득가액"이 아니다. 체결일 환율이 따로 들어와 있다.
+    """
+
+    ticker: str
+    name: str | None
+    sell_date: date
+    quantity: Decimal
+    proceeds_krw: Decimal
+    cost_basis_krw: Decimal
+    expense_krw: Decimal
+    gain_krw: Decimal
+
+
+class TaxYearOut(BaseModel):
+    """한 해의 해외주식 양도소득 + 배당소득.
+
+    ⚠️여기서는 **환차손익을 양도차익에 포함한다.** 다른 화면에서는 주가 손익과
+      환차 손익을 섞지 말라고 해 놓고 여기서만 합치는 게 아니라, 질문이 다르다 —
+      세법의 양도차익은 원화 기준 양도가액 − 취득가액이므로 환율 변동이
+      **과세 대상 그 자체**다. 종목 선택이 좋았는지를 묻는 화면과는 다른 질문이다.
+    """
+
+    year: int
+    sale_count: int
+    proceeds_krw: Decimal
+    cost_basis_krw: Decimal
+    expense_krw: Decimal
+    #: 체결일 환율로 계산한 양도차익(법정 정의).
+    gain_krw: Decimal
+    #: 증권사가 준 값(pnl_krw + fx_pnl_krw). 같은 것을 다르게 센 결과다.
+    gain_krw_broker: Decimal
+    #: 두 방식의 차이. **숨기지 않는다** — 0 이 아니면 둘 중 하나는 근사다.
+    method_diff_krw: Decimal
+    deduction_krw: Decimal
+    taxable_base_krw: Decimal
+    tax_rate: Decimal
+    tax_krw: Decimal
+    #: 기본공제까지 남은 여유. 음수면 이미 과세 구간이다.
+    headroom_krw: Decimal
+    dividend_krw: Decimal
+    dividend_count: int
+    #: 금융소득종합과세 기준(2,000만원). 넘으면 분리과세로 끝나지 않는다.
+    comprehensive_threshold_krw: Decimal
+    sales: list[TaxSaleOut]
+
+
+class TaxOut(BaseModel):
+    """세금 추정.
+
+    ⚠️**신고 자료가 아니다.** 증권사 원장·기준환율·해외납부세액공제를 반영하지
+      않았고, 배당이 세전인지 세후인지도 확인할 수 없다(notes 참고).
+    """
+
+    years: list[int]
+    current: TaxYearOut | None
+    notes: list[str]

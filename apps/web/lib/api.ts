@@ -3619,6 +3619,60 @@ export function getTradingCosts(
   );
 }
 
+// ── 세금 (해외주식 양도소득 · 배당소득) ──────────────────────────────────────
+// ⚠️**신고 자료가 아니다.** 그리고 여기서만 환차를 양도차익에 더한다 —
+//   세법의 양도차익은 원화 기준 양도가액 − 취득가액이라 환율이 과세 대상이다.
+
+export interface TaxSale {
+  ticker: string;
+  name: string | null;
+  sell_date: string;
+  quantity: string;
+  proceeds_krw: string;
+  cost_basis_krw: string;
+  expense_krw: string;
+  gain_krw: string;
+}
+
+export interface TaxYear {
+  year: number;
+  sale_count: number;
+  proceeds_krw: string;
+  cost_basis_krw: string;
+  expense_krw: string;
+  /** 체결일 환율로 계산한 양도차익(법정 정의). */
+  gain_krw: string;
+  /** 증권사가 준 값(주가손익 + 환차손익). */
+  gain_krw_broker: string;
+  /** 두 방식의 차이 — 숨기지 않는다. */
+  method_diff_krw: string;
+  deduction_krw: string;
+  taxable_base_krw: string;
+  tax_rate: string;
+  tax_krw: string;
+  /** 기본공제까지 남은 여유. 음수면 이미 과세 구간이다. */
+  headroom_krw: string;
+  dividend_krw: string;
+  dividend_count: number;
+  comprehensive_threshold_krw: string;
+  sales: TaxSale[];
+}
+
+export interface Tax {
+  years: number[];
+  current: TaxYear | null;
+  notes: string[];
+}
+
+export function getTax(
+  accountId?: string | null,
+  year?: number | null,
+): Promise<Tax> {
+  const q = accountQuery(accountId);
+  const suffix = year ? `${q ? `${q}&` : "?"}year=${year}` : q;
+  return request<Tax>(`/api/v1/portfolio/tax${suffix}`);
+}
+
 // ── 월별 현금흐름 ────────────────────────────────────────────────────────────
 // ★여기 금액은 **전부 원화**다. 원천이 account_daily_performance 하나뿐이라
 //   통화를 섞을 일이 없다 — 수수료/세금 화면(USD, trades 원천)과는 다른 출처다.
