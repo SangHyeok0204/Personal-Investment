@@ -59,6 +59,8 @@ export function StatTile({
   hint,
   accent,
   loading,
+  onClick,
+  actionHint,
 }: {
   label: string;
   value?: string | null;
@@ -66,6 +68,10 @@ export function StatTile({
   /** "auto" 면 값의 부호를 보고 상승/하락 색을 고른다. */
   accent?: "up" | "down" | "neutral" | "auto";
   loading?: boolean;
+  /** 누르면 상세를 연다. 주면 카드가 버튼이 된다. */
+  onClick?: () => void;
+  /** 호버할 때 카드 아래에 뜨는 안내(예: "눌러서 추이 보기"). */
+  actionHint?: string;
 }) {
   const shown = loading ? "…" : (value ?? "—");
   const resolved =
@@ -77,8 +83,28 @@ export function StatTile({
           : "neutral"
       : accent;
 
+  const interactive = onClick != null;
   return (
-    <div className="rounded-2xl border border-hairline bg-canvas p-4 shadow-card">
+    <div
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        interactive
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        "group relative rounded-2xl border border-hairline bg-canvas p-4 shadow-card",
+        interactive &&
+          "cursor-pointer transition-all hover:border-ge-point/40 hover:shadow-panel focus:outline-none focus-visible:border-ge-point",
+      )}
+    >
       <div className="text-[11px] font-bold tracking-wide text-ink-muted">
         {label}
       </div>
@@ -95,6 +121,12 @@ export function StatTile({
       </div>
       {hint && (
         <div className="mt-1.5 text-[11px] font-medium text-ink-faint">{hint}</div>
+      )}
+      {/* 누를 수 있다는 걸 호버에서만 알린다 — 평소엔 숫자가 주인공이다. */}
+      {interactive && actionHint && (
+        <div className="pointer-events-none absolute inset-x-4 bottom-2 text-[10px] font-bold text-ge-point opacity-0 transition-opacity group-hover:opacity-100">
+          {actionHint}
+        </div>
       )}
     </div>
   );

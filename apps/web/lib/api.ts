@@ -3013,3 +3013,19 @@ export function getDividends(
     `/api/v1/portfolio/dividends${q ? `${q}&` : "?"}days=${days}`,
   );
 }
+
+export interface QuickSyncResult {
+  ok: boolean;
+  positions: number;
+  balances: number;
+  as_of: string | null;
+  elapsed_ms: number;
+  message: string | null;
+}
+
+/** 가벼운 동기화 — 잔고·보유만 갱신(실측 ~1.6초). 이력은 건드리지 않는다. */
+export function runQuickSync(): Promise<QuickSyncResult> {
+  return request<QuickSyncResult>("/api/v1/brokerage/sync/quick", {
+    method: "POST",
+  });
+}

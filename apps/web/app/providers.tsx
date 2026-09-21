@@ -5,6 +5,7 @@ import { useState } from "react";
 import { SidebarProvider } from "@/components/layout/sidebar-context";
 import { AccountProvider } from "@/components/layout/account-context";
 import { ConnectProvider } from "@/components/brokerage/connect-context";
+import { AutoRefreshProvider } from "@/components/layout/auto-refresh-context";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -27,7 +28,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
         {/* 선택된 계좌 — 상단 바가 고르고 각 화면이 읽는다(계좌 목록도 여기서 한 번만). */}
         <AccountProvider>
           {/* 계좌 연동 팝업 — 여러 화면에서 열리므로 루트에 하나만 둔다. */}
-          <ConnectProvider>{children}</ConnectProvider>
+          <ConnectProvider>
+            {/* 자동 갱신 — 화면 5초, 증권사 잔고 30초(장중·탭 활성일 때만) */}
+            <AutoRefreshProvider>{children}</AutoRefreshProvider>
+          </ConnectProvider>
         </AccountProvider>
       </SidebarProvider>
     </QueryClientProvider>

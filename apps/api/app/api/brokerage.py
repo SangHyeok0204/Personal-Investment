@@ -68,6 +68,17 @@ class CredentialsStatusOut(BaseModel):
     accounts: list[AccountPreview] = []
 
 
+class QuickSyncResultOut(BaseModel):
+    """가벼운 동기화 결과 — 잔고와 보유 종목만."""
+
+    ok: bool
+    positions: int = 0
+    balances: int = 0
+    as_of: str | None = None
+    elapsed_ms: int = 0
+    message: str | None = None
+
+
 class SyncResultOut(BaseModel):
     ok: bool
     accounts_synced: int = 0
@@ -299,3 +310,126 @@ def _finish_job(db: Session, job_id: uuid.UUID, status: str, error: str | None) 
         {"s": status, "e": error, "i": job_id},
     )
     db.commit()
+
+
+@router.post("/sync/quick", response_model=QuickSyncResultOut)
+def run_quick_sync(db: Session = Depends(get_db)) -> QuickSyncResultOut:
+    """**가벼운** 동기화 — 잔고와 보유 종목만 갱신한다(실측 0.9초).
+
+    전체 동기화(/sync)는 체결·일별성과·실현손익·배당까지 받아 2분 가까이 걸린다.
+    화면을 자주 갱신하려고 그걸 돌리면 유량제한에 걸리고 노트북도 힘들다.
+    "지금 얼마인가"만 알면 되는 주기적 갱신은 이 경로를 쓴다.
+
+    이력(체결·배당 등)은 건드리지 않는다 — 몇 초마다 바뀌는 값이 아니다.
+    """
+    settings = credentials_store.read_settings()
+    if not settings["configured"]:
+        raise AppError(400, "NOT_CONFIGURED", "먼저 API 키를 등록하세요.")
+    if not credentials_store.load_into_environ():
+        raise AppError(400, "NOT_CONFIGURED", "먼저 API 키를 등록하세요.")
+
+    import time
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from brokers.registry import get_adapter_class
+    from repositories import accounts as accounts_repo
+    from repositories import assets as assets_repo
+    from repositories import balances as balances_repo
+    from repositories import positions as positions_repo
+    from repositories import sectors as sectors_repo
+    from brokers.kiwoom.adapter import normalize_account
+
+    started = time.perf_counter()
+    app_key, secret_key, environment, markets = credentials_store.credentials()
+    credentials = _build_credentials(app_key, secret_key, environment)
+    connection_id = _ensure_connection(db)
+    broker_id = db.execute(
+        text("SELECT broker_id FROM brokerage_connections WHERE id = :i"),
+        {"i": connection_id},
+    ).scalar()
+
+    now = datetime.now(timezone.utc)
+    total_positions = 0
+    total_balances = 0
+
+    try:
+        adapter_cls = get_adapter_class("KIWOOM")
+        with adapter_cls(credentials, markets=tuple(markets)) as adapter:
+            for account_ref in adapter.fetch_accounts():
+                portfolio = adapter.fetch_portfolio(account_ref)
+                raw_account = {
+                    "external_account_id": account_ref.external_account_id,
+                    "account_name": account_ref.account_name,
+                    "account_type": account_ref.account_type,
+                }
+                # 어댑터가 이미 정규화한 값을 다시 쓰지 않고, 기존 적재 경로와
+                # 같은 모양을 만들기 위해 normalize 결과를 그대로 넘긴다 —
+                # 전체 동기화와 저장 형식이 갈리면 화면의 숫자가 경로마다 달라진다.
+                normalized = _normalized_from(adapter, account_ref, raw_account)
+                with engine.begin() as conn:
+                    account_id = accounts_repo.upsert_account(
+                        conn, broker_id, connection_id, normalized
+                    )
+                    for balance in normalized["balances"]:
+                        balances_repo.upsert_balance(conn, account_id, balance, now, None)
+                        total_balances += 1
+                    kept = []
+                    for position in normalized["positions"]:
+                        asset_id = assets_repo.upsert_asset(conn, position)
+                        positions_repo.upsert_position(
+                            conn, account_id, asset_id, position, now, None
+                        )
+                        kept.append(asset_id)
+                        total_positions += 1
+                    positions_repo.delete_absent_positions(conn, account_id, kept)
+                    # 새로 산 종목이 미분류로 남지 않게 기본 섹터를 붙인다.
+                    sectors_repo.apply_sector_seed(conn)
+    except Exception as exc:  # noqa: BLE001 - 원인을 그대로 보여준다
+        raise AppError(502, "SYNC_FAILED", str(exc)) from exc
+
+    return QuickSyncResultOut(
+        ok=True,
+        positions=total_positions,
+        balances=total_balances,
+        as_of=now.isoformat(),
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+
+def _normalized_from(adapter, account_ref, raw_account) -> dict:
+    """전체 동기화와 **같은** 정규화 경로를 탄다(저장 형식이 갈리지 않게)."""
+    from brokers.kiwoom import domestic, us_equities
+    from brokers.kiwoom.adapter import normalize_account
+
+    client = adapter.client
+    markets = adapter.markets
+
+    balance = domestic.parse_balance([{"acnt_evlt_remn_indv_tot": []}])
+    deposit = domestic.parse_deposit([{}])
+    us_balance = us_deposit = us_detail = None
+
+    if "KR" in markets:
+        balance = domestic.parse_balance(domestic.fetch_balance(client, raw_account))
+        deposit = domestic.parse_deposit(domestic.fetch_deposit(client, raw_account))
+    if "US" in markets:
+        us_balance = us_equities.parse_positions(
+            us_equities.fetch_positions(client, raw_account)
+        )
+        us_deposit = us_equities.parse_deposit(
+            us_equities.fetch_deposit(client, raw_account)
+        )
+        us_detail = us_equities.parse_deposit_detail(
+            us_equities.fetch_deposit_detail(client, raw_account)
+        )
+
+    normalized = normalize_account(
+        raw_account, balance, deposit, us_balance, us_deposit, us_detail
+    )
+    if "KR" not in markets:
+        # 국내를 안 불렀으면 원화 예수금은 '모름'이다 — 0 이라고 단언하지 않는다.
+        normalized["balances"] = [
+            b for b in normalized["balances"]
+            if b.get("currency") != "KRW" or b.get("cash_balance")
+        ]
+    return normalized

@@ -1,16 +1,20 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
+import { useLiveQueryOptions } from "@/components/layout/auto-refresh-context";
+import { SeriesChart } from "@/components/charts/series-chart";
+import { DonutChart, type DonutSlice } from "@/components/charts/donut-chart";
+import { Modal } from "@/components/ui/modal";
 import {
   Cell,
   DataTable,
   NotConnectedBanner,
-  PlannedList,
   StatRow,
   StatTile,
   StubCard,
@@ -25,8 +29,6 @@ import {
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
-import { SeriesChart } from "@/components/charts/series-chart";
-import { cn } from "@/lib/utils";
 import {
   formatKrwSigned,
   formatKrwString,
@@ -34,38 +36,46 @@ import {
   formatPriceString,
   formatQuantityString,
 } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 // 개인 대시보드의 1면 — 자산 현황.
 //
-// ★2026-09-21 2차: 상단 4칸·보유 종목 표를 실제 API(/api/v1/portfolio/*)에 물렸다.
-//   계좌가 아직 없으면 서버가 합계를 null 로 주고, 화면은 "—" 와 연동 안내를 띄운다.
-//   0원으로 그리지 않는다 — 0원과 미연동은 다른 상태다.
-//
-// 자산 추이·자산 배분은 아직 골격이다: 추이는 portfolio_snapshots 가 쌓여야 의미가
-// 있고(수집 배치가 먼저), 배분은 종목 분류(0003) 를 붙여야 한다.
+// ★2026-09-21 사용자 요청 반영:
+//   · 평가손익 카드를 누르면 **자산 추이를 가운데 팝업**으로 크게 본다.
+//     (상단 카드 옆의 작은 차트는 "지금 얼마"를 방해하지 않게 유지하고,
+//      자세히 볼 때만 팝업을 연다.)
+//   · 보유 종목을 **도넛 + 범례**로 보여주고, 조각을 누르면 그 종목 상세가 팝업으로.
+//   · 5초마다 화면을 갱신한다(useLiveQueryOptions).
 
 export default function PortfolioPage() {
   const { accountId, connected, isError: accountsError } = useAccount();
+  const live = useLiveQueryOptions();
+  const [trendOpen, setTrendOpen] = useState(false);
+  const [picked, setPicked] = useState<PortfolioHolding | null>(null);
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
     queryFn: () => getPortfolioSummary(accountId),
-    staleTime: 30_000,
+    staleTime: 3_000,
+    ...live,
   });
 
   const holdings = useQuery({
     queryKey: ["portfolioHoldings", accountId],
     queryFn: () => getPortfolioHoldings(accountId),
-    staleTime: 30_000,
+    staleTime: 3_000,
+    ...live,
   });
 
   const allocation = useQuery({
     queryKey: ["portfolioAllocation", "sector", accountId],
     queryFn: () => getPortfolioAllocation("sector", accountId),
-    staleTime: 30_000,
+    staleTime: 3_000,
+    ...live,
   });
 
-  // 자산 추이 — 우리가 스냅샷을 쌓지 않고 증권사가 들고 있던 과거를 읽는다.
+  // 자산 추이 — 증권사가 들고 있던 과거를 읽는다(우리가 스냅샷을 쌓지 않는다).
+  // 이 값은 하루 단위라 5초 폴링에 얹지 않는다.
   const performance = useQuery({
     queryKey: ["performance", accountId, 365],
     queryFn: () => getPerformance(accountId, 365),
@@ -74,7 +84,31 @@ export default function PortfolioPage() {
 
   const s = summary.data;
   const rows = holdings.data?.items ?? [];
+  const totalKrw = holdings.data?.total_market_value_krw ?? null;
   const loading = summary.isLoading;
+
+  const holdingSlices: DonutSlice[] = useMemo(
+    () =>
+      rows.map((h) => ({
+        key: h.asset_id,
+        label: h.name ?? h.ticker,
+        value: Number(h.market_value_krw ?? 0),
+        caption: formatKrwString(h.market_value_krw),
+      })),
+    [rows],
+  );
+
+  const sectorSlices: DonutSlice[] = useMemo(
+    () =>
+      (allocation.data?.items ?? []).map((a) => ({
+        key: a.key ?? "__none__",
+        label: a.label,
+        value: Number(a.market_value_krw),
+        caption: formatKrwString(a.market_value_krw),
+        muted: a.key == null,
+      })),
+    [allocation.data],
+  );
 
   return (
     <>
@@ -108,6 +142,8 @@ export default function PortfolioPage() {
             }
             accent="auto"
             loading={loading}
+            onClick={() => setTrendOpen(true)}
+            actionHint="눌러서 자산 추이 보기"
           />
           <StatTile
             label="보유종목 평가액"
@@ -120,67 +156,28 @@ export default function PortfolioPage() {
           <StatTile
             label="예수금"
             value={formatKrwString(s?.cash_krw)}
-            // 환율이 없어 KRW 합계에 못 들어간 외화를 여기서 드러낸다 —
-            // 합계만 보여주면 그 돈이 화면에서 통째로 사라진다.
             hint={foreignCashHint(s) ?? "주문 가능 금액"}
             loading={loading}
           />
         </StatRow>
 
-        <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+        <div className="grid gap-4 xl:grid-cols-2">
           <StubCard
-            title="자산 추이"
+            title="보유 종목"
             subtitle={
-              performance.data?.first_date
-                ? `${performance.data.first_date} ~ ${performance.data.last_date}`
-                : "예탁자산 시계열"
+              totalKrw ? `합계 ${formatKrwString(totalKrw)}` : "평가금액 비중"
             }
           >
-            {performance.data && performance.data.items.length > 0 ? (
-              <>
-                <SeriesChart
-                  height={230}
-                  points={performance.data.items.map((p) => ({
-                    date: p.base_date,
-                    value: p.deposit_assets_krw == null ? null : Number(p.deposit_assets_krw),
-                  }))}
-                  tooltipFormat={(p) =>
-                    formatKrwString(p.value == null ? null : String(Math.round(p.value)))
-                  }
-                />
-                {/* ⚠️(끝-시작)을 수익이라 부르지 않는다 — 그 사이 입금이 수익으로 보인다. */}
-                <dl className="mt-2 grid grid-cols-3 gap-2 border-t border-hairline pt-2.5 text-[11px]">
-                  <div>
-                    <dt className="text-ink-muted">순입금</dt>
-                    <dd className="font-bold tabular-nums text-ink-secondary">
-                      {formatKrwString(performance.data.net_deposit_krw)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-ink-muted">입출금 제외 증감</dt>
-                    <dd
-                      className={cn(
-                        "font-extrabold tabular-nums",
-                        Number(performance.data.gain_krw ?? 0) >= 0 ? "text-bid" : "text-ask",
-                      )}
-                    >
-                      {formatKrwSigned(performance.data.gain_krw)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-ink-muted">기간</dt>
-                    <dd className="font-bold tabular-nums text-ink-secondary">
-                      {performance.data.items.length}일
-                    </dd>
-                  </div>
-                </dl>
-              </>
-            ) : (
-              <StubChart
-                height={260}
-                note={performance.isLoading ? "불러오는 중…" : "계좌 성과 데이터 없음"}
-              />
-            )}
+            <DonutChart
+              slices={holdingSlices}
+              size={190}
+              centerLabel="보유"
+              centerValue={rows.length ? `${rows.length}종목` : undefined}
+              onSliceClick={(slice) => {
+                const found = rows.find((h) => h.asset_id === slice.key);
+                if (found) setPicked(found);
+              }}
+            />
           </StubCard>
 
           <StubCard
@@ -192,59 +189,25 @@ export default function PortfolioPage() {
                 : "평가금액(KRW) 기준"
             }
           >
-            {allocation.data && allocation.data.items.length > 0 ? (
-              <div className="space-y-2.5">
-                {allocation.data.items.slice(0, 7).map((slice) => {
-                  const pct = Number(slice.weight) * 100;
-                  return (
-                    <div key={slice.key ?? "__none__"}>
-                      <div className="mb-1 flex items-baseline justify-between gap-2">
-                        <span
-                          className={cn(
-                            "text-[12px] font-extrabold",
-                            slice.key == null ? "text-ink-muted" : "text-ge-navy",
-                          )}
-                        >
-                          {slice.label}
-                        </span>
-                        <span className="text-[11px] font-bold tabular-nums text-ink-secondary">
-                          {pct.toFixed(1)}%
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft">
-                        <div
-                          className={cn(
-                            "h-full rounded-full",
-                            slice.key == null ? "bg-slate-300" : "bg-ge-point",
-                          )}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-                <Link
-                  href="/portfolio/allocation"
-                  className="mt-1 inline-block text-[11px] font-bold text-ge-point hover:text-ge-navy"
-                >
-                  전체 배분 보기 →
-                </Link>
-              </div>
-            ) : (
-              <StubChart
-                height={260}
-                note={allocation.isLoading ? "불러오는 중…" : "분류된 보유 종목 없음"}
-              />
-            )}
+            <DonutChart
+              slices={sectorSlices}
+              size={190}
+              centerLabel="섹터"
+              centerValue={
+                sectorSlices.length ? `${sectorSlices.length}개` : undefined
+              }
+            />
+            <Link
+              href="/portfolio/allocation"
+              className="mt-2 inline-block text-[11px] font-bold text-ge-point hover:text-ge-navy"
+            >
+              전체 배분 보기 →
+            </Link>
           </StubCard>
 
           <StubCard
-            title="보유 종목"
-            subtitle={
-              holdings.data?.total_market_value_krw
-                ? `평가금액 합계 ${formatKrwString(holdings.data.total_market_value_krw)}`
-                : "평가금액 순"
-            }
+            title="보유 종목 상세"
+            subtitle="평가금액 순"
             className="xl:col-span-2"
           >
             <DataTable
@@ -271,31 +234,11 @@ export default function PortfolioPage() {
                 <HoldingRow
                   key={`${h.account_id}-${h.asset_id}`}
                   holding={h}
-                  totalKrw={holdings.data?.total_market_value_krw ?? null}
+                  totalKrw={totalKrw}
+                  onClick={() => setPicked(h)}
                 />
               ))}
             </DataTable>
-          </StubCard>
-
-          <StubCard title="오늘 체결" subtitle="당일 매매">
-            <DataTable
-              columns={["시각", "종목", "구분", "수량", "단가"]}
-              empty="체결 수집이 아직 연결되지 않았습니다"
-            >
-              {null}
-            </DataTable>
-          </StubCard>
-
-          <StubCard title="연동하면 채워질 것들">
-            <PlannedList
-              items={[
-                "키움 REST 잔고조회 → 보유종목·평단·평가손익 (API 배선 완료, 수집기 대기)",
-                "일별 잔고 스냅샷 적재 → 자산 추이 차트",
-                "종목 분류(alembic 0003) 연결 → 자산 배분 원형",
-                "체결 내역 수집 → 오늘 체결 · 매매일지 자동 초안",
-                "토스 계좌 합산 → 계좌별/통합 뷰 전환",
-              ]}
-            />
           </StubCard>
         </div>
 
@@ -309,16 +252,167 @@ export default function PortfolioPage() {
           </Link>
         </div>
       </PageContainer>
+
+      {/* 평가손익 카드를 눌러서 여는 자산 추이 */}
+      <Modal
+        open={trendOpen}
+        onClose={() => setTrendOpen(false)}
+        title="자산 추이"
+        subtitle={
+          performance.data?.first_date
+            ? `${performance.data.first_date} ~ ${performance.data.last_date}`
+            : "예탁자산 시계열"
+        }
+        width={860}
+      >
+        {performance.data && performance.data.items.length > 0 ? (
+          <>
+            <SeriesChart
+              height={320}
+              points={performance.data.items.map((p) => ({
+                date: p.base_date,
+                value:
+                  p.deposit_assets_krw == null ? null : Number(p.deposit_assets_krw),
+              }))}
+              tooltipFormat={(p) =>
+                formatKrwString(p.value == null ? null : String(Math.round(p.value)))
+              }
+            />
+            {/* ⚠️(끝-시작)을 수익이라 부르지 않는다 — 그 사이 입금이 수익으로 보인다. */}
+            <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-hairline pt-3 sm:grid-cols-4">
+              <Figure label="시작 자산" value={formatKrwString(performance.data.start_assets_krw)} />
+              <Figure label="현재 자산" value={formatKrwString(performance.data.end_assets_krw)} />
+              <Figure label="순입금" value={formatKrwString(performance.data.net_deposit_krw)} />
+              <Figure
+                label="입출금 제외 증감"
+                value={formatKrwSigned(performance.data.gain_krw)}
+                tone={Number(performance.data.gain_krw ?? 0) >= 0 ? "up" : "down"}
+              />
+            </dl>
+            <p className="mt-2 text-[11px] font-medium leading-snug text-ink-faint">
+              기간 손익은 (현재 − 시작)이 아니라 <b>순입금을 뺀 값</b>입니다. 그렇게
+              하지 않으면 그 사이 입금한 돈이 수익처럼 보입니다.
+            </p>
+          </>
+        ) : (
+          <StubChart
+            height={300}
+            note={performance.isLoading ? "불러오는 중…" : "계좌 성과 데이터 없음"}
+          />
+        )}
+      </Modal>
+
+      {/* 도넛 조각·표 행을 눌러서 여는 종목 상세 */}
+      <Modal
+        open={picked != null}
+        onClose={() => setPicked(null)}
+        title={picked ? (picked.name ?? picked.ticker) : ""}
+        subtitle={picked ? `${picked.ticker} · ${picked.market}` : undefined}
+        width={560}
+      >
+        {picked && <HoldingDetail holding={picked} totalKrw={totalKrw} />}
+      </Modal>
     </>
+  );
+}
+
+function Figure({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "up" | "down";
+}) {
+  return (
+    <div>
+      <dt className="text-[11px] font-bold text-ink-muted">{label}</dt>
+      <dd
+        className={cn(
+          "mt-0.5 text-[15px] font-extrabold tabular-nums",
+          tone === "up" && "text-bid",
+          tone === "down" && "text-ask",
+          !tone && "text-ge-navy",
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function HoldingDetail({
+  holding: h,
+  totalKrw,
+}: {
+  holding: PortfolioHolding;
+  totalKrw: string | null;
+}) {
+  const weight =
+    totalKrw && h.market_value_krw && Number(totalKrw) !== 0
+      ? `${((Number(h.market_value_krw) / Number(totalKrw)) * 100).toFixed(1)}%`
+      : "—";
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Figure label="평가금액" value={formatKrwString(h.market_value_krw)} />
+        <Figure
+          label="평가손익"
+          value={formatKrwSigned(h.unrealized_pnl_krw)}
+          tone={toneOf(h.unrealized_pnl_krw)}
+        />
+        <Figure
+          label="수익률"
+          value={formatPercentString(h.unrealized_return)}
+          tone={toneOf(h.unrealized_return)}
+        />
+        <Figure label="수량" value={formatQuantityString(h.quantity)} />
+        <Figure
+          label="평단"
+          value={formatPriceString(h.average_purchase_price, h.currency)}
+        />
+        <Figure
+          label="현재가"
+          value={formatPriceString(h.current_price, h.currency)}
+        />
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-canvas-soft/70 p-3.5 text-[12px] sm:grid-cols-3">
+        <Small label="섹터" value={h.sector ?? "미분류"} />
+        <Small label="세부 산업" value={h.industry ?? "—"} />
+        <Small label="비중" value={weight} />
+        <Small label="통화" value={h.currency} />
+        <Small
+          label="적용 환율"
+          value={h.currency === "KRW" ? "—" : formatPriceString(h.exchange_rate, "USD")}
+        />
+        <Small label="계좌" value={h.account_name ?? h.broker_code} />
+      </dl>
+      <p className="text-[11px] font-medium leading-snug text-ink-faint">
+        평가금액의 원화 환산과 적용 환율은 <b>증권사가 준 값</b>입니다 — 화면이 다시
+        계산하지 않습니다(그러면 합계와 종목별 수치가 어긋납니다).
+      </p>
+    </div>
+  );
+}
+
+function Small({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[10px] font-bold text-ink-muted">{label}</dt>
+      <dd className="mt-0.5 font-bold text-ink">{value}</dd>
+    </div>
   );
 }
 
 function HoldingRow({
   holding: h,
   totalKrw,
+  onClick,
 }: {
   holding: PortfolioHolding;
   totalKrw: string | null;
+  onClick: () => void;
 }) {
   // 비중은 KRW 평가액 기준. 합계를 모르면 계산하지 않는다(빈칸이 거짓말보다 낫다).
   const weight =
@@ -327,7 +421,10 @@ function HoldingRow({
       : "—";
 
   return (
-    <tr className="border-t border-hairline transition-colors hover:bg-canvas-soft/60">
+    <tr
+      onClick={onClick}
+      className="cursor-pointer border-t border-hairline transition-colors hover:bg-canvas-soft/60"
+    >
       <Cell left strong>
         <span className="flex items-center gap-2">
           {h.name ?? h.ticker}

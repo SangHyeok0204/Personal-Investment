@@ -13,6 +13,7 @@ import {
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { ALL_ACCOUNTS, useAccount } from "@/components/layout/account-context";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
+import { useAutoRefresh } from "@/components/layout/auto-refresh-context";
 import { runBrokerageSync } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,7 @@ export function Topbar({
   const session = useMarketSession();
   const { accountId, setAccountId, accounts, connected, isError } = useAccount();
   const { open: openConnect } = useConnectDialog();
+  const auto = useAutoRefresh();
   const queryClient = useQueryClient();
   // 상단 바 동기화 — 계좌가 이미 있으면 바로 돌리고, 없으면 연동 팝업을 연다.
   const sync = useMutation({
@@ -246,15 +248,43 @@ export function Topbar({
               )}
             </div>
 
+            {/* 자동 갱신 스위치. 끄면 폴링과 증권사 동기화가 **둘 다** 멈춘다. */}
+            <button
+              type="button"
+              onClick={() => auto.setEnabled(!auto.enabled)}
+              aria-pressed={auto.enabled}
+              title={
+                auto.enabled
+                  ? "자동 갱신 켜짐 — 화면 5초, 증권사 잔고 30초(장중·이 탭이 보일 때만)"
+                  : "자동 갱신 꺼짐"
+              }
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-bold transition-colors",
+                auto.enabled
+                  ? "border-status-success/30 bg-status-success/10 text-status-success"
+                  : "border-hairline bg-white text-ink-muted hover:bg-canvas-soft",
+              )}
+            >
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  auto.enabled ? "animate-pulse bg-status-success" : "bg-slate-300",
+                )}
+              />
+              {auto.enabled ? "자동" : "수동"}
+            </button>
+
             {/* 동기화 — syncedAt 이 없으면 아직 계좌 API 가 안 붙은 상태다. */}
             <button
               type="button"
               onClick={() => {
                 if (onSync) return onSync();
                 if (!connected) return openConnect();
-                sync.mutate();
+                // 가벼운 동기화(잔고·보유, ~1.6초). 이력까지 받는 전체 동기화는
+                // 연동 팝업에서 돌린다 — 2분 걸려 버튼 한 번에 붙일 일이 아니다.
+                auto.syncNow();
               }}
-              disabled={sync.isPending}
+              disabled={auto.syncing || sync.isPending}
               title={
                 !connected
                   ? "계좌를 연동하세요"
@@ -264,17 +294,28 @@ export function Topbar({
               }
               className="flex items-center gap-1.5 text-[12px] font-bold text-slate-500 transition-colors hover:text-slate-700 disabled:cursor-default disabled:text-slate-300"
             >
-              <RefreshCw className={cn("h-4 w-4", sync.isPending && "animate-spin")} />
-              {sync.isPending
+              <RefreshCw
+                className={cn(
+                  "h-4 w-4",
+                  (auto.syncing || sync.isPending) && "animate-spin",
+                )}
+              />
+              {auto.syncing || sync.isPending
                 ? "동기화 중"
-                : lastSynced
-                  ? new Date(lastSynced).toLocaleTimeString("ko-KR", {
+                : auto.lastSyncAt
+                  ? auto.lastSyncAt.toLocaleTimeString("ko-KR", {
                       hour: "2-digit",
                       minute: "2-digit",
+                      second: "2-digit",
                     })
-                  : connected
-                    ? "미동기화"
-                    : "연동하기"}
+                  : lastSynced
+                    ? new Date(lastSynced).toLocaleTimeString("ko-KR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : connected
+                      ? "미동기화"
+                      : "연동하기"}
             </button>
           </>
         )}
