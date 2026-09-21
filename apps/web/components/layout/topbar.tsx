@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Bell,
   ChevronDown,
@@ -86,6 +86,26 @@ export function Topbar({
   const session = useMarketSession();
   const [accountId, setAccountId] = useState("all");
   const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
+
+  // 클릭으로 여는 메뉴는 **바깥 클릭**으로 닫는다. onMouseLeave 로 닫으면 커서가
+  // 잠깐만 벗어나도 사라져서 선택을 못 한다(2026-09-21 에 그렇게 만들었다가 고침).
+  useEffect(() => {
+    if (!accountOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!accountRef.current?.contains(e.target as Node)) setAccountOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAccountOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [accountOpen]);
+
   const account =
     PLACEHOLDER_ACCOUNTS.find((a) => a.id === accountId) ??
     PLACEHOLDER_ACCOUNTS[0];
@@ -132,10 +152,7 @@ export function Topbar({
             </span>
 
             {/* 계좌 선택 — 아직 더미 목록이다. 키움 연동 후 실제 계좌로 교체한다. */}
-            <div
-              className="relative"
-              onMouseLeave={() => setAccountOpen(false)}
-            >
+            <div className="relative" ref={accountRef}>
               <button
                 type="button"
                 onClick={() => setAccountOpen((v) => !v)}

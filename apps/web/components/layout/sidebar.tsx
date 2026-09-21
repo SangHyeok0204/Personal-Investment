@@ -64,7 +64,11 @@ export function Sidebar() {
         </div>
       </Link>
 
-      <nav className="flex flex-1 flex-col gap-1.5 overflow-y-auto">
+      {/* ⚠️여기에 overflow-* 를 주면 안 된다 — 하위 메뉴가 `absolute left-full` 로
+          이 nav **바깥**에 뜨는데, CSS 상 한 축이 visible 이 아니면 다른 축도
+          auto 로 계산되어 가로로 잘린다(플라이아웃이 통째로 안 보인다).
+          2026-09-21 에 overflow-y-auto 를 넣었다가 정확히 이걸로 깨뜨렸다. */}
+      <nav className="flex flex-1 flex-col gap-1.5">
         {navItems.map((item) => {
           const Icon = item.icon;
           // 하위 경로(`/portfolio/holdings`)에 있어도 상위 그룹이 켜져 보이게 한다.

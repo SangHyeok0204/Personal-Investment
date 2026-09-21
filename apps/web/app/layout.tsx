@@ -4,8 +4,8 @@ import { Providers } from "./providers";
 import { Sidebar } from "@/components/layout/sidebar";
 
 export const metadata: Metadata = {
-  title: "GE Dashboard",
-  description: "GE 투자 인텔리전스 대시보드",
+  title: "My Portfolio",
+  description: "개인 투자 대시보드 — 계좌 · 매매 · 성과",
 };
 
 export default function RootLayout({
