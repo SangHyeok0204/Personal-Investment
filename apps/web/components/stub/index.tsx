@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { PlugZap } from "lucide-react";
+import { CloudOff, PlugZap } from "lucide-react";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,42 @@ function ConnectButton() {
     >
       계좌 연동하기
     </button>
+  );
+}
+
+/** 외부 데이터 원천에 닿지 못했을 때 띄우는 띠.
+ *
+ * ★"데이터가 없습니다"와 **"원천이 죽었습니다"는 다른 상태**다. 둘을 같은 문구로
+ *   보여 주면 사용자가 "정말 없는 건가?"를 판단할 수 없다. 실제로 어닝 화면은
+ *   Nasdaq 이 죽어도 "향후 60일 안에 예정된 발표가 없습니다"라고 말하고 있었다 —
+ *   맞는 말처럼 보이지만 거짓이다.
+ *
+ * ⚠️재시도하라고 시키지 않는다. 서버가 캐시 TTL 뒤에 자동으로 다시 받아 온다 —
+ *   사용자가 할 수 있는 일이 없는데 버튼을 두면 눌러도 안 되는 버튼이 된다.
+ */
+export function SourceDownBanner({
+  source,
+  detail,
+}: {
+  /** 어느 원천인지. 사용자가 직접 확인해 볼 수 있어야 한다. */
+  source: string;
+  detail?: string;
+}) {
+  return (
+    <div className="mb-2 flex shrink-0 items-center gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+      <CloudOff className="h-4 w-4 shrink-0 text-amber-600" />
+      <p className="text-[12px] font-semibold leading-snug text-amber-900">
+        {/* ⚠️JSX 인접 표현식 사이에는 공백이 들어가지 않는다 — 그냥 이어 쓰면
+            "아닙니다.미국 경제지표..." 처럼 붙어 버린다(실제로 그랬다).
+            각 조각을 span 으로 감싸고 앞에 여백을 준다. */}
+        <b>{source}</b> 에서 데이터를 받지 못했습니다 — 화면이 비어 있는 것은
+        값이 없어서가 아닙니다.
+        {detail && <span className="ml-1.5 font-medium">{detail}</span>}
+        <span className="ml-1.5 font-medium text-amber-800">
+          잠시 뒤 자동으로 다시 시도합니다.
+        </span>
+      </p>
+    </div>
   );
 }
 

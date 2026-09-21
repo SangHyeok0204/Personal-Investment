@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { Modal } from "@/components/ui/modal";
-import { Cell, DataTable, StatTile, StubCard } from "@/components/stub";
+import { Cell, DataTable, SourceDownBanner, StatTile, StubCard } from "@/components/stub";
 import { getMacro, type MacroRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +82,10 @@ export default function MacroPage() {
   });
 
   const rows = macro.data?.rows ?? [];
+  const sourceDown =
+    !macro.isLoading &&
+    rows.length === 0 &&
+    (macro.isError || (macro.data?.missing.length ?? 0) > 0);
   const byCategory = useMemo(() => {
     const map = new Map<string, MacroRow[]>();
     for (const r of rows) {
@@ -106,6 +110,10 @@ export default function MacroPage() {
         showAccountContext={false}
       />
       <PageContainer fit>
+        {sourceDown && (
+          <SourceDownBanner source="FRED" detail="미국 경제지표 원천입니다." />
+        )}
+
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="소비자물가 (전년 대비)"

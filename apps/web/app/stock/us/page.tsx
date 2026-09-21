@@ -6,7 +6,7 @@ import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
 import { Modal } from "@/components/ui/modal";
-import { Cell, DataTable, StatTile, StubCard } from "@/components/stub";
+import { Cell, DataTable, SourceDownBanner, StatTile, StubCard } from "@/components/stub";
 import {
   getEarnings,
   getEpsHistory,
@@ -92,10 +92,24 @@ export default function EarningsPage() {
 
   const loading = holdings.isLoading || watchlist.isLoading || earnings.isLoading;
 
+  // ★"발표가 없다"와 "원천이 죽었다"는 **다른 상태**다. Nasdaq 이 응답하면 60일
+  //   구간에는 언제나 수천 건이 있으므로(실측 4,201건), `total_scanned === 0` 은
+  //   신뢰할 수 있는 장애 신호다. 이걸 구분하지 않으면 원천이 죽었을 때 화면이
+  //   "향후 60일 안에 예정된 발표가 없습니다"라고 **거짓말**을 한다.
+  const sourceDown =
+    ready && !loading && (earnings.isError || (data?.total_scanned ?? 0) === 0);
+
   return (
     <>
       <Topbar title="미국 어닝" subtitle="내 종목 실적 발표 일정" />
       <PageContainer fit>
+        {sourceDown && (
+          <SourceDownBanner
+            source="Nasdaq"
+            detail="실적 일정 원천입니다. 발표가 없는 것이 아닙니다."
+          />
+        )}
+
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="내 종목 발표 예정"
@@ -145,6 +159,9 @@ export default function EarningsPage() {
               <Empty text="불러오는 중…" />
             ) : !ready ? (
               <Empty text="보유 종목이나 관심종목이 있어야 표시됩니다" />
+            ) : sourceDown ? (
+              // ⚠️원천 장애일 때 "발표가 없습니다"라고 쓰면 안 된다 — 거짓이다.
+              <Empty text="실적 일정을 받지 못했습니다" />
             ) : mine.length === 0 ? (
               <Empty text={`향후 ${data?.window_days ?? 60}일 안에 예정된 발표가 없습니다`} />
             ) : (

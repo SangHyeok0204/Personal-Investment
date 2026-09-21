@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { Modal } from "@/components/ui/modal";
-import { Cell, DataTable, StatTile, StubCard } from "@/components/stub";
+import { Cell, DataTable, SourceDownBanner, StatTile, StubCard } from "@/components/stub";
 import { getMarketMonitor, type MarketRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +73,11 @@ export default function MarketPage() {
   });
 
   const rows = monitor.data?.rows ?? [];
+  // 한 줄도 못 받았는데 '못 받은 목록'만 가득하면 원천이 죽은 것이다.
+  const sourceDown =
+    !monitor.isLoading &&
+    rows.length === 0 &&
+    (monitor.isError || (monitor.data?.missing.length ?? 0) > 0);
   const byCategory = useMemo(() => {
     const map = new Map<string, MarketRow[]>();
     for (const r of rows) {
@@ -104,6 +109,13 @@ export default function MarketPage() {
         showAccountContext={false}
       />
       <PageContainer fit>
+        {sourceDown && (
+          <SourceDownBanner
+            source="야후 파이낸스"
+            detail="지수·환율·원자재 시세 원천입니다."
+          />
+        )}
+
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="필라델피아 반도체"

@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { Modal } from "@/components/ui/modal";
-import { Cell, DataTable, StatTile, StubCard } from "@/components/stub";
+import { Cell, DataTable, SourceDownBanner, StatTile, StubCard } from "@/components/stub";
 import { getAiData, type Accelerator, type PackageDownloads } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +69,10 @@ export default function AiKeyDataPage() {
 
   const data = ai.data;
   const accelerators = data?.accelerators ?? [];
+  // 가속기와 SDK 는 **서로 다른 원천**이다. 한쪽만 죽을 수 있으므로 따로 본다.
+  const hardwareDown =
+    !ai.isLoading && (ai.isError || (data?.total_accelerators ?? 0) === 0);
+  const npmDown = !ai.isLoading && (ai.isError || (data?.downloads.length ?? 0) === 0);
 
   const nvidiaShare = useMemo(() => {
     if (!data || data.total_accelerators === 0) return null;
@@ -95,6 +99,25 @@ export default function AiKeyDataPage() {
         showAccountContext={false}
       />
       <PageContainer fit>
+        {(hardwareDown || npmDown) && (
+          <SourceDownBanner
+            source={
+              hardwareDown && npmDown
+                ? "Epoch AI · npm"
+                : hardwareDown
+                  ? "Epoch AI"
+                  : "npm registry"
+            }
+            detail={
+              hardwareDown && npmDown
+                ? "가속기·SDK 원천 둘 다 응답하지 않습니다."
+                : hardwareDown
+                  ? "가속기 데이터 원천입니다. SDK 다운로드는 정상입니다."
+                  : "SDK 다운로드 원천입니다. 가속기 데이터는 정상입니다."
+            }
+          />
+        )}
+
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="AI 가속기"

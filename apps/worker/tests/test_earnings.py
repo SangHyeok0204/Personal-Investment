@@ -49,8 +49,14 @@ import httpx  # noqa: E402
 from prices.earnings import fetch_eps_history  # noqa: E402
 
 
-def eps_client(rows: list[dict]) -> None:
-    """`fetch_eps_history` 가 쓰는 클라이언트를 가짜로 바꾼다."""
+def eps_client(monkeypatch, rows: list[dict]) -> None:
+    """`fetch_eps_history` 가 쓰는 클라이언트를 가짜로 바꾼다.
+
+    ⚠️`monkeypatch` 로 바꾼다. 처음엔 `mod._client = fake` 로 직접 덮었는데,
+      그게 **세션 끝까지 남아** 뒤에 오는 test_source_failure 의 '원천 장애'
+      테스트가 가짜 200 응답을 받았다. 단독 실행은 통과하고 전체 실행만
+      실패해서 원인을 찾기 어려운 종류의 오염이다.
+    """
     import prices.earnings as mod
 
     def fake(timeout: float = 15.0):
@@ -59,7 +65,7 @@ def eps_client(rows: list[dict]) -> None:
 
         return httpx.Client(transport=httpx.MockTransport(handler))
 
-    mod._client = fake  # type: ignore[assignment]
+    monkeypatch.setattr(mod, "_client", fake)
 
 
 def test_upcoming_quarter_has_no_actual(monkeypatch) -> None:
@@ -68,6 +74,7 @@ def test_upcoming_quarter_has_no_actual(monkeypatch) -> None:
     그대로 읽으면 "컨센 2.47 vs 실제 0" → 서프라이즈 -2.47 이라는 가짜가 나온다.
     """
     eps_client(
+        monkeypatch,
         [
             {"type": "PreviousQuarter", "period": "Jul 2026", "consensus": 2.09, "earnings": 2.22},
             {"type": "UpcomingQuarter", "period": "Oct 2026", "consensus": 2.47, "earnings": 0.0},
@@ -84,7 +91,8 @@ def test_upcoming_quarter_has_no_actual(monkeypatch) -> None:
 def test_past_quarter_may_legitimately_be_zero(monkeypatch) -> None:
     """값이 아니라 **구분**으로 판정하는 이유 — 과거에 정말 0.00 일 수 있다."""
     eps_client(
-        [{"type": "PreviousQuarter", "period": "Jan 2026", "consensus": 0.02, "earnings": 0.0}]
+        monkeypatch,
+        [{"type": "PreviousQuarter", "period": "Jan 2026", "consensus": 0.02, "earnings": 0.0}],
     )
     row = fetch_eps_history("X")[0]
     assert row.actual == Decimal("0")
