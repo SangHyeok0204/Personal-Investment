@@ -243,19 +243,26 @@ def test_position_name_is_read_from_asset_name_key():
 def test_kiwoom_percent_return_is_converted_to_ratio():
     """키움 prft_rt 는 퍼센트(17.45 = 17.45%). 경계 안쪽은 비율로 통일한다.
 
-    변환하지 않으면 화면에 1745% 로 뜬다 — 예외 없이 100배 틀린다.
+    ★변환 지점은 adapter.percent_to_ratio 하나다. 2026-09-21 에 이 변환이
+     broker.py 에만 있어서, normalize_account 결과를 직접 DB 에 쓰는 워커 경로는
+     퍼센트를 그대로 저장했고 화면에 -269% / +2890% 로 떴다. 두 경로가 반드시
+     지나는 정규화 지점으로 옮겼다.
     """
+    from brokers.kiwoom.adapter import percent_to_ratio
+
+    assert percent_to_ratio("17.45") == Decimal("0.1745")
+    assert percent_to_ratio("-14.71") == Decimal("-0.1471")
+    assert percent_to_ratio(None) is None
+    assert percent_to_ratio("") is None
+
+
+def test_position_row_does_not_convert_again():
+    """broker 는 이미 비율인 값을 그대로 싣는다 — 두 번 나누면 100배 작아진다."""
     row = _to_position_row({
         "ticker": "005930", "asset_name": "삼성전자",
-        "quantity": "1", "currency": "KRW", "unrealized_return": "17.45",
+        "quantity": "1", "currency": "KRW", "unrealized_return": Decimal("0.1745"),
     })
     assert row.unrealized_return == Decimal("0.1745")
-
-    loss = _to_position_row({
-        "ticker": "000660", "asset_name": "SK하이닉스",
-        "quantity": "4", "currency": "KRW", "unrealized_return": "-14.71",
-    })
-    assert loss.unrealized_return == Decimal("-0.1471")
 
 
 def test_missing_return_stays_none_not_zero():

@@ -57,6 +57,22 @@ US_MARKET_DEFAULT = "US"
 _US_EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 
 
+# 키움은 수익률을 **퍼센트**로 준다(prft_rt/pl_rt: 5.16 = 5.16%). 이 시스템의 경계
+# 안쪽은 전부 **비율**(0.0516)로 통일한다 — API·화면·집계가 그 전제로 짜여 있다.
+#
+# ★2026-09-21: 이 변환이 broker.py(_to_position_row)에만 있었다. 그런데 워커의
+#   동기화 핸들러는 normalize_account 결과를 **직접** DB 에 쓰므로 그 경로는 퍼센트가
+#   그대로 저장됐고, 화면에 -269% / +2890% 로 떴다. 두 경로가 반드시 지나는
+#   여기(정규화 지점)로 변환을 옮긴다 — 경계 변환은 한 곳에만 있어야 한다.
+_PERCENT = Decimal("100")
+
+
+def percent_to_ratio(value):
+    """퍼센트 → 비율. None 은 None 으로 둔다(0% 로 바꾸면 '미수집'이 '본전'이 된다)."""
+    dec = to_decimal(value)
+    return None if dec is None else dec / _PERCENT
+
+
 def to_decimal(value):
     """Parse a Kiwoom numeric field to Decimal; None for empty/unparseable input.
 
@@ -164,7 +180,7 @@ def _domestic_positions(balance):
                 "current_price": to_decimal(holding.cur_prc),
                 "market_value_local": market_value_local,
                 "unrealized_pnl_local": unrealized_pnl_local,
-                "unrealized_return": to_decimal(holding.prft_rt),
+                "unrealized_return": percent_to_ratio(holding.prft_rt),
                 "exchange_rate": DOMESTIC_EXCHANGE_RATE,
                 "market_value_krw": market_value_local,
                 "unrealized_pnl_krw": unrealized_pnl_local,
@@ -199,7 +215,7 @@ def _us_positions(us_balance):
                 "current_price": to_decimal(holding.now_pric),
                 "market_value_local": to_decimal(holding.evlt_amt),
                 "unrealized_pnl_local": to_decimal(holding.pl_amt),
-                "unrealized_return": to_decimal(holding.pl_rt),
+                "unrealized_return": percent_to_ratio(holding.pl_rt),
                 "exchange_rate": to_decimal(holding.exch_rate),
                 "market_value_krw": to_decimal(holding.evlt_amt_krw),
                 "unrealized_pnl_krw": to_decimal(holding.pl_amt_krw),

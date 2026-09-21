@@ -29,7 +29,12 @@ from ..registry import register
 from . import auth as auth_module
 from . import domestic
 from . import us_equities
-from .adapter import mask_account_number, normalize_account, to_decimal
+from .adapter import (
+    mask_account_number,
+    normalize_account,
+    percent_to_ratio as _percent_to_ratio,
+    to_decimal,
+)
 from .client import KiwoomClient
 from .exceptions import KiwoomApiError, KiwoomAuthError
 
@@ -419,14 +424,6 @@ def _classify_auth_failure(message: str) -> str:
     return "unknown"
 
 
-# 키움은 수익률을 **퍼센트**로 준다(prft_rt/pl_rt: 17.45 = 17.45%). 이 시스템의
-# 경계 안쪽은 전부 **비율**(0.1745)로 통일한다 — API·화면·집계가 한 단위를 쓰지
-# 않으면 어딘가에서 100배가 튄다. 변환은 증권사 경계인 여기서 한 번만 한다.
-# 실측 검산(2026-09-21, 실계좌): 손익 -1,288,406 / 매입 8,759,000 = -14.71%,
-# 키움 보고값 -14.71 — 퍼센트가 맞다.
-_PERCENT = Decimal("100")
-
-
 def _to_position_row(p: dict) -> PositionRow:
     return PositionRow(
         country=p.get("country", "KR"),
@@ -442,7 +439,9 @@ def _to_position_row(p: dict) -> PositionRow:
         current_price=_opt(p.get("current_price")),
         market_value_local=_opt(p.get("market_value_local")),
         unrealized_pnl_local=_opt(p.get("unrealized_pnl_local")),
-        unrealized_return=_percent_to_ratio(p.get("unrealized_return")),
+        # ⚠️여기서 다시 나누지 않는다 — adapter.percent_to_ratio 가 이미 비율로
+        #   바꿔 놨다. 두 번 나누면 100배 작아진다.
+        unrealized_return=_opt(p.get("unrealized_return")),
         exchange_rate=_opt(p.get("exchange_rate")),
         market_value_krw=_opt(p.get("market_value_krw")),
         unrealized_pnl_krw=_opt(p.get("unrealized_pnl_krw")),
@@ -450,10 +449,7 @@ def _to_position_row(p: dict) -> PositionRow:
     )
 
 
-def _percent_to_ratio(value):
-    """퍼센트 → 비율. None 은 None 으로 둔다(0% 로 바꾸면 '미수집'이 '본전'이 된다)."""
-    dec = _opt(value)
-    return None if dec is None else dec / _PERCENT
+
 
 
 def _to_balance_row(b: dict) -> BalanceRow:

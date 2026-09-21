@@ -19,12 +19,13 @@ token-metadata.json (issued_at/expires_at) lands in the raw dir.
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pydantic import ValidationError
 from sqlalchemy import text
 
 from brokers.credentials import EnvCredentialResolver
+from brokers.registry import get_adapter_class
 from brokers.kiwoom import auth, domestic, us_equities
 from brokers.kiwoom.adapter import normalize_account
 from brokers.kiwoom.client import KiwoomClient
@@ -34,6 +35,7 @@ from repositories import assets as assets_repo
 from repositories import balances as balances_repo
 from repositories import positions as positions_repo
 from repositories import raw_responses as raw_repo
+from repositories import history as history_repo
 from repositories import snapshots as snapshots_repo
 
 DEFAULT_BASE_URL = "https://api.kiwoom.com"
@@ -41,6 +43,11 @@ CONFIG_ERROR_MESSAGE = "KIWOOM_APP_KEY/KIWOOM_SECRET_KEY is not configured"
 
 # 자격증명 출처. 테스트나 다른 배포 형태에서 갈아끼울 수 있게 모듈 수준에 둔다.
 _CREDENTIAL_RESOLVER = EnvCredentialResolver()
+
+# 이력(체결·일별성과·실현손익)을 얼마나 거슬러 받을지. 증권사 상한(체결 1년,
+# 실현손익 6개월)은 어댑터가 창을 나눠 처리하므로 여기서는 원하는 기간만 정한다.
+# 730일: 2년치면 "작년 이맘때"를 비교할 수 있고, 조회 비용도 감당된다.
+HISTORY_DAYS = int(os.environ.get("KIWOOM_HISTORY_DAYS", "730"))
 
 
 # ---- connection helpers (no dedicated repo per contract §5 structure) ---------
@@ -146,6 +153,18 @@ def _last_saved_path(registrations):
     return registrations[-1][2] if registrations else "unknown"
 
 
+def _account_ref(raw_account):
+    """어댑터 계약(AccountRef)으로 바꾼다. 이력 조회는 계좌번호를 요청에 넣지 않지만,
+    계약상 계좌를 받게 돼 있어 형태를 맞춘다."""
+    from brokers.base import AccountRef
+
+    return AccountRef(
+        external_account_id=raw_account.get("external_account_id", ""),
+        account_name=raw_account.get("account_name"),
+        account_type=raw_account.get("account_type"),
+    )
+
+
 # ---- handler ------------------------------------------------------------------
 
 def run(engine, job_id, payload, storage_dir, log_job):
@@ -171,6 +190,12 @@ def run(engine, job_id, payload, storage_dir, log_job):
         app_key = credentials.app_key
         secret_key = credentials.secret_key
         base_url = credentials.base_url
+        # 조회할 시장. 안 보는 시장의 TR 을 매번 부르면 유량제한만 축낸다.
+        markets = tuple(
+            m.strip().upper()
+            for m in os.environ.get("KIWOOM_MARKETS", "KR,US").split(",")
+            if m.strip()
+        ) or ("KR", "US")
 
         # 지문만 남긴다 — 어느 자격증명으로 돌았는지는 알 수 있고 키는 안 샌다.
         log_job(
@@ -205,7 +230,22 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     f"Fetched {len(accounts_info)} account(s)")
 
             # 4. fetch_domestic_balance (kt00001 예수금) ----------------------
+            # ★2026-09-21: 시장 선택(KIWOOM_MARKETS)을 잔고 조회에도 적용한다.
+            #   KR 을 끄면 kt00001/kt00018 을 **아예 부르지 않는다** — 안 보는 시장의
+            #   TR 을 매번 부르면 유량제한만 축낸다.
+            #   ⚠️국내를 끄면 원화 예수금(kt00001 의 D+2)을 모르게 된다. 어댑터와
+            #     달리 여기서는 빈 응답을 넣는데, _krw_cash_row 가 0 을 만들어 내므로
+            #     아래 normalize 뒤에 그 행을 걷어낸다(0 원과 '모름'은 다르다).
             for index, account in enumerate(accounts_info):
+                if "KR" not in markets:
+                    per_account.append(
+                        {
+                            "index": index,
+                            "account": account,
+                            "deposit": domestic.parse_deposit([{}]),
+                        }
+                    )
+                    continue
                 deposit_pages = domestic.fetch_deposit(client, account)
                 for rel_path, digest in _save_pages(
                     abs_dir, rel_dir, f"kt00001_deposit_{index}", deposit_pages
@@ -224,6 +264,11 @@ def run(engine, job_id, payload, storage_dir, log_job):
 
             # 5. fetch_domestic_positions (kt00018 잔고) ----------------------
             for entry in per_account:
+                if "KR" not in markets:
+                    entry["balance"] = domestic.parse_balance(
+                        [{"acnt_evlt_remn_indv_tot": []}]
+                    )
+                    continue
                 balance_pages = domestic.fetch_balance(client, entry["account"])
                 for rel_path, digest in _save_pages(
                     abs_dir, rel_dir, f"kt00018_balance_{entry['index']}", balance_pages
@@ -241,6 +286,7 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     f"Fetched {total_holdings} holding row(s)")
 
             # 6. fetch_us_balance (ust21110 예수금 + ust21160 예수금상세) -------
+            # US 를 끄면 해외 TR 을 건너뛴다.
             # ust21160 is required, not optional: it is the ONLY source of
             # usd_exch_rate AND of the settled D+2 USD balance.
             for entry in per_account:
@@ -315,6 +361,17 @@ def run(engine, job_id, payload, storage_dir, log_job):
         total_positions = len(all_positions)
         total_balances = sum(len(n["balances"]) for n in normalized)
         domestic_positions = sum(1 for p in all_positions if p["country"] == "KR")
+        # 국내를 안 불렀으면 원화 예수금은 **모르는 값**이다 — 0 이라고 단언하지 않는다.
+        # (해외 응답이 won_entr 로 원화 예수금을 주지만, kt00001 의 D+2 정산 반영분과
+        #  달라서 같은 자리에 섞지 않는다. 모르면 행을 없앤다.)
+        if "KR" not in markets:
+            for account_data in normalized:
+                account_data["balances"] = [
+                    b for b in account_data["balances"]
+                    if b.get("currency") != "KRW" or b.get("cash_balance")
+                ]
+            total_balances = sum(len(n["balances"]) for n in normalized)
+
         us_positions = sum(1 for p in all_positions if p["country"] == "US")
         log_job(engine, job_id, "INFO", "normalize_assets",
                 f"Normalized {domestic_positions} domestic + {us_positions} US position(s), "
@@ -325,11 +382,14 @@ def run(engine, job_id, payload, storage_dir, log_job):
         log_job(engine, job_id, "INFO", "upsert_accounts",
                 f"Upserting {len(normalized)} account(s)")
         snapshots_created = 0
-        for account_data in normalized:
+        # 이력 동기화(13단계)가 계좌별로 돌아야 해서 여기서 id 를 챙겨 둔다.
+        account_id_by_index = {}
+        for account_index, account_data in enumerate(normalized):
             with engine.begin() as conn:
                 account_id = accounts_repo.upsert_account(
                     conn, broker_id, connection_id, account_data
                 )
+                account_id_by_index[account_index] = account_id
                 for balance in account_data["balances"]:
                     balances_repo.upsert_balance(conn, account_id, balance, now, job_id)
 
@@ -357,7 +417,54 @@ def run(engine, job_id, payload, storage_dir, log_job):
         log_job(engine, job_id, "INFO", "create_snapshots",
                 f"Created {snapshots_created} snapshot(s)")
 
-        # 13. complete ---------------------------------------------------------
+        # 13. sync_history (체결 · 일별성과 · 실현손익) --------------------------
+        # ★2026-09-21 추가: 현재 보유(current_positions)만 동기화하던 것을 이력까지
+        #   넓혔다. 이력이 없으면 매매내역·자산추이·실현손익 화면이 영영 비어 있다.
+        #   전부 upsert 라 같은 기간을 다시 돌려도 행이 늘지 않는다.
+        #   ⚠️여기서 실패해도 **잔고 동기화는 이미 커밋돼 있다.** 이력은 보조 정보라
+        #     실패를 이유로 잔고까지 되돌리지 않는다 — 대신 경고로 남긴다.
+        history_counts = {"trades": 0, "daily_performance": 0, "realized_pnl": 0}
+        try:
+            history_start = now.date() - timedelta(days=HISTORY_DAYS)
+            adapter_cls = get_adapter_class("KIWOOM")
+            with adapter_cls(credentials, markets=markets) as adapter:
+                for account_index, entry in enumerate(per_account):
+                    account_id = account_id_by_index.get(account_index)
+                    if account_id is None:
+                        continue
+                    account_ref = _account_ref(entry["account"])
+                    trades = adapter.fetch_trades(account_ref, history_start, now.date())
+                    perf = adapter.fetch_daily_performance(
+                        account_ref, history_start, now.date()
+                    )
+                    realized = adapter.fetch_realized_pnl(
+                        account_ref, history_start, now.date()
+                    )
+                    with engine.begin() as conn:
+                        history_counts["trades"] += history_repo.upsert_trades(
+                            conn, account_id, trades, job_id
+                        )
+                        history_counts["daily_performance"] += (
+                            history_repo.upsert_daily_performance(
+                                conn, account_id, perf, job_id
+                            )
+                        )
+                        history_counts["realized_pnl"] += history_repo.upsert_realized_pnl(
+                            conn, account_id, realized, job_id
+                        )
+            log_job(
+                engine, job_id, "INFO", "sync_history",
+                f"Synced {history_counts['trades']} trade(s), "
+                f"{history_counts['daily_performance']} daily perf row(s), "
+                f"{history_counts['realized_pnl']} realized row(s)",
+            )
+        except Exception as exc:  # noqa: BLE001 - 잔고는 지키고 경고만 남긴다
+            log_job(
+                engine, job_id, "WARNING", "sync_history",
+                f"History sync failed (balances are already saved): {exc}",
+            )
+
+        # 14. complete ---------------------------------------------------------
         _update_connection_success(engine, connection_id)
         result = {
             "accounts_synced": len(normalized),
@@ -366,6 +473,8 @@ def run(engine, job_id, payload, storage_dir, log_job):
             "cash_balances": total_balances,
             "snapshots_created": snapshots_created,
             "us_supported": us_equities.US_SUPPORTED,
+            "markets": list(markets),
+            **history_counts,
             "synced_at": now.isoformat(),
         }
         log_job(engine, job_id, "INFO", "complete",

@@ -19,6 +19,7 @@ import {
 } from "@/components/stub";
 import {
   getPerformance,
+  getPortfolioAllocation,
   getPortfolioHoldings,
   getPortfolioSummary,
   type PortfolioHolding,
@@ -55,6 +56,12 @@ export default function PortfolioPage() {
   const holdings = useQuery({
     queryKey: ["portfolioHoldings", accountId],
     queryFn: () => getPortfolioHoldings(accountId),
+    staleTime: 30_000,
+  });
+
+  const allocation = useQuery({
+    queryKey: ["portfolioAllocation", "sector", accountId],
+    queryFn: () => getPortfolioAllocation("sector", accountId),
     staleTime: 30_000,
   });
 
@@ -176,8 +183,59 @@ export default function PortfolioPage() {
             )}
           </StubCard>
 
-          <StubCard title="자산 배분" subtitle="자산군 비중">
-            <StubChart height={260} note="종목 분류 연동 대기" />
+          <StubCard
+            title="섹터 배분"
+            subtitle={
+              allocation.data?.unclassified_market_value_krw &&
+              Number(allocation.data.unclassified_market_value_krw) > 0
+                ? `미분류 ${formatKrwString(allocation.data.unclassified_market_value_krw)} 포함`
+                : "평가금액(KRW) 기준"
+            }
+          >
+            {allocation.data && allocation.data.items.length > 0 ? (
+              <div className="space-y-2.5">
+                {allocation.data.items.slice(0, 7).map((slice) => {
+                  const pct = Number(slice.weight) * 100;
+                  return (
+                    <div key={slice.key ?? "__none__"}>
+                      <div className="mb-1 flex items-baseline justify-between gap-2">
+                        <span
+                          className={cn(
+                            "text-[12px] font-extrabold",
+                            slice.key == null ? "text-ink-muted" : "text-ge-navy",
+                          )}
+                        >
+                          {slice.label}
+                        </span>
+                        <span className="text-[11px] font-bold tabular-nums text-ink-secondary">
+                          {pct.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft">
+                        <div
+                          className={cn(
+                            "h-full rounded-full",
+                            slice.key == null ? "bg-slate-300" : "bg-ge-point",
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                <Link
+                  href="/portfolio/allocation"
+                  className="mt-1 inline-block text-[11px] font-bold text-ge-point hover:text-ge-navy"
+                >
+                  전체 배분 보기 →
+                </Link>
+              </div>
+            ) : (
+              <StubChart
+                height={260}
+                note={allocation.isLoading ? "불러오는 중…" : "분류된 보유 종목 없음"}
+              />
+            )}
           </StubCard>
 
           <StubCard
