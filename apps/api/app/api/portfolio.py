@@ -17,10 +17,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import case, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from app.core import performance_analytics as pa
+from app.core.etf_exposure import ETF_EXPOSURE
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
@@ -383,10 +384,29 @@ def get_history(
 # 비중 계산을 서버로 올린 이유(2026-09-21): 화면마다 따로 계산하면 반올림 처리가
 # 갈려 같은 숫자가 화면마다 다르게 보인다. 분모(총 평가금액)도 한 곳에서 정한다.
 
+def _exposure_expression():
+    """ETF 를 대표 노출로 치환한 L1 축.
+
+    개별주는 tech_l1 을 그대로 쓰고, ETF 만 `database/seeds/etf_exposure.py` 의
+    라벨로 바꾼다. **한 ETF 는 언제나 한 조각**이다 — 구성종목 비중으로 쪼개는
+    투과(look-through) 배분이 아니다(사용자가 원하지 않는다고 밝혔다).
+
+    표에 없는 ETF 는 tech_l1 그대로("ETF")가 되어 화면에 남는다. 추측해서
+    아무 섹터에나 넣지 않는다 — 모르는 건 모른다고 보여야 표를 채우게 된다.
+    """
+    return case(
+        *[(Asset.ticker == ticker, label) for ticker, (label, _) in ETF_EXPOSURE.items()],
+        else_=Asset.tech_l1,
+    )
+
+
 _ALLOCATION_DIMENSIONS = {
     # AI/Tech 밸류체인 3단계 — 사용자가 준 분류표(alembic 0010).
     # 전통 섹터(sector)와 **다른 축**이라 같이 제공한다.
     "tech_l1": (Asset.tech_l1, "미분류"),
+    # ETF 를 대표 노출로 치환한 축. tech_l1 은 ETF 가 전부 "ETF" 한 덩어리라
+    # (평가금액의 61%) 섹터 비중으로 읽히지 않는다.
+    "exposure": (_exposure_expression(), "미분류"),
     "tech_l2": (Asset.tech_l2, "미분류"),
     "tech_l3": (Asset.tech_l3, "미분류"),
     "sector": (Asset.sector, "미분류"),

@@ -2739,6 +2739,9 @@ export function getPortfolioHistory(
 // 화면마다 다르게 보인다.
 
 export type AllocationDimension =
+  // ETF 를 대표 노출로 치환한 L1 축. tech_l1 은 ETF 가 전부 "ETF" 한 덩어리라
+  // (평가금액의 61%) 섹터 비중으로 읽히지 않는다.
+  | "exposure"
   | "tech_l1"
   | "tech_l2"
   | "tech_l3"

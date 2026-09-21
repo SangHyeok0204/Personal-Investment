@@ -47,11 +47,16 @@ import { cn } from "@/lib/utils";
 //   · 숫자는 5초 갱신에 맞춰 자릿수가 굴러 올라간다(StatTile → AnimatedNumber).
 
 // 배분 축. AI/Tech 밸류체인과 전통 섹터는 서로 다른 관점이라 섞지 않고 전환한다.
-const AXES: { id: AllocationDimension; label: string }[] = [
-  { id: "tech_l1", label: "AI/Tech" },
-  { id: "tech_l2", label: "중분류" },
-  { id: "sector", label: "섹터" },
-  { id: "country", label: "국가" },
+// ★기본 축은 `exposure` 다(2026-09-21). tech_l1 로 두면 ETF 7종목이 전부 "ETF"
+//   한 조각(평가금액의 61.3%)이 되어 섹터 비중을 볼 수 없다. exposure 는 ETF 를
+//   **대표 노출 하나**로 바꿔 개별주와 같은 축에 올린다 — 한 ETF 를 구성종목
+//   비중으로 쪼개는 투과 배분이 아니다.
+//   "ETF" 축을 남겨 둔 이유: 상품 유형별로 보고 싶을 때가 따로 있다.
+const AXES: { id: AllocationDimension; label: string; hint: string }[] = [
+  { id: "exposure", label: "섹터", hint: "ETF는 대표 노출로 치환" },
+  { id: "tech_l1", label: "ETF구분", hint: "ETF를 상품 유형 그대로" },
+  { id: "tech_l2", label: "중분류", hint: "AI/Tech 중분류" },
+  { id: "country", label: "국가", hint: "상장 국가" },
 ];
 
 export default function PortfolioPage() {
@@ -59,7 +64,7 @@ export default function PortfolioPage() {
   const live = useLiveQueryOptions();
   const [trendOpen, setTrendOpen] = useState(false);
   const [picked, setPicked] = useState<PortfolioHolding | null>(null);
-  const [axis, setAxis] = useState<AllocationDimension>("tech_l1");
+  const [axis, setAxis] = useState<AllocationDimension>("exposure");
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -210,6 +215,7 @@ export default function PortfolioPage() {
                     type="button"
                     onClick={() => setAxis(a.id)}
                     aria-pressed={axis === a.id}
+                    title={a.hint}
                     className={cn(
                       "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
                       axis === a.id
