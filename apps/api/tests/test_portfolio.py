@@ -236,3 +236,77 @@ def test_connections_expose_status_and_error(client, kiwoom):
     assert body[0]["broker_name"] == "키움증권"
     assert body[0]["status"] == "CONNECTED"
     assert body[0]["last_error"] is None
+
+
+# ── 비중(allocation) ─────────────────────────────────────────────────────────
+
+def test_allocation_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/allocation?dimension=sector").json()
+    assert body["items"] == []
+    assert body["total_market_value_krw"] is None
+    assert body["unclassified_market_value_krw"] is None
+
+
+def test_allocation_rejects_unknown_dimension(client, kiwoom):
+    r = client.get("/api/v1/portfolio/allocation?dimension=주가")
+    assert r.status_code == 400
+    assert "allowed" in r.json()["error"]["details"]
+
+
+def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
+    body = client.get("/api/v1/portfolio/allocation?dimension=country").json()
+    labels = {i["label"]: i for i in body["items"]}
+    # 국내 800,000 / 미국 1,680,000 → 합 2,480,000
+    assert Decimal(body["total_market_value_krw"]) == Decimal("2480000")
+    assert Decimal(labels["미국"]["market_value_krw"]) == Decimal("1680000.00")
+    assert Decimal(labels["한국"]["market_value_krw"]) == Decimal("800000.00")
+    assert sum(Decimal(i["weight"]) for i in body["items"]).quantize(
+        Decimal("0.0001")
+    ) == Decimal("1.0000")
+    # 큰 것부터
+    assert body["items"][0]["label"] == "미국"
+
+
+def test_allocation_surfaces_unclassified_instead_of_hiding_it(client, kiwoom):
+    """섹터가 비어 있으면 숨기지 않고 key=null 조각으로 드러낸다.
+
+    숨기면 비중 합이 100% 로 보여 분류가 끝난 것처럼 착각하게 된다.
+    """
+    body = client.get("/api/v1/portfolio/allocation?dimension=sector").json()
+    assert len(body["items"]) == 1
+    only = body["items"][0]
+    assert only["key"] is None
+    assert only["label"] == "미분류"
+    assert Decimal(body["unclassified_market_value_krw"]) == Decimal("2480000.00")
+
+
+def test_manual_sector_patch_is_marked_manual(client, db, kiwoom):
+    from app.models import Asset
+
+    asset_id = kiwoom["samsung"].id
+    r = client.patch(
+        f"/api/v1/portfolio/assets/{asset_id}/sector",
+        json={"sector": "반도체", "industry": "메모리"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"sector": "반도체", "industry": "메모리"}
+
+    db.expire_all()
+    asset = db.get(Asset, asset_id)
+    assert asset.sector == "반도체"
+    # 사람이 고친 값이라는 표식 — 자동 분류가 덮지 않게 한다.
+    assert asset.sector_source == "MANUAL"
+    assert asset.classified_at is not None
+
+    body = client.get("/api/v1/portfolio/allocation?dimension=sector").json()
+    by_label = {i["label"]: i for i in body["items"]}
+    assert Decimal(by_label["반도체"]["market_value_krw"]) == Decimal("800000.00")
+    # 나머지는 여전히 미분류로 남아 있어야 한다.
+    assert Decimal(body["unclassified_market_value_krw"]) == Decimal("1680000.00")
+
+
+def test_manual_sector_patch_rejects_unknown_asset(client, kiwoom):
+    r = client.patch(
+        f"/api/v1/portfolio/assets/{uuid.uuid4()}/sector", json={"sector": "반도체"}
+    )
+    assert r.status_code == 404

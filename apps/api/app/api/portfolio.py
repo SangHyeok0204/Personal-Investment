@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
     Account,
@@ -32,10 +33,13 @@ from app.models import (
 )
 from app.schemas import (
     AccountListOut,
+    AllocationOut,
+    AllocationSliceOut,
     AccountOut,
     ConnectionOut,
     HoldingListOut,
     HoldingOut,
+    HoldingSectorPatch,
     PortfolioHistoryOut,
     PortfolioSummaryOut,
     SnapshotPointOut,
@@ -246,6 +250,9 @@ def list_holdings(
             country=asset.country,
             currency=asset.currency,
             asset_type=asset.asset_type,
+            sector=asset.sector,
+            industry=asset.industry,
+            sector_source=asset.sector_source,
             quantity=position.quantity,
             average_purchase_price=position.average_purchase_price,
             current_price=position.current_price,
@@ -332,3 +339,123 @@ def get_history(
         ],
         days=days,
     )
+
+
+# ── 비중 ──────────────────────────────────────────────────────────────────────
+# 비중 계산을 서버로 올린 이유(2026-09-21): 화면마다 따로 계산하면 반올림 처리가
+# 갈려 같은 숫자가 화면마다 다르게 보인다. 분모(총 평가금액)도 한 곳에서 정한다.
+
+_ALLOCATION_DIMENSIONS = {
+    "sector": (Asset.sector, "미분류"),
+    "industry": (Asset.industry, "미분류"),
+    "asset_type": (Asset.asset_type, "미분류"),
+    "country": (Asset.country, "미상"),
+    "currency": (Asset.currency, "미상"),
+    "market": (Asset.market, "미상"),
+}
+
+_COUNTRY_LABELS = {"KR": "한국", "US": "미국", "JP": "일본", "CN": "중국"}
+
+
+@router.get("/allocation", response_model=AllocationOut)
+def get_allocation(
+    dimension: str = Query("sector"),
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> AllocationOut:
+    """평가금액(KRW) 기준 비중. dimension 으로 축을 고른다.
+
+    ⚠️분류가 안 된 종목을 **빼지 않는다**. key=null 조각으로 같이 내려보내고
+      unclassified_market_value_krw 로 규모를 따로 알린다. 미분류를 숨기면
+      비중 합이 100% 로 보여서 분류가 끝난 것처럼 착각하게 된다.
+    """
+    if dimension not in _ALLOCATION_DIMENSIONS:
+        raise AppError(
+            400,
+            "VALIDATION_ERROR",
+            "Unknown allocation dimension.",
+            {"allowed": sorted(_ALLOCATION_DIMENSIONS)},
+        )
+
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return AllocationOut(
+            dimension=dimension,
+            items=[],
+            total_market_value_krw=None,
+            unclassified_market_value_krw=None,
+            as_of=None,
+        )
+
+    column, fallback_label = _ALLOCATION_DIMENSIONS[dimension]
+    rows = db.execute(
+        select(
+            column,
+            func.sum(CurrentPosition.market_value_krw),
+            func.count(),
+            func.max(CurrentPosition.as_of),
+        )
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(
+            CurrentPosition.account_id.in_(account_ids),
+            CurrentPosition.market_value_krw.isnot(None),
+        )
+        .group_by(column)
+    ).all()
+
+    total = _sum([value for _, value, _, _ in rows])
+    if not total:
+        return AllocationOut(
+            dimension=dimension,
+            items=[],
+            total_market_value_krw=None,
+            unclassified_market_value_krw=None,
+            as_of=None,
+        )
+
+    items = []
+    unclassified = None
+    for key, value, count, as_of in rows:
+        amount = (value or Decimal("0")).quantize(_MONEY, rounding=ROUND_HALF_UP)
+        if key is None:
+            unclassified = amount
+        label = fallback_label if key is None else _COUNTRY_LABELS.get(key, key) if dimension == "country" else key
+        items.append(
+            AllocationSliceOut(
+                key=key,
+                label=label,
+                market_value_krw=amount,
+                weight=(amount / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
+                position_count=count,
+            )
+        )
+
+    # 큰 것부터. 미분류는 크기와 무관하게 맨 뒤로 민다 — 목록의 의미가 다르다.
+    items.sort(key=lambda i: (i.key is None, -i.market_value_krw))
+
+    return AllocationOut(
+        dimension=dimension,
+        items=items,
+        total_market_value_krw=total,
+        unclassified_market_value_krw=unclassified,
+        as_of=max((r[3] for r in rows if r[3]), default=None),
+    )
+
+
+@router.patch("/assets/{asset_id}/sector", response_model=HoldingSectorPatch)
+def set_asset_sector(
+    asset_id: uuid.UUID,
+    body: HoldingSectorPatch,
+    db: Session = Depends(get_db),
+) -> HoldingSectorPatch:
+    """섹터를 수기로 지정한다. 화면에서 고친 값은 MANUAL 로 표시돼 자동 분류가 덮지 않는다."""
+    asset = db.get(Asset, asset_id)
+    if asset is None:
+        raise AppError(404, "NOT_FOUND", "Asset not found.")
+
+    asset.sector = (body.sector or "").strip() or None
+    asset.industry = (body.industry or "").strip() or None
+    asset.sector_source = "MANUAL" if asset.sector else None
+    asset.classified_at = datetime.now(timezone.utc) if asset.sector else None
+    db.commit()
+    return HoldingSectorPatch(sector=asset.sector, industry=asset.industry)

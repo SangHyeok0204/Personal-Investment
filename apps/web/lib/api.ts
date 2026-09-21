@@ -2644,6 +2644,10 @@ export interface PortfolioHolding {
   country: string;
   currency: string;
   asset_type: string | null;
+  sector: string | null;
+  industry: string | null;
+  // "MANUAL" = 사람이 지정한 값. 자동 분류가 덮지 않는다.
+  sector_source: string | null;
   quantity: string;
   average_purchase_price: string | null;
   current_price: string | null;
@@ -2715,4 +2719,54 @@ export function getPortfolioHistory(
   return request<PortfolioHistory>(
     `/api/v1/portfolio/history${q ? `${q}&` : "?"}days=${days}`,
   );
+}
+
+// ── 비중(allocation) ─────────────────────────────────────────────────────────
+// 비중 계산은 서버가 한다. 화면마다 따로 계산하면 반올림이 갈려 같은 숫자가
+// 화면마다 다르게 보인다.
+
+export type AllocationDimension =
+  | "sector"
+  | "industry"
+  | "asset_type"
+  | "country"
+  | "currency"
+  | "market";
+
+export interface AllocationSlice {
+  // null = 미분류. 라벨은 서버가 이미 "미분류"로 채워 보낸다.
+  key: string | null;
+  label: string;
+  market_value_krw: string;
+  weight: string;
+  position_count: number;
+}
+
+export interface Allocation {
+  dimension: string;
+  items: AllocationSlice[];
+  total_market_value_krw: string | null;
+  unclassified_market_value_krw: string | null;
+  as_of: string | null;
+}
+
+export function getPortfolioAllocation(
+  dimension: AllocationDimension,
+  accountId?: string | null,
+): Promise<Allocation> {
+  const q = accountQuery(accountId);
+  return request<Allocation>(
+    `/api/v1/portfolio/allocation?dimension=${dimension}${q ? `&${q.slice(1)}` : ""}`,
+  );
+}
+
+export function setAssetSector(
+  assetId: string,
+  body: { sector: string | null; industry?: string | null },
+): Promise<{ sector: string | null; industry: string | null }> {
+  return request(`/api/v1/portfolio/assets/${assetId}/sector`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }

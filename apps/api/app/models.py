@@ -288,8 +288,18 @@ class Asset(Base):
     market: Mapped[str] = mapped_column(String, nullable=False)
     ticker: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # asset_type 은 **자산군**(STOCK/BOND/DERIVATIVE/OTHER, alembic 0003).
     asset_type: Mapped[str | None] = mapped_column(String, nullable=True)
     currency: Mapped[str] = mapped_column(String, nullable=False)
+    # 섹터(alembic 0006). 증권사는 섹터를 주지 않아 따로 채운다.
+    # ⚠️미분류는 NULL 로 둔다 — '기타'로 채우면 분류가 끝났는지 알 수 없다.
+    sector: Mapped[str | None] = mapped_column(String, nullable=True)
+    industry: Mapped[str | None] = mapped_column(String, nullable=True)
+    # SEED / MANUAL / 외부출처. 자동 분류가 사람이 고친 값을 덮지 않게 하는 표식.
+    sector_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    classified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
@@ -300,6 +310,7 @@ class Asset(Base):
 
     __table_args__ = (
         UniqueConstraint("country", "market", "ticker", name="uq_assets_country_market_ticker"),
+        Index("ix_assets_sector", "sector"),
     )
 
 

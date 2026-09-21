@@ -240,6 +240,9 @@ class HoldingOut(BaseModel):
     country: str
     currency: str
     asset_type: str | None
+    sector: str | None
+    industry: str | None
+    sector_source: str | None
     quantity: Decimal
     average_purchase_price: Decimal | None
     current_price: Decimal | None
@@ -272,3 +275,29 @@ class SnapshotPointOut(BaseModel):
 class PortfolioHistoryOut(BaseModel):
     items: list[SnapshotPointOut]
     days: int
+
+
+class AllocationSliceOut(BaseModel):
+    """비중 한 조각. 미분류는 key=null 로 내려가고 화면이 '미분류'로 그린다."""
+
+    key: str | None
+    label: str
+    market_value_krw: Decimal
+    weight: Decimal
+    position_count: int
+
+
+class AllocationOut(BaseModel):
+    dimension: str
+    items: list[AllocationSliceOut]
+    total_market_value_krw: Decimal | None
+    # 분류가 안 된 평가금액. 0 이면 분류가 끝난 것이다.
+    unclassified_market_value_krw: Decimal | None
+    as_of: datetime | None
+
+
+class HoldingSectorPatch(BaseModel):
+    """섹터 수기 지정. 화면에서 고친 값은 sector_source='MANUAL' 로 남는다."""
+
+    sector: str | None = Field(default=None, max_length=64)
+    industry: str | None = Field(default=None, max_length=64)
