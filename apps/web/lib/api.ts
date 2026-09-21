@@ -3194,6 +3194,93 @@ export function getMarketMonitor(): Promise<MarketMonitor> {
   return request<MarketMonitor>("/api/v1/market/monitor");
 }
 
+// ── 매매일지 ─────────────────────────────────────────────────────────────────
+
+export type JournalKind = "ENTRY" | "EXIT" | "REVIEW" | "IDEA";
+
+export interface JournalTrade {
+  trade_date: string;
+  side: string;
+  quantity: string;
+  price: string | null;
+  amount_local: string | null;
+  currency: string;
+}
+
+export interface JournalEntry {
+  id: string;
+  ticker: string | null;
+  asset_name: string | null;
+  entry_date: string;
+  kind: JournalKind;
+  title: string;
+  body: string | null;
+  conviction: number | null;
+  created_at: string;
+  updated_at: string;
+  /** 메모 날짜 ±3일의 실제 체결. */
+  nearby_trades: JournalTrade[];
+  held: boolean;
+  /** 결과가 없으면 null — 0 이 아니다("본전"으로 읽히면 안 된다). */
+  unrealized_pnl_krw: string | null;
+  unrealized_return: string | null;
+  realized_pnl_krw: string | null;
+}
+
+export interface JournalList {
+  items: JournalEntry[];
+  total: number;
+  kinds: JournalKind[];
+}
+
+export function getJournal(params?: { ticker?: string; kind?: string }): Promise<JournalList> {
+  const q = new URLSearchParams();
+  if (params?.ticker) q.set("ticker", params.ticker);
+  if (params?.kind) q.set("kind", params.kind);
+  const qs = q.toString();
+  return request<JournalList>(`/api/v1/journal${qs ? `?${qs}` : ""}`);
+}
+
+export function addJournal(body: {
+  ticker?: string | null;
+  entry_date: string;
+  kind: JournalKind;
+  title: string;
+  body?: string | null;
+  conviction?: number | null;
+}): Promise<JournalList> {
+  return request<JournalList>("/api/v1/journal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateJournal(
+  id: string,
+  body: Partial<{
+    title: string;
+    body: string | null;
+    kind: JournalKind;
+    conviction: number | null;
+  }>,
+): Promise<JournalList> {
+  return request<JournalList>(`/api/v1/journal/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function removeJournal(id: string): Promise<JournalList> {
+  return request<JournalList>(`/api/v1/journal/${id}`, { method: "DELETE" });
+}
+
+/** 일지가 하나도 없는 보유 종목 — "무엇을 안 적었는가". */
+export function getUntrackedTickers(): Promise<string[]> {
+  return request<string[]>("/api/v1/journal/untracked");
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

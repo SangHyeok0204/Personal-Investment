@@ -112,8 +112,8 @@ export const navItems: NavItem[] = [
       {
         label: "매매일지",
         href: "/trading/journal",
-        status: "placeholder",
-        hint: "진입 근거 · 복기 메모",
+        status: "live",
+        hint: "진입 근거 · 복기 — 체결·손익과 함께",
       },
       { label: "수수료/세금", status: "planned", hint: "거래비용 집계" },
     ],

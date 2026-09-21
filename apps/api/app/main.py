@@ -20,6 +20,7 @@ from app.api import (
     stock_discussion,
     stock_monitor,
     system,
+    journal,
     market,
     watchlist,
 )
@@ -71,6 +72,7 @@ app.include_router(ai_key_data.router)
 app.include_router(earnings.router)
 app.include_router(watchlist.router)
 app.include_router(market.router)
+app.include_router(journal.router)
 app.include_router(etf_class.router)
 app.include_router(portfolio.router)
 app.include_router(brokerage.router)

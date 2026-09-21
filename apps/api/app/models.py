@@ -630,3 +630,35 @@ class WatchlistItem(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
+
+class JournalEntry(Base):
+    """매매일지 한 편 — 진입 근거 · 청산 근거 · 복기.
+
+    ⚠️`trades` 에 FK 를 걸지 않는다. 체결 이력은 동기화마다 다시 적재돼 행 id 가
+      안정적이지 않고(SKHY 매도가 며칠 뒤에 들어온 사례), 살지 말지 고민만 한
+      종목에도 메모를 남겨야 하는데 그런 종목엔 체결 자체가 없다.
+      ticker + entry_date 로 느슨하게 묶고 화면에서 체결을 찾아 붙인다.
+    """
+
+    __tablename__ = "journal_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # 종목 무관 메모도 일지다 — 시장 전체에 대한 기록.
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 기록한 날이 아니라 **그 판단을 한 날**. 소급 기록을 허용한다.
+    entry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'ENTRY'"))
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 확신도 1~5. nullable 이다 — 강제하면 아무 숫자나 찍힌다.
+    conviction: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+

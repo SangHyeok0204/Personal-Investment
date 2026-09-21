@@ -666,6 +666,65 @@ class MarketMonitorOut(BaseModel):
     missing_sources: list[str]
 
 
+# ── 매매일지 ─────────────────────────────────────────────────────────────────
+
+class JournalTradeOut(BaseModel):
+    """일지 날짜 근처(±3일)의 실제 체결. 판단과 실행이 며칠 어긋나는 건 흔하다."""
+
+    trade_date: date
+    side: str
+    quantity: Decimal
+    price: Decimal | None
+    amount_local: Decimal | None
+    currency: str
+
+
+class JournalCreateIn(BaseModel):
+    ticker: str | None = None
+    asset_name: str | None = None
+    entry_date: date
+    kind: str = "ENTRY"
+    title: str
+    body: str | None = None
+    conviction: int | None = None
+
+
+class JournalUpdateIn(BaseModel):
+    ticker: str | None = None
+    entry_date: date | None = None
+    kind: str | None = None
+    title: str | None = None
+    body: str | None = None
+    conviction: int | None = None
+
+
+class JournalEntryOut(BaseModel):
+    id: uuid.UUID
+    ticker: str | None
+    asset_name: str | None
+    entry_date: date
+    kind: str
+    title: str
+    body: str | None
+    conviction: int | None
+    created_at: datetime
+    updated_at: datetime
+
+    # ── 결과 ── 메모 옆에 "그래서 어떻게 됐는지"를 붙인다.
+    #    ⚠️없으면 None 이다. 0 으로 채우면 "본전"으로 읽힌다.
+    nearby_trades: list[JournalTradeOut]
+    held: bool
+    unrealized_pnl_krw: Decimal | None
+    unrealized_return: Decimal | None
+    realized_pnl_krw: Decimal | None
+
+
+class JournalListOut(BaseModel):
+    items: list[JournalEntryOut]
+    total: int
+    kinds: list[str]
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
