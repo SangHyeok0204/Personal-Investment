@@ -100,7 +100,7 @@ export const navItems: NavItem[] = [
       {
         label: "주문/미체결",
         href: "/trading/orders",
-        status: "placeholder",
+        status: "live",
         hint: "당일 주문 상태",
       },
       {

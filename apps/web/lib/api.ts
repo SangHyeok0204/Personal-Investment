@@ -3281,6 +3281,57 @@ export function getUntrackedTickers(): Promise<string[]> {
   return request<string[]>("/api/v1/journal/untracked");
 }
 
+// ── 주문 내역 ────────────────────────────────────────────────────────────────
+
+export type OrderStatus = "FILLED" | "PARTIAL" | "UNFILLED" | "CANCELLED";
+
+export interface OrderItem {
+  id: string;
+  ticker: string;
+  asset_name: string | null;
+  order_date: string;
+  order_time: string | null;
+  order_no: string;
+  side: string;
+  order_type: string | null;
+  currency: string;
+  status: OrderStatus;
+  order_quantity: string | null;
+  filled_quantity: string | null;
+  cancelled_quantity: string | null;
+  remaining_quantity: string | null;
+  order_price: string | null;
+  filled_price: string | null;
+  filled_amount: string | null;
+  /** 지정가 대비 체결가가 얼마나 유리했나(양수 = 유리). 미체결이면 null. */
+  improvement: string | null;
+  channel: string | null;
+}
+
+export interface OrderList {
+  items: OrderItem[];
+  /** 아래 집계는 필터와 무관하게 **전체 기준**이다. */
+  total: number;
+  filled: number;
+  partial: number;
+  unfilled: number;
+  cancelled: number;
+  fill_rate: string | null;
+  avg_improvement: string | null;
+  first_order_date: string | null;
+  last_order_date: string | null;
+}
+
+export function getOrders(
+  accountId?: string | null,
+  days = 730,
+  status?: OrderStatus | null,
+): Promise<OrderList> {
+  const q = accountQuery(accountId);
+  const extra = `days=${days}${status ? `&status=${status}` : ""}`;
+  return request<OrderList>(`/api/v1/portfolio/orders${q ? `${q}&` : "?"}${extra}`);
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

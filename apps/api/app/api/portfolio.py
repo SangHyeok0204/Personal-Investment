@@ -33,6 +33,7 @@ from app.models import (
     Broker,
     BrokerageConnection,
     CurrentPosition,
+    Order,
     PortfolioSnapshot,
     Trade,
     AccountDailyPerformance,
@@ -52,6 +53,8 @@ from app.schemas import (
     InclusionWeightPointOut,
     LiveQuoteOut,
     LiveQuotesOut,
+    OrderListOut,
+    OrderOut,
     PerformanceAnalyticsOut,
     PeriodReturnOut,
     RiskMetricsOut,
@@ -1363,4 +1366,133 @@ def get_live_quotes(
         missing=missing,
         fetched=fetched,
         as_of=max((i.as_of for i in items if i.as_of), default=None),
+    )
+
+
+# ── 주문 내역 ───────────────────────────────────────────────────────────────
+
+def _order_status(order: Order) -> str:
+    """주문 하나의 결말. 수량으로만 판정한다 — 증권사가 상태 문자열을 주지 않는다.
+
+    CANCELLED(취소) · FILLED(전량 체결) · PARTIAL(부분 체결) · UNFILLED(미체결)
+    """
+    filled = order.filled_quantity or Decimal("0")
+    cancelled = order.cancelled_quantity or Decimal("0")
+    ordered = order.order_quantity or Decimal("0")
+    if cancelled > 0 and filled <= 0:
+        return "CANCELLED"
+    if ordered > 0 and filled >= ordered:
+        return "FILLED"
+    if filled > 0:
+        return "PARTIAL"
+    return "UNFILLED"
+
+
+def _improvement(order: Order) -> Decimal | None:
+    """지정가 대비 체결가가 **얼마나 유리했나**(양수 = 유리).
+
+    매수는 싸게 체결될수록, 매도는 비싸게 체결될수록 유리하다. 방향을 맞춰 두지
+    않으면 매수·매도 부호가 반대라 평균이 의미를 잃는다.
+
+    ⚠️미체결이면 None 이다(체결가가 없다). 0 으로 두면 "정확히 지정가에 체결"로
+      읽혀서 미체결이 평균에 섞인다.
+    """
+    ordered, filled = order.order_price, order.filled_price
+    if ordered is None or filled is None or ordered <= 0:
+        return None
+    raw = (ordered - filled) if order.side == "BUY" else (filled - ordered)
+    return (raw / ordered).quantize(_RATIO, rounding=ROUND_HALF_UP)
+
+
+@router.get("/orders", response_model=OrderListOut)
+def list_orders(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(365, ge=1, le=3650),
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> OrderListOut:
+    """주문 내역 — 체결 이력이 감추는 것들.
+
+    체결은 성사된 것만 알려준다. 여기에는 **미체결·취소·슬리피지**가 남는다.
+    """
+    empty = OrderListOut(
+        items=[], total=0, filled=0, partial=0, unfilled=0, cancelled=0,
+        fill_rate=None, avg_improvement=None,
+        first_order_date=None, last_order_date=None,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(Order)
+        .where(Order.account_id.in_(account_ids), Order.order_date >= since)
+        .order_by(Order.order_date.desc(), Order.order_time.desc().nullslast())
+    ).scalars().all()
+    if not rows:
+        return empty
+
+    # 통계는 **필터 전 전체**로 낸다 — "미체결만 보기"를 눌렀다고 체결률이
+    # 0% 로 바뀌면 그 숫자는 거짓말이 된다.
+    counts = {"FILLED": 0, "PARTIAL": 0, "UNFILLED": 0, "CANCELLED": 0}
+    improvements: list[Decimal] = []
+    for order in rows:
+        counts[_order_status(order)] += 1
+        gain = _improvement(order)
+        if gain is not None:
+            improvements.append(gain)
+
+    wanted = status.upper() if status else None
+    items = [
+        OrderOut(
+            id=order.id,
+            ticker=order.ticker,
+            asset_name=order.asset_name,
+            order_date=order.order_date,
+            order_time=order.order_time,
+            order_no=order.order_no,
+            side=order.side,
+            order_type=order.order_type,
+            currency=order.currency,
+            status=_order_status(order),
+            order_quantity=order.order_quantity,
+            filled_quantity=order.filled_quantity,
+            cancelled_quantity=order.cancelled_quantity,
+            remaining_quantity=order.remaining_quantity,
+            order_price=order.order_price,
+            filled_price=order.filled_price,
+            filled_amount=order.filled_amount,
+            improvement=_improvement(order),
+            channel=order.channel,
+        )
+        for order in rows
+        if wanted is None or _order_status(order) == wanted
+    ]
+
+    decided = counts["FILLED"] + counts["PARTIAL"] + counts["UNFILLED"]
+    return OrderListOut(
+        items=items,
+        total=len(rows),
+        filled=counts["FILLED"],
+        partial=counts["PARTIAL"],
+        unfilled=counts["UNFILLED"],
+        cancelled=counts["CANCELLED"],
+        # ⚠️취소는 분모에서 뺀다. 내가 거둬들인 주문을 '체결 실패'로 세면 안 된다.
+        fill_rate=(
+            (Decimal(counts["FILLED"]) / Decimal(decided)).quantize(
+                _RATIO, rounding=ROUND_HALF_UP
+            )
+            if decided
+            else None
+        ),
+        avg_improvement=(
+            (sum(improvements, Decimal("0")) / Decimal(len(improvements))).quantize(
+                _RATIO, rounding=ROUND_HALF_UP
+            )
+            if improvements
+            else None
+        ),
+        first_order_date=min(o.order_date for o in rows),
+        last_order_date=max(o.order_date for o in rows),
     )

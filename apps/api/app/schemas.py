@@ -725,6 +725,54 @@ class JournalListOut(BaseModel):
     kinds: list[str]
 
 
+# ── 주문 내역 ────────────────────────────────────────────────────────────────
+
+class OrderOut(BaseModel):
+    """주문 한 건.
+
+    ⚠️`improvement` 는 지정가 대비 체결가가 얼마나 **유리했나**(양수 = 유리).
+      매수는 싸게, 매도는 비싸게 체결될수록 양수다 — 방향을 맞춰 두지 않으면
+      매수·매도 부호가 반대라 평균이 의미를 잃는다. 미체결이면 None.
+    """
+
+    id: uuid.UUID
+    ticker: str
+    asset_name: str | None
+    order_date: date
+    order_time: str | None
+    order_no: str
+    side: str
+    order_type: str | None
+    currency: str
+    # FILLED · PARTIAL · UNFILLED · CANCELLED (수량으로 판정)
+    status: str
+    order_quantity: Decimal | None
+    filled_quantity: Decimal | None
+    cancelled_quantity: Decimal | None
+    remaining_quantity: Decimal | None
+    order_price: Decimal | None
+    filled_price: Decimal | None
+    filled_amount: Decimal | None
+    improvement: Decimal | None
+    channel: str | None
+
+
+class OrderListOut(BaseModel):
+    items: list[OrderOut]
+    # 아래 집계는 **필터와 무관하게 전체 기준**이다 — "미체결만 보기"로
+    # 체결률이 0% 가 되면 그 숫자는 거짓말이다.
+    total: int
+    filled: int
+    partial: int
+    unfilled: int
+    cancelled: int
+    # 취소는 분모에서 뺀다. 내가 거둬들인 주문은 '체결 실패'가 아니다.
+    fill_rate: Decimal | None
+    avg_improvement: Decimal | None
+    first_order_date: date | None
+    last_order_date: date | None
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
