@@ -8,6 +8,7 @@
   trades                     (account_id, trade_date, trade_no)  ← trade_no 는 일자별 리셋
   account_daily_performance  (account_id, base_date)
   realized_pnl               (account_id, sell_date, ticker)     ← 증권사가 매도일×종목 집계
+  orders                     (account_id, order_date, order_no)  ← 주문 상태는 사후에 바뀐다
 """
 import uuid
 
@@ -305,3 +306,87 @@ def tickers_for_dividends(conn, account_id):
         {"acc": account_id},
     ).all()
     return [(r[0], r[1]) for r in rows]
+
+
+_ORDER_UPSERT = text(
+    """
+    INSERT INTO orders (
+        id, account_id, asset_id, ticker, asset_name, order_date, order_no,
+        order_time, side, order_type, currency, order_quantity, filled_quantity,
+        cancelled_quantity, modified_quantity, remaining_quantity, order_price,
+        filled_price, stop_price, filled_amount, exchange, channel, reserve_type,
+        source_job_id
+    ) VALUES (
+        :id, :account_id, :asset_id, :ticker, :asset_name, :order_date, :order_no,
+        :order_time, :side, :order_type, :currency, :order_quantity, :filled_quantity,
+        :cancelled_quantity, :modified_quantity, :remaining_quantity, :order_price,
+        :filled_price, :stop_price, :filled_amount, :exchange, :channel, :reserve_type,
+        :source_job_id
+    )
+    ON CONFLICT (account_id, order_date, order_no) DO UPDATE SET
+        asset_id = EXCLUDED.asset_id,
+        ticker = EXCLUDED.ticker,
+        asset_name = EXCLUDED.asset_name,
+        order_time = EXCLUDED.order_time,
+        side = EXCLUDED.side,
+        order_type = EXCLUDED.order_type,
+        currency = EXCLUDED.currency,
+        order_quantity = EXCLUDED.order_quantity,
+        filled_quantity = EXCLUDED.filled_quantity,
+        cancelled_quantity = EXCLUDED.cancelled_quantity,
+        modified_quantity = EXCLUDED.modified_quantity,
+        remaining_quantity = EXCLUDED.remaining_quantity,
+        order_price = EXCLUDED.order_price,
+        filled_price = EXCLUDED.filled_price,
+        stop_price = EXCLUDED.stop_price,
+        filled_amount = EXCLUDED.filled_amount,
+        exchange = EXCLUDED.exchange,
+        channel = EXCLUDED.channel,
+        reserve_type = EXCLUDED.reserve_type,
+        source_job_id = EXCLUDED.source_job_id,
+        updated_at = now()
+    """
+)
+
+
+def upsert_orders(conn, account_id, orders, source_job_id=None):
+    """주문 내역 적재.
+
+    ⚠️덮어쓰기여야 한다. 주문 상태(체결수량·취소수량·잔량)는 **사후에 바뀐다** —
+      오늘 미체결이던 주문이 내일 체결될 수 있다. 같은 주문번호는 최신 값으로.
+    ⚠️asset_id 는 없을 수 있다. 한 번도 체결된 적 없는 종목은 assets 행이 없다
+      (실측: SKHYV 는 주문 3건 전부 미체결이라 assets 에 없다).
+    """
+    cache: dict = {}
+    for order in orders:
+        conn.execute(
+            _ORDER_UPSERT,
+            {
+                "id": uuid.uuid4(),
+                "account_id": account_id,
+                "asset_id": _asset_id_for(conn, order.ticker, cache),
+                "ticker": order.ticker,
+                "asset_name": order.name,
+                "order_date": order.order_date,
+                "order_no": order.order_no,
+                "order_time": order.order_time,
+                "side": order.side,
+                "order_type": order.order_type,
+                "currency": order.currency,
+                "order_quantity": order.order_quantity,
+                "filled_quantity": order.filled_quantity,
+                "cancelled_quantity": order.cancelled_quantity,
+                "modified_quantity": order.modified_quantity,
+                "remaining_quantity": order.remaining_quantity,
+                "order_price": order.order_price,
+                "filled_price": order.filled_price,
+                "stop_price": order.stop_price,
+                "filled_amount": order.filled_amount,
+                "exchange": order.exchange,
+                "channel": order.channel,
+                "reserve_type": order.reserve_type,
+                "source_job_id": source_job_id,
+            },
+        )
+    return len(orders)
+

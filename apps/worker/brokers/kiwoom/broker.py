@@ -24,6 +24,7 @@ from ..base import (
     DividendRow,
     PositionRow,
     RealizedPnlRow,
+    OrderRow,
     TradeRow,
 )
 from ..registry import register
@@ -177,6 +178,59 @@ class KiwoomAdapter(BrokerAdapter):
             window_start = window_end + timedelta(days=1)
 
         rows.sort(key=lambda r: (r.trade_date, r.trade_no))
+        return rows
+
+    def fetch_orders(self, account: AccountRef, start: date, end: date) -> list[OrderRow]:
+        """기간 내 주문 내역(해외) — 체결 이력이 감추는 것들.
+
+        ⚠️조회 상한이 **3개월**이다(체결내역은 360일). 창을 85일로 나눠 이어 붙인다.
+        ⚠️명세 예시의 응답 키는 `result_lsit`(오타)인데 실제 응답은 `result_list`
+          다. 둘 다 받는다 — 어느 쪽이 올지 명세만으로는 알 수 없다.
+        """
+        if "US" not in self._markets:
+            return []
+
+        rows: list[OrderRow] = []
+        seen: set[tuple] = set()
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=_ORDER_WINDOW_DAYS), end)
+            try:
+                pages = self._client.request_tr(
+                    API_US_ORDERS,
+                    {
+                        "strt_dt": window_start.strftime("%Y%m%d"),
+                        "end_dt": window_end.strftime("%Y%m%d"),
+                        "slby_tp": "",
+                        "stex_tp": "",
+                        "stk_cd": "",
+                        "oppo_trde_tp": "",
+                    },
+                    path=us_equities.US_ACNT_PATH,
+                )
+            except KiwoomApiError as exc:
+                # ⚠️ust21530 과 똑같이, 주문이 없는 창은 **빈 목록이 아니라 에러**로
+                #   온다(571758 "조회내역이 없습니다"). 계좌 개설 이전 구간은 당연히
+                #   비어 있으므로, 이걸 안 걸러내면 창 하나 때문에 조회 전체가 죽는다.
+                #   실측: 730일 동기화에서 이 예외가 이력 블록을 통째로 날려
+                #   체결·실현손익·배당까지 0 건이 됐다(화면에는 '성공'으로 보였다).
+                if _is_no_data(exc):
+                    window_start = window_end + timedelta(days=1)
+                    continue
+                raise
+            for page in pages:
+                for raw in page.get("result_list") or page.get("result_lsit") or []:
+                    row = _to_order_row(raw)
+                    if row is None:
+                        continue
+                    key = (row.order_date, row.order_no)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(row)
+            window_start = window_end + timedelta(days=1)
+
+        rows.sort(key=lambda r: (r.order_date, r.order_time or "", r.order_no))
         return rows
 
     def fetch_daily_performance(self, account, start: date, end: date):
@@ -452,9 +506,17 @@ class KiwoomAdapter(BrokerAdapter):
 
 # 키움 거래내역(ust21100) 상수. 값은 api_guide.md §5 / 공식 명세 참조.
 API_US_TRADES = "ust21100"
+API_US_ORDERS = "ust21180"
 #: 조회 기간 상한. 초과하면 return_code=20 / 501058 "조회기간은 1년 이내로만 가능합니다".
 #: 실측상 365일도 거부되므로 여유를 둔다.
 _TRADE_WINDOW_DAYS = 360
+# ⚠️주문내역(ust21180)은 **3개월 상한**이다. 체결내역(360일)과 다르다 —
+#   실측: 20260601~20260922 요청에 "조회기간은 3개월 이내만 가능합니다"(return_code=20).
+#   여유를 두고 85일로 끊는다.
+_ORDER_WINDOW_DAYS = 85
+
+# 주문 구분 문자열 → 표준 side. 응답은 "매수"/"매도" 로 온다.
+_SIDE_BY_ORDER_NAME = {"매수": "BUY", "매도": "SELL"}
 #: 매수/매도 구분은 deal_kind_nm(전부 "매매")이 아니라 rmrk_nm(적요명)에 있다.
 _SIDE_BY_REMARK = {"매수": "BUY", "매도": "SELL"}
 
@@ -480,7 +542,7 @@ _EXCHANGE_PROBE_DAYS = 5
 
 def _is_unknown_symbol(exc) -> bool:
     return _UNKNOWN_SYMBOL_CODE in (getattr(exc, "return_msg", "") or "")
-#: ⚠️ust21530 은 해당 기간에 매도가 없으면 **빈 목록이 아니라 에러**를 낸다
+#: ⚠️ust21530·ust21180 은 해당 기간에 내역이 없으면 **빈 목록이 아니라 에러**를 낸다
 #:  (return_code=20 / 571758 "조회내역이 없습니다"). 여러 창으로 나눠 조회할 때
 #:  매도가 없는 창이 하나만 있어도 전체가 죽으므로, 이 코드는 '없음'으로 읽는다.
 _NO_DATA_CODE = "571758"
@@ -570,6 +632,44 @@ def _to_balance_row(b: dict) -> BalanceRow:
 def _opt(value):
     """None 은 None 으로 둔다 — to_decimal 이 0 으로 바꾸면 '미수집'이 '0원'이 된다."""
     return None if value is None else to_decimal(value)
+
+
+def _to_order_row(raw: dict) -> OrderRow | None:
+    """ust21180 한 행 → OrderRow. 매수/매도가 아니면 버린다."""
+    side = _SIDE_BY_ORDER_NAME.get((raw.get("slby_tp_nm") or "").strip())
+    if side is None:
+        return None
+    order_date = _parse_yyyymmdd(raw.get("ord_dt"))
+    if order_date is None:
+        return None
+    ticker = (raw.get("stk_cd") or "").strip()
+    if not ticker:
+        return None
+
+    return OrderRow(
+        order_date=order_date,
+        # 0 패딩을 벗기지 않는다 — 증권사가 준 형태가 자연키의 일부다.
+        order_no=(raw.get("ord_no") or "").strip(),
+        side=side,
+        ticker=ticker,
+        name=(raw.get("stk_nm") or None),
+        currency=(raw.get("crnc_code") or "USD").strip(),
+        order_time=(raw.get("ord_time") or None),
+        order_type=(raw.get("trde_tp") or None),
+        order_quantity=_opt(raw.get("ord_qty")),
+        filled_quantity=to_decimal(raw.get("cntr_qty")),
+        cancelled_quantity=to_decimal(raw.get("cncl_qty")),
+        modified_quantity=to_decimal(raw.get("mdfy_qty")),
+        remaining_quantity=to_decimal(raw.get("ord_remnq")),
+        order_price=_nonzero(raw.get("ord_uv")),
+        # ⚠️미체결이면 0 으로 온다. 0 을 그대로 두면 "0달러에 체결"로 읽힌다.
+        filled_price=_nonzero(raw.get("cntr_uv")),
+        stop_price=_nonzero(raw.get("stop_pric")),
+        filled_amount=_nonzero(raw.get("cntr_amt")),
+        exchange=(raw.get("stex_nm") or None),
+        channel=(raw.get("inpt_chnl_tp_nm") or None),
+        reserve_type=(raw.get("rsrv_tp") or None),
+    )
 
 
 def _to_trade_row(raw: dict) -> TradeRow | None:

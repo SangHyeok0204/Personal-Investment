@@ -662,3 +662,55 @@ class JournalEntry(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
+
+class Order(Base):
+    """주문 내역 — 체결 이력이 감추는 것들(키움 ust21180).
+
+    체결은 "성사된 것"만, 주문은 "하려고 한 것"을 전부 알려준다. 미체결·취소·
+    슬리피지·주문 채널이 여기에만 있다.
+
+    ⚠️assets 를 FK 로 걸지 않는다. 한 번도 체결된 적 없는 종목은 assets 행이 없다
+      (실측: SKHYV 는 주문 3건 전부 미체결이라 보유·체결 어디에도 없다).
+    """
+
+    __tablename__ = "orders"
+    __table_args__ = (
+        UniqueConstraint("account_id", "order_date", "order_no", name="uq_orders_account_date_no"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    order_date: Mapped[date] = mapped_column(Date, nullable=False)
+    order_no: Mapped[str] = mapped_column(String, nullable=False)
+    order_time: Mapped[str | None] = mapped_column(String, nullable=True)
+    side: Mapped[str] = mapped_column(String, nullable=False)
+    order_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    currency: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'USD'"))
+    order_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    filled_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    cancelled_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    modified_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    remaining_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    order_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    # ⚠️미체결이면 None 이다. 증권사는 0 으로 주는데 그대로 두면 "0달러 체결"이 된다.
+    filled_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    filled_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    exchange: Mapped[str | None] = mapped_column(String, nullable=True)
+    channel: Mapped[str | None] = mapped_column(String, nullable=True)
+    reserve_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+

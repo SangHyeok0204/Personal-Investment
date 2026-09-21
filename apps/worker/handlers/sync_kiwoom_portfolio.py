@@ -445,7 +445,9 @@ def run(engine, job_id, payload, storage_dir, log_job):
         #     실패를 이유로 잔고까지 되돌리지 않는다 — 대신 경고로 남긴다.
         history_counts = {
             "trades": 0, "daily_performance": 0, "realized_pnl": 0, "dividends": 0,
+            "orders": 0,
         }
+        history_error: str | None = None
         try:
             history_start = now.date() - timedelta(days=HISTORY_DAYS)
             adapter_cls = get_adapter_class("KIWOOM")
@@ -462,6 +464,8 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     realized = adapter.fetch_realized_pnl(
                         account_ref, history_start, now.date()
                     )
+                    # 주문 내역 — 체결에 없는 것(미체결·취소·슬리피지)을 담는다.
+                    orders = adapter.fetch_orders(account_ref, history_start, now.date())
                     # ★체결을 **먼저** 저장한다. 배당 조회 대상(현재 보유 + 과거 체결
                     #   종목)을 DB 에서 뽑는데, 체결을 나중에 쓰면 첫 동기화에서
                     #   이미 판 종목이 통째로 빠진다 — 실측에서 SGOV 등이 빠져
@@ -477,6 +481,9 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         )
                         history_counts["realized_pnl"] += history_repo.upsert_realized_pnl(
                             conn, account_id, realized, job_id
+                        )
+                        history_counts["orders"] += history_repo.upsert_orders(
+                            conn, account_id, orders, job_id
                         )
 
                     # 배당은 종목별 조회라(usa21730 이 stk_cd 필수) 대상을 먼저 정한다.
@@ -499,9 +506,14 @@ def run(engine, job_id, payload, storage_dir, log_job):
                 f"Synced {history_counts['trades']} trade(s), "
                 f"{history_counts['daily_performance']} daily perf row(s), "
                 f"{history_counts['realized_pnl']} realized row(s), "
-                f"{history_counts['dividends']} dividend(s)",
+                f"{history_counts['dividends']} dividend(s), "
+                f"{history_counts['orders']} order(s)",
             )
         except Exception as exc:  # noqa: BLE001 - 잔고는 지키고 경고만 남긴다
+            # ⚠️여기서 삼킨 예외가 **화면에는 '성공'으로 보인다.** 실제로 주문 조회의
+            #   571758 하나가 체결·실현손익·배당까지 0 건으로 만들었는데 동기화는
+            #   ok=true 를 돌려줬다. 결과에 실어 호출부가 알 수 있게 한다.
+            history_error = str(exc)
             log_job(
                 engine, job_id, "WARNING", "sync_history",
                 f"History sync failed (balances are already saved): {exc}",
@@ -510,6 +522,7 @@ def run(engine, job_id, payload, storage_dir, log_job):
         # 14. complete ---------------------------------------------------------
         _update_connection_success(engine, connection_id)
         result = {
+            "history_error": history_error,
             "accounts_synced": len(normalized),
             "domestic_positions": domestic_positions,
             "us_positions": us_positions,

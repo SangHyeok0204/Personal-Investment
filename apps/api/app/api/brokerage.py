@@ -242,7 +242,13 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
         _finish_job(db, job_id, "FAILED", str(exc))
         raise AppError(502, "SYNC_FAILED", str(exc), {"logs": logs[-5:]}) from exc
 
-    _finish_job(db, job_id, "SUCCESS", None)
+    # ⚠️이력 동기화는 실패해도 예외를 던지지 않는다(잔고는 지키려고). 그대로 두면
+    #   화면에 '성공'만 뜨고 체결·배당이 0 건인 이유를 알 수 없다 — 실측으로 겪었다.
+    history_error = result.get("history_error")
+    # ⚠️새 상태값("PARTIAL")을 만들지 않는다 — 프런트 JobStatus 는 PENDING/RUNNING/
+    #   SUCCESS/FAILED 뿐이라, 모르는 값을 넣으면 화면이 조용히 깨진다.
+    #   잔고는 실제로 저장됐으므로 SUCCESS 로 두고 **사유를 error 에 남긴다**.
+    _finish_job(db, job_id, "SUCCESS", history_error)
     return SyncResultOut(
         ok=True,
         accounts_synced=result.get("accounts_synced", 0),
@@ -251,6 +257,11 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
         daily_performance=result.get("daily_performance", 0),
         realized_pnl=result.get("realized_pnl", 0),
         dividends=result.get("dividends", 0),
+        message=(
+            None
+            if not history_error
+            else f"잔고는 저장됐지만 이력 동기화가 실패했습니다: {history_error}"
+        ),
     )
 
 

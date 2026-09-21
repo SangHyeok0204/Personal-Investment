@@ -109,6 +109,39 @@ class TradeRow:
 
 
 @dataclass(frozen=True)
+class OrderRow:
+    """주문 한 건 — 체결 이력이 감추는 것들.
+
+    체결(TradeRow)은 "성사된 것"만 알려준다. 주문은 **하려고 한 것 전부**를
+    알려주므로 미체결·취소·슬리피지·주문 채널이 여기에만 있다.
+
+    ⚠️`filled_price` 는 미체결이면 None 이다. 증권사는 0 으로 주는데 그대로 두면
+      "0달러에 체결"로 읽힌다.
+    """
+
+    order_date: date
+    order_no: str
+    side: str  # BUY / SELL
+    ticker: str
+    name: str | None
+    currency: str
+    order_time: str | None = None
+    order_type: str | None = None
+    order_quantity: Decimal | None = None
+    filled_quantity: Decimal | None = None
+    cancelled_quantity: Decimal | None = None
+    modified_quantity: Decimal | None = None
+    remaining_quantity: Decimal | None = None
+    order_price: Decimal | None = None
+    filled_price: Decimal | None = None
+    stop_price: Decimal | None = None
+    filled_amount: Decimal | None = None
+    exchange: str | None = None
+    channel: str | None = None
+    reserve_type: str | None = None
+
+
+@dataclass(frozen=True)
 class DailyPerformanceRow:
     """계좌 일별 성과 한 점. 전부 KRW — 증권사가 이미 환산해 준 값이다."""
 
