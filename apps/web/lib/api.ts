@@ -3480,6 +3480,50 @@ export function getEpsHistory(symbol: string): Promise<EpsHistoryRow[]> {
   return request<EpsHistoryRow[]>(`/api/v1/market/earnings/${symbol}/history`);
 }
 
+// ── AI 생태계 지표 ───────────────────────────────────────────────────────────
+
+export interface Accelerator {
+  name: string;
+  manufacturer: string;
+  kind: string | null;
+  release_date: string | null;
+  /** 미공개면 null — 0 으로 채우면 "무료"가 된다. */
+  price_usd: string | null;
+  fp16_flops: string | null;
+  fp8_flops: string | null;
+  memory_bytes: string | null;
+  bandwidth_bytes: string | null;
+  tdp_watts: string | null;
+  flops_per_watt: string | null;
+}
+
+export interface ManufacturerCount {
+  name: string;
+  count: number;
+}
+
+export interface PackageDownloads {
+  package: string;
+  label: string;
+  last_week: number;
+  prior_week: number;
+  week_over_week: string | null;
+  days: string[];
+  counts: number[];
+}
+
+export interface AiData {
+  accelerators: Accelerator[];
+  manufacturers: ManufacturerCount[];
+  total_accelerators: number;
+  downloads: PackageDownloads[];
+  sources: string[];
+}
+
+export function getAiData(): Promise<AiData> {
+  return request<AiData>("/api/v1/market/ai-data");
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

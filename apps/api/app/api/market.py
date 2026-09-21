@@ -23,11 +23,15 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 
 from app.schemas import (
+    AcceleratorOut,
+    AiDataOut,
     EarningsEventOut,
     EarningsOut,
     EpsHistoryOut,
     MacroMonitorOut,
     MacroRowOut,
+    ManufacturerCountOut,
+    PackageDownloadsOut,
     MarketMonitorOut,
     MarketRowOut,
 )
@@ -36,6 +40,7 @@ _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
 if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
+from prices import ai_data as ai_source  # noqa: E402
 from prices import earnings as earnings_source  # noqa: E402
 from prices import fred  # noqa: E402
 from prices.history import PERIODS, base_values, changes, fetch_series  # noqa: E402
@@ -375,3 +380,98 @@ def get_eps_history(symbol: str) -> list[EpsHistoryOut]:
         )
         for row in earnings_source.fetch_eps_history(symbol)
     ]
+
+
+# ── AI 생태계 지표 ──────────────────────────────────────────────────────────
+
+# 가속기 목록은 하루에 한 번 바뀔까 말까 하고, npm 다운로드는 하루 단위 집계다.
+AI_DATA_TTL_SECONDS = 6 * 3600.0
+
+# 추적할 AI SDK. "모델을 실제로 쓰고 있나"의 대리 지표다 — 매출은 분기에 한 번
+# 나오지만 이건 매일 나온다.
+_AI_PACKAGES: list[tuple[str, str]] = [
+    ("openai", "OpenAI"),
+    ("@anthropic-ai/sdk", "Anthropic"),
+    ("@google/genai", "Google"),
+    ("ai", "Vercel AI SDK"),
+    ("langchain", "LangChain"),
+    ("@huggingface/inference", "HuggingFace"),
+]
+
+_ai_lock = threading.Lock()
+_ai_cache: tuple[float, "AiDataOut"] | None = None
+
+
+def _build_ai_data() -> "AiDataOut":
+    accelerators = ai_source.fetch_accelerators()
+    downloads = ai_source.fetch_downloads(_AI_PACKAGES)
+
+    dated = [a for a in accelerators if a.release_date is not None]
+    dated.sort(key=lambda a: a.release_date, reverse=True)
+
+    # 제조사별 집계 — 누가 몇 종을 내놓았나. NVIDIA 의 비중이 곧 이 시장이다.
+    by_maker: dict[str, int] = {}
+    for a in accelerators:
+        by_maker[a.manufacturer] = by_maker.get(a.manufacturer, 0) + 1
+
+    return AiDataOut(
+        accelerators=[
+            AcceleratorOut(
+                name=a.name,
+                manufacturer=a.manufacturer,
+                kind=a.kind or None,
+                release_date=a.release_date,
+                price_usd=a.price_usd,
+                fp16_flops=a.fp16_flops,
+                fp8_flops=a.fp8_flops,
+                memory_bytes=a.memory_bytes,
+                bandwidth_bytes=a.bandwidth_bytes,
+                tdp_watts=a.tdp_watts,
+                flops_per_watt=a.flops_per_watt,
+            )
+            # 최근 것부터. 오래된 카드는 투자 판단에 덜 쓰인다.
+            for a in dated[:40]
+        ],
+        manufacturers=[
+            ManufacturerCountOut(name=name, count=count)
+            for name, count in sorted(by_maker.items(), key=lambda t: -t[1])
+        ],
+        total_accelerators=len(accelerators),
+        downloads=[
+            PackageDownloadsOut(
+                package=d.package,
+                label=d.label,
+                last_week=d.last_week,
+                prior_week=d.prior_week,
+                week_over_week=(
+                    d.week_over_week.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                    if d.week_over_week is not None
+                    else None
+                ),
+                days=[day.isoformat() for day in d.days],
+                counts=d.counts,
+            )
+            for d in sorted(downloads, key=lambda x: -x.last_week)
+        ],
+        sources=[
+            "AI 가속기: Epoch AI `ml_hardware.csv` — 공개 데이터셋, 키 없음",
+            "SDK 다운로드: npm registry `api.npmjs.org/downloads` — 공개 API, 키 없음",
+            "⚠️Epoch 데이터는 가격·성능이 **미공개인 칸이 흔하다**. 비워 둔 채로 둔다 — 0 으로 채우면 '무료'나 '성능 0'이 된다.",
+            "⚠️SDK 다운로드는 CI·미러가 섞인 수치다. 절대값보다 **추세와 상대 비교**로 읽는 편이 낫다.",
+        ],
+    )
+
+
+@router.get("/ai-data", response_model=AiDataOut)
+def get_ai_data(refresh: bool = Query(default=False)) -> AiDataOut:
+    """AI 생태계 지표 — 가속기 · SDK 채택. **키 없이** 공개 데이터."""
+    global _ai_cache
+    now = time.monotonic()
+    with _ai_lock:
+        if not refresh and _ai_cache is not None and now - _ai_cache[0] < AI_DATA_TTL_SECONDS:
+            return _ai_cache[1]
+
+    built = _build_ai_data()
+    with _ai_lock:
+        _ai_cache = (time.monotonic(), built)
+    return built

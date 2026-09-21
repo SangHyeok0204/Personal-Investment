@@ -161,8 +161,11 @@ export const navItems: NavItem[] = [
         hint: "지수 · 금리 · 환율 · 원자재 · 크립토",
       },
       { label: "매크로", href: "/macro", status: "live", hint: "물가 · 고용 · 금리 · 성장 (FRED)" },
-      { label: "AI Key Data", href: "/ai-key-data", status: "placeholder",
-        hint: "collector 필요 — 현재 미가동",
+      {
+        label: "AI Key Data",
+        href: "/ai-key-data",
+        status: "live",
+        hint: "AI 가속기 · SDK 채택 (Epoch AI · npm)",
       },
     ],
   },

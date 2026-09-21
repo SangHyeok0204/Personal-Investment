@@ -927,6 +927,55 @@ class EarningsOut(BaseModel):
     last_date: date
 
 
+# ── AI 생태계 지표 ───────────────────────────────────────────────────────────
+
+class AcceleratorOut(BaseModel):
+    """AI 가속기 한 종.
+
+    ⚠️가격·성능이 **미공개인 칸이 흔하다**. None 으로 둔다 — 0 으로 채우면
+      "무료"나 "성능 0"이라는 틀린 사실이 남는다.
+    """
+
+    name: str
+    manufacturer: str
+    kind: str | None
+    release_date: date | None
+    price_usd: Decimal | None
+    fp16_flops: Decimal | None
+    fp8_flops: Decimal | None
+    memory_bytes: Decimal | None
+    bandwidth_bytes: Decimal | None
+    tdp_watts: Decimal | None
+    # FP16 ÷ TDP. 데이터센터가 실제로 따지는 값이다.
+    flops_per_watt: Decimal | None
+
+
+class ManufacturerCountOut(BaseModel):
+    name: str
+    count: int
+
+
+class PackageDownloadsOut(BaseModel):
+    """AI SDK 다운로드 — "모델을 실제로 쓰고 있나"의 대리 지표."""
+
+    package: str
+    label: str
+    last_week: int
+    prior_week: int
+    # 직전 주가 0 이면 나눌 수 없어 None.
+    week_over_week: Decimal | None
+    days: list[str]
+    counts: list[int]
+
+
+class AiDataOut(BaseModel):
+    accelerators: list[AcceleratorOut]
+    manufacturers: list[ManufacturerCountOut]
+    total_accelerators: int
+    downloads: list[PackageDownloadsOut]
+    sources: list[str]
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
