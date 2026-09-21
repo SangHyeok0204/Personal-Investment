@@ -69,6 +69,12 @@ export const navItems: NavItem[] = [
         hint: "증권사별 계좌 합산",
       },
       {
+        label: "편입비",
+        href: "/portfolio/inclusion",
+        status: "live",
+        hint: "비중 변화 · 신규 편입 · 청산",
+      },
+      {
         label: "섹터/자산 배분",
         href: "/portfolio/allocation",
         status: "placeholder",

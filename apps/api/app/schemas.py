@@ -479,6 +479,67 @@ class PerformanceAnalyticsOut(BaseModel):
     flow_shifts: list[FlowShiftOut]
 
 
+# ── 편입비 (매매 이력에서 복원) ──────────────────────────────────────────────
+
+class InclusionEventOut(BaseModel):
+    event_date: date
+    ticker: str
+    asset_name: str | None
+    kind: str
+    """ENTRY(신규 편입) · ADD(추가 매수) · TRIM(일부 매도) · EXIT(전량 청산)"""
+    quantity: Decimal
+    amount: Decimal
+    weight_before: Decimal | None
+    weight_after: Decimal | None
+    holdings_after: int
+
+
+class InclusionHoldingOut(BaseModel):
+    """종목별 편입 현황. 청산된 종목도 포함한다(빠진 이력도 이력이다)."""
+
+    ticker: str
+    asset_name: str | None
+    first_entry: date
+    exited_at: date | None
+    status: str
+    """OPEN(보유 중) · CLOSED(청산) · STALE(매매 이력에 매도가 빠짐)
+
+    STALE 은 실제로 관측된 상태다 — SKHY 는 2026-09-18 에 팔려 realized_pnl 에
+    있는데 그 매도 체결만 trades 에 없었다. 조용히 보유 중으로 두면 편입비가
+    틀리고, 조용히 지우면 이력이 사라진다. 그래서 표시해서 남긴다.
+    """
+    holding_days: int
+    cost: Decimal | None
+    weight: Decimal | None
+    buy_count: int
+    sell_count: int
+
+
+class InclusionWeightPointOut(BaseModel):
+    base_date: date
+    ticker: str
+    weight: Decimal
+    cost: Decimal
+
+
+class InclusionOut(BaseModel):
+    """편입비 — **원가(USD) 기준**이다.
+
+    평가금액 기준 과거 비중은 종목별 과거 주가가 있어야 하는데 저장하지 않는다.
+    trades 의 amount_krw 는 전부 비어 있고 거래일 환율도 없어서 USD 로 둔다.
+    """
+
+    currency: str
+    first_trade_date: date | None
+    last_trade_date: date | None
+    holdings: list[InclusionHoldingOut]
+    events: list[InclusionEventOut]
+    monthly_weights: list[InclusionWeightPointOut]
+    total_cost: Decimal | None
+    open_count: int
+    exited_count: int
+
+
 class RealizedPnlOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

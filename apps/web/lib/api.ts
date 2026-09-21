@@ -2998,6 +2998,64 @@ export function getPerformanceAnalytics(
   );
 }
 
+// ── 편입비 (매매 이력에서 복원, 원가 USD 기준) ──────────────────────────────
+
+export interface InclusionEvent {
+  event_date: string;
+  ticker: string;
+  asset_name: string | null;
+  /** ENTRY(신규 편입) · ADD(추가 매수) · TRIM(일부 매도) · EXIT(전량 청산) */
+  kind: "ENTRY" | "ADD" | "TRIM" | "EXIT";
+  quantity: string;
+  amount: string;
+  weight_before: string | null;
+  weight_after: string | null;
+  holdings_after: number;
+}
+
+export interface InclusionHolding {
+  ticker: string;
+  asset_name: string | null;
+  first_entry: string;
+  exited_at: string | null;
+  /** OPEN(보유 중) · CLOSED(청산) · STALE(매매 이력에 매도가 빠짐) */
+  status: "OPEN" | "CLOSED" | "STALE";
+  holding_days: number;
+  cost: string | null;
+  weight: string | null;
+  buy_count: number;
+  sell_count: number;
+}
+
+export interface InclusionWeightPoint {
+  base_date: string;
+  ticker: string;
+  weight: string;
+  cost: string;
+}
+
+export interface Inclusion {
+  currency: string;
+  first_trade_date: string | null;
+  last_trade_date: string | null;
+  holdings: InclusionHolding[];
+  events: InclusionEvent[];
+  monthly_weights: InclusionWeightPoint[];
+  total_cost: string | null;
+  open_count: number;
+  exited_count: number;
+}
+
+export function getInclusion(
+  accountId?: string | null,
+  days = 1095,
+): Promise<Inclusion> {
+  const q = accountQuery(accountId);
+  return request<Inclusion>(
+    `/api/v1/portfolio/inclusion${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 export function getRealizedPnl(
   accountId?: string | null,
   days = 365,

@@ -21,6 +21,7 @@ from sqlalchemy import case, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from app.core import performance_analytics as pa
+from app.core import position_timeline as pt
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core.errors import AppError
 from app.db.session import get_db
@@ -44,6 +45,10 @@ from app.schemas import (
     DrawdownPointOut,
     MonthlyReturnOut,
     FlowShiftOut,
+    InclusionEventOut,
+    InclusionHoldingOut,
+    InclusionOut,
+    InclusionWeightPointOut,
     PerformanceAnalyticsOut,
     PeriodReturnOut,
     RiskMetricsOut,
@@ -1110,3 +1115,160 @@ def _contributions(
         else None
     )
     return items, (total_purchase, total_pnl, total_return)
+
+
+# ── 편입비 ──────────────────────────────────────────────────────────────────
+
+@router.get("/inclusion", response_model=InclusionOut)
+def get_inclusion(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(1095, ge=30, le=3650),
+    db: Session = Depends(get_db),
+) -> InclusionOut:
+    """편입비 — 매매 이력을 되감아 종목별 원가 비중과 편입/청산 이벤트를 만든다.
+
+    ⚠️스냅샷을 쓰지 않는다. `portfolio_snapshots` 에는 오늘 것 한 줄뿐이라
+      과거 비중을 만들 수 없다. 매매 이력은 증권사가 과거치를 그대로 준다.
+
+    ⚠️**원가(USD) 기준**이다. 평가금액 기준 과거 비중은 종목별 과거 주가가
+      있어야 하는데 저장하지 않는다. trades.amount_krw 는 전부 비어 있고
+      거래일 환율도 없어서, 오늘 환율을 과거 거래에 곱하는 대신 USD 로 둔다.
+    """
+    empty = InclusionOut(
+        currency="USD", first_trade_date=None, last_trade_date=None,
+        holdings=[], events=[], monthly_weights=[], total_cost=None,
+        open_count=0, exited_count=0,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    since = date.today() - timedelta(days=days)
+    rows = db.execute(
+        select(Trade)
+        .where(Trade.account_id.in_(account_ids), Trade.trade_date >= since)
+        # ★체결 순서를 그대로 넘긴다. trade_no 가 같은 날 안의 순서를 정한다 —
+        #   순서를 바꾸면 이동평균 원가가 어긋난다.
+        .order_by(Trade.trade_date, Trade.trade_no)
+    ).scalars().all()
+    if not rows:
+        return empty
+
+    trades = [
+        pt.TradeRow(
+            trade_date=t.trade_date,
+            ticker=t.ticker,
+            side=t.side,
+            quantity=t.quantity,
+            amount=t.amount_local,
+            price=t.price,
+            asset_name=t.asset_name,
+        )
+        for t in rows
+    ]
+    events, history = pt.build_timeline(trades)
+    periods = pt.holding_periods(events)
+    final = history[max(history)] if history else {}
+
+    # ★복원 결과를 **실제 보유**와 대조한다(2026-09-22).
+    #   매매 이력에 매도가 빠지면 이미 판 종목이 영영 보유 중으로 남는다.
+    #   실측: SKHY 는 2026-09-18 에 팔려 realized_pnl 에 있는데 그 매도 체결만
+    #   trades 에 없었다(체결 이력이 09-16 에서 끊겨 있었다). 그대로 두면
+    #   편입비 분모에 $344 가 계속 섞인다.
+    held_now = {
+        ticker
+        for (ticker,) in db.execute(
+            select(Asset.ticker)
+            .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+            .where(CurrentPosition.account_id.in_(account_ids))
+        ).all()
+    }
+    # 매도 체결이 빠졌을 때 실제 청산일은 실현손익에서 가져온다.
+    sold_at = dict(
+        db.execute(
+            select(RealizedPnl.ticker, func.max(RealizedPnl.sell_date))
+            .where(RealizedPnl.account_id.in_(account_ids))
+            .group_by(RealizedPnl.ticker)
+        ).all()
+    )
+    stale = {t for t in final if t not in held_now}
+
+    # ⚠️분모에서 STALE 을 뺀다. 안 빼면 이미 판 종목이 편입비를 갉아먹는다.
+    total_cost = (
+        sum((l.cost for t, l in final.items() if t not in stale), Decimal("0")) or None
+    )
+
+    buys: dict[str, int] = {}
+    sells: dict[str, int] = {}
+    for t in trades:
+        (buys if t.is_buy else sells)[t.ticker] = (
+            (buys if t.is_buy else sells).get(t.ticker, 0) + 1
+        )
+
+    names = {t.ticker: t.asset_name for t in trades if t.asset_name}
+    today = date.today()
+    holdings = []
+    for ticker, (entry, exited) in sorted(periods.items()):
+        lot = final.get(ticker)
+        is_stale = ticker in stale
+        if is_stale:
+            status = "STALE"
+            # 매도 체결은 없지만 실현손익에는 있다 — 그 날짜를 청산일로 쓴다.
+            exited = exited or sold_at.get(ticker)
+        elif exited is not None or lot is None:
+            status = "CLOSED"
+        else:
+            status = "OPEN"
+
+        holdings.append(
+            InclusionHoldingOut(
+                ticker=ticker,
+                asset_name=names.get(ticker),
+                first_entry=entry,
+                exited_at=exited,
+                status=status,
+                holding_days=((exited or today) - entry).days,
+                cost=lot.cost if lot else None,
+                weight=(
+                    (lot.cost / total_cost).quantize(_RATIO, rounding=ROUND_HALF_UP)
+                    if lot and total_cost and not is_stale
+                    else None
+                ),
+                buy_count=buys.get(ticker, 0),
+                sell_count=sells.get(ticker, 0),
+            )
+        )
+    # 보유 중 → 이력 누락 → 청산 순. 같은 묶음 안에서는 비중 큰 순.
+    _ORDER = {"OPEN": 0, "STALE": 1, "CLOSED": 2}
+    holdings.sort(key=lambda h: (_ORDER[h.status], -(h.weight or Decimal("0"))))
+
+    return InclusionOut(
+        currency="USD",
+        first_trade_date=trades[0].trade_date,
+        last_trade_date=trades[-1].trade_date,
+        holdings=holdings,
+        events=[
+            InclusionEventOut(
+                event_date=e.event_date,
+                ticker=e.ticker,
+                asset_name=e.asset_name or names.get(e.ticker),
+                kind=e.kind,
+                quantity=e.quantity,
+                amount=e.amount,
+                weight_before=e.weight_before,
+                weight_after=e.weight_after,
+                holdings_after=e.holdings_after,
+            )
+            # 최근 것이 위로. 편입 구조가 바뀐 순간만 본다.
+            for e in reversed(events)
+        ],
+        monthly_weights=[
+            InclusionWeightPointOut(
+                base_date=w.base_date, ticker=w.ticker, weight=w.weight, cost=w.cost
+            )
+            for w in pt.month_end_weights(history)
+        ],
+        total_cost=total_cost,
+        open_count=sum(1 for h in holdings if h.status == "OPEN"),
+        exited_count=sum(1 for h in holdings if h.status != "OPEN"),
+    )
