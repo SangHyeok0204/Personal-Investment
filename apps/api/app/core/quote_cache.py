@@ -17,14 +17,18 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # worker 패키지(brokers/, prices/)를 재사용한다 — API 가 같은 계약을 두 번 쓰지 않는다.
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
 if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
+from app.core import credentials_store  # noqa: E402
 from prices import CompositePriceSource, Quote, YahooPriceSource  # noqa: E402
+from prices.toss import TossPriceSource  # noqa: E402
 
 TTL_SECONDS = 4.0
 
@@ -32,16 +36,49 @@ _lock = threading.Lock()
 _cache: dict[str, tuple[float, Quote]] = {}
 
 
-def _build_source() -> CompositePriceSource:
-    """시세 소스 사슬.
+def us_regular_session_open(now: datetime | None = None) -> bool:
+    """미국 정규장(평일 09:30~16:00 ET)이 열려 있나.
 
-    지금은 야후 하나다. 토스는 자격증명(+IP 허용목록)이 들어오는 순간 여기에
-    한 줄 추가하면 된다 — 앞 소스가 못 준 심볼만 뒤로 넘어간다.
-    ⚠️토스를 조건 없이 끼워 두지 않는다. 키가 없으면 매 호출마다 토큰 발급이
-      실패해 5초마다 쓸모없는 네트워크 왕복이 생긴다.
+    공휴일은 보지 않는다 — 휴장일이면 두 소스 다 같은 전일 종가를 주므로
+    순서를 어떻게 잡든 결과가 같다.
     """
-    sources = [YahooPriceSource()]
-    return CompositePriceSource(sources)
+    et = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+    if et.weekday() >= 5:
+        return False
+    minutes = et.hour * 60 + et.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
+
+
+def _build_source() -> CompositePriceSource:
+    """시세 소스 사슬. **세션에 따라 순서가 바뀐다.**
+
+    두 소스는 미국 정규장 중에는 값이 완전히 같다(2026-09-22 실측, 5종목
+    소수점까지 +0.00%). 그래서 순서를 정하는 기준은 정확도가 아니라 **언제
+    믿을 수 있는가** 다.
+
+    ⚠️토스의 미국 종목 당일 봉은 한국 **데이마켓**(KST 09:00~16:50) 체결을
+      포함한다. 미국장이 닫혀 있는 동안 그 값은 거래량이 정규장의 1% 미만인
+      얇은 체결가다(DailyPriceAgent 실측: NVDA 371,568주 vs 정규장 9,400만주).
+      그걸 "현재가"로 쓰면 하루 등락률이 통째로 틀린다.
+      → 정규장 중에는 토스 우선(사용자가 원한 소스), 닫혀 있으면 야후 우선.
+
+    ⚠️토스 키가 없으면 토스를 아예 끼우지 않는다. 키 없이 두면 5초마다 토큰
+      발급이 실패해 쓸모없는 왕복만 생긴다.
+    ⚠️토스는 **클라이언트당 유효 토큰 1개**다. 같은 키를 쓰는 DailyPriceAgent 가
+      돌면 서로 토큰을 무효화한다. 그때는 토스가 통째로 실패하고 사슬이 야후로
+      넘어간다 — 화면은 비지 않는다.
+    """
+    yahoo = YahooPriceSource()
+    # ⚠️os.environ 만 보면 안 된다 — 이 앱의 Settings 는 .env 를 로드하지 않고,
+    #   load_into_environ 은 KIWOOM_* 만 올린다. 파일도 같이 본다.
+    client_id = credentials_store.read_env_value("TOSS_CLIENT_ID")
+    client_secret = credentials_store.read_env_value("TOSS_CLIENT_SECRET")
+    if not (client_id and client_secret):
+        return CompositePriceSource([yahoo])
+
+    toss = TossPriceSource(client_id, client_secret)
+    order = [toss, yahoo] if us_regular_session_open() else [yahoo, toss]
+    return CompositePriceSource(order)
 
 
 def get_quotes(symbols: list[str]) -> tuple[dict[str, Quote], int]:

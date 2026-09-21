@@ -34,6 +34,20 @@ MANAGED_KEYS = (
 )
 
 
+def read_env_value(name: str) -> str | None:
+    """`.env` 의 값 하나를 읽는다(환경변수가 있으면 그쪽이 우선).
+
+    ⚠️`MANAGED_KEYS` 에 토스 키를 넣지 않았다. 연동 팝업의 저장 경로가 그 목록만
+      기준으로 `.env` 를 다시 쓰기 때문에, 넣어 두면 키움 키를 저장할 때 토스 키가
+      조용히 지워진다. 토스 키는 읽기만 한다.
+    """
+    from_env = os.environ.get(name)
+    if from_env:
+        return from_env
+    value = _read_env_file().get(name)
+    return value.strip().strip('"').strip("'") if value else None
+
+
 def _read_env_file() -> dict[str, str]:
     if not ENV_PATH.exists():
         return {}

@@ -114,3 +114,40 @@
     animation: none;
   }
 }
+
+/* ── 숫자 갱신 슬라이드 ───────────────────────────────────────────────────────
+   사용자 요청(2026-09-22): 기존 숫자는 아래로 빠지고, 새 숫자는 위에서 내려온다.
+   iNAV 모니터의 `inav-roll-*` 과 같은 움직임이지만 주기(5초 갱신)가 달라
+   duration 을 컴포넌트가 정할 수 있게 따로 둔다. */
+.number-roll-out {
+  animation-name: number-roll-out;
+  animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  animation-fill-mode: forwards;
+}
+.number-roll-in {
+  animation-name: number-roll-in;
+  animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  animation-fill-mode: backwards;
+}
+@keyframes number-roll-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes number-roll-in {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .number-roll-out,
+  .number-roll-in {
+    animation: none;
+  }
+}

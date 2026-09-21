@@ -45,7 +45,9 @@ def _dec(value) -> Decimal | None:
 
 class TossPriceSource(PriceSource):
     name = "toss"
-    markets = ("KOSPI", "KOSDAQ", "KRX")
+    # ★미국 종목도 지원한다(2026-09-22 실측: AAPL → market=NASDAQ, currency=USD).
+    #   이식 당시 KRX 만 적어 두었는데 틀렸다.
+    markets = ("KOSPI", "KOSDAQ", "KRX", "NASDAQ", "NYSE", "AMEX", "US")
 
     def __init__(self, client_id, client_secret, http_client=None,
                  min_interval: float = 0.12, sleep=time.sleep):
@@ -125,26 +127,50 @@ class TossPriceSource(PriceSource):
 
     # ── 시세 ────────────────────────────────────────────────────────────────
     def quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        """종목 기본정보 다건 조회(최대 200)로 현재가를 모은다.
+        """현재가를 일봉 최신 2개에서 뽑는다.
 
-        한 종목이라도 값이 없으면 그 종목만 결과에서 빠진다 — 호출부가 "—" 로 그린다.
+        ⚠️이식 당시 `/api/v1/stocks` 를 봤는데 **거기엔 가격이 없다**(2026-09-22
+          실측). 그 엔드포인트는 종목명·ISIN·시장·통화·상장주식수 같은 기본정보만
+          준다. 그래서 `close`/`closePrice` 를 찾던 파서가 늘 빈 결과를 냈다.
+          가격은 `/api/v1/candles` 에 있다.
+
+        ⚠️봉은 **최신순**으로 온다. candles[0] 이 오늘(진행 중), [1] 이 전일이다.
+          오름차순으로 착각하면 현재가와 전일종가가 뒤바뀐다.
+
+        ⚠️다건 조회가 없다 — 심볼마다 한 번씩 부른다. 유량제한이 있으므로
+          `_get` 의 페이싱(min_interval)을 그대로 탄다.
+
+        ⚠️미국 종목의 **당일 봉은 한국 데이마켓(KST 09:00~16:50) 체결을 포함**한다.
+          미국 정규장이 닫혀 있는 동안 이 값은 거래량이 정규장의 1% 미만인 얇은
+          체결가라 "현재가"로 쓰면 안 된다(DailyPriceAgent 실측: NVDA 371,568주
+          vs 정규장 9,400만주). 그래서 호출부가 세션을 보고 소스 순서를 정한다.
         """
         out: dict[str, Quote] = {}
-        for chunk in _chunks(symbols, 200):
-            rows = self._get("/api/v1/stocks", {"symbols": ",".join(chunk)})
-            for row in rows or []:
-                symbol = row.get("symbol") or row.get("code")
-                price = _dec(row.get("close") or row.get("closePrice") or row.get("price"))
-                if not symbol or price is None:
-                    continue
-                out[symbol] = Quote(
-                    symbol=symbol,
-                    price=price,
-                    currency=row.get("currency") or "KRW",
-                    previous_close=_dec(row.get("prevClosePrice") or row.get("base")),
-                    as_of=datetime.now(KST),
-                    source=self.name,
+        for symbol in dict.fromkeys(symbols):
+            try:
+                res = self._get(
+                    "/api/v1/candles",
+                    {"symbol": symbol, "interval": "1d", "count": 2},
                 )
+            except Exception:
+                # 한 종목이 실패해도 나머지는 살린다.
+                continue
+            candles = (res or {}).get("candles") or []
+            if not candles:
+                continue
+            price = _dec(candles[0].get("closePrice"))
+            if price is None:
+                continue
+            out[symbol] = Quote(
+                symbol=symbol,
+                price=price,
+                currency=candles[0].get("currency") or "KRW",
+                previous_close=(
+                    _dec(candles[1].get("closePrice")) if len(candles) > 1 else None
+                ),
+                as_of=datetime.now(KST),
+                source=self.name,
+            )
         return out
 
 
