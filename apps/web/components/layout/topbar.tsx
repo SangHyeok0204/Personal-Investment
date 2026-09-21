@@ -12,6 +12,9 @@ import {
 } from "lucide-react";
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { ALL_ACCOUNTS, useAccount } from "@/components/layout/account-context";
+import { useConnectDialog } from "@/components/brokerage/connect-context";
+import { runBrokerageSync } from "@/lib/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
 /**
@@ -77,6 +80,13 @@ export function Topbar({
   const { collapsed, toggle } = useSidebar();
   const session = useMarketSession();
   const { accountId, setAccountId, accounts, connected, isError } = useAccount();
+  const { open: openConnect } = useConnectDialog();
+  const queryClient = useQueryClient();
+  // 상단 바 동기화 — 계좌가 이미 있으면 바로 돌리고, 없으면 연동 팝업을 연다.
+  const sync = useMutation({
+    mutationFn: runBrokerageSync,
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
 
@@ -193,12 +203,16 @@ export function Topbar({
                           ? "API 서버에 연결하지 못했습니다."
                           : "연동된 증권사 계좌가 없습니다."}
                       </p>
-                      <a
-                        href="/settings/connections"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountOpen(false);
+                          openConnect();
+                        }}
                         className="mt-2 inline-block rounded-lg border border-hairline bg-white px-3 py-1.5 text-[12px] font-bold text-ge-point transition-colors hover:bg-ge-blue-bg"
                       >
                         계좌 연동하기
-                      </a>
+                      </button>
                     </div>
                   ) : (
                     <>
@@ -235,22 +249,32 @@ export function Topbar({
             {/* 동기화 — syncedAt 이 없으면 아직 계좌 API 가 안 붙은 상태다. */}
             <button
               type="button"
-              onClick={onSync}
-              disabled={!onSync}
+              onClick={() => {
+                if (onSync) return onSync();
+                if (!connected) return openConnect();
+                sync.mutate();
+              }}
+              disabled={sync.isPending}
               title={
-                lastSynced
-                  ? `마지막 동기화: ${new Date(lastSynced).toLocaleString("ko-KR")}`
-                  : "아직 동기화된 적 없음"
+                !connected
+                  ? "계좌를 연동하세요"
+                  : lastSynced
+                    ? `마지막 동기화: ${new Date(lastSynced).toLocaleString("ko-KR")} — 눌러서 다시 동기화`
+                    : "눌러서 동기화"
               }
               className="flex items-center gap-1.5 text-[12px] font-bold text-slate-500 transition-colors hover:text-slate-700 disabled:cursor-default disabled:text-slate-300"
             >
-              <RefreshCw className="h-4 w-4" />
-              {lastSynced
-                ? new Date(lastSynced).toLocaleTimeString("ko-KR", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "미동기화"}
+              <RefreshCw className={cn("h-4 w-4", sync.isPending && "animate-spin")} />
+              {sync.isPending
+                ? "동기화 중"
+                : lastSynced
+                  ? new Date(lastSynced).toLocaleTimeString("ko-KR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : connected
+                    ? "미동기화"
+                    : "연동하기"}
             </button>
           </>
         )}

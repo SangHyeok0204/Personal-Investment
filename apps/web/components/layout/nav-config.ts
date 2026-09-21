@@ -1,6 +1,5 @@
 import {
   BookOpen,
-  Boxes,
   LineChart,
   Newspaper,
   PiggyBank,
@@ -163,23 +162,6 @@ export const navItems: NavItem[] = [
       { label: "매크로", href: "/macro", status: "live", hint: "금리 · 환율 · 원자재" },
       { label: "iNAV 모니터", href: "/inav", status: "live" },
       { label: "AI Key Data", href: "/ai-key-data", status: "live" },
-    ],
-  },
-  {
-    label: "상품/ETF",
-    icon: Boxes,
-    children: [
-      {
-        label: "ETF 순매수/수익률",
-        href: "/etf-class",
-        status: "live",
-      },
-      {
-        label: "ETF 비교",
-        status: "planned",
-        hint: "보수 · 추적오차 · 괴리율 비교",
-      },
-      { label: "펀드/연금", status: "planned", hint: "퇴직연금 · IRP 상품" },
     ],
   },
   {

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { PlugZap } from "lucide-react";
+import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +33,22 @@ export function NotConnectedBanner({
         {message ??
           `${what} — 아직 연동 전입니다. 화면 골격만 잡혀 있고 모든 수치는 비어 있습니다.`}
       </p>
-      <a
-        href="/settings/connections"
-        className="ml-auto shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-bold text-amber-800 transition-colors hover:bg-amber-100"
-      >
-        계좌 연동하기
-      </a>
+      <ConnectButton />
     </div>
+  );
+}
+
+/** 어디서 눌러도 같은 연동 팝업을 연다. */
+function ConnectButton() {
+  const { open } = useConnectDialog();
+  return (
+    <button
+      type="button"
+      onClick={open}
+      className="ml-auto shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-bold text-amber-800 transition-colors hover:bg-amber-100"
+    >
+      계좌 연동하기
+    </button>
   );
 }
 

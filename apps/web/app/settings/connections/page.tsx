@@ -7,6 +7,7 @@ import { Topbar } from "@/components/layout/topbar";
 import { PlannedList, StubCard } from "@/components/stub";
 import { getPortfolioConnections, type PortfolioConnection } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { cn } from "@/lib/utils";
 
 // 연동 상태 화면.
@@ -18,8 +19,9 @@ import { cn } from "@/lib/utils";
 //     · 계좌 연동  — 내가 무엇을 얼마나 들고 있나 (증권사 계좌)
 //     · 시세 소스  — 그게 지금 얼마인가 (가격 피드)
 //
-// 키 입력 폼은 아직 만들지 않는다. 키는 서버 .env 에 두고 브라우저로 내려보내지
-// 않는 게 원칙이라, 화면에서 키를 받으려면 별도의 서버 경로가 먼저 있어야 한다.
+// ★2026-09-21: 키 입력을 팝업(ConnectDialog)으로 붙였다. 키는 브라우저 → 서버로
+//   한 번만 흐르고, 서버는 검증 성공 후에만 .env(0600)에 저장하며 어떤 응답에도
+//   키를 싣지 않는다(지문과 꼬리 4자리뿐).
 
 const PRICE_SOURCES = [
   {
@@ -58,6 +60,7 @@ function StateChip({ status }: { status: string }) {
 }
 
 export default function ConnectionsPage() {
+  const { open: openConnect } = useConnectDialog();
   const connections = useQuery({
     queryKey: ["portfolioConnections"],
     queryFn: getPortfolioConnections,
@@ -82,6 +85,13 @@ export default function ConnectionsPage() {
                   : "아직 등록된 연동 없음"
             }
           >
+            <button
+              type="button"
+              onClick={openConnect}
+              className="mb-3 w-full rounded-xl bg-ge-point px-4 py-2.5 text-[13px] font-extrabold text-white transition-colors hover:bg-ge-point/90"
+            >
+              API 키 등록 · 동기화
+            </button>
             <div className="space-y-2.5">
               {items.map((c) => (
                 <ConnectionRow key={c.id} connection={c} />

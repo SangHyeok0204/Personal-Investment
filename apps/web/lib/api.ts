@@ -2914,3 +2914,61 @@ export function getRealizedPnl(
     `/api/v1/portfolio/realized${q ? `${q}&` : "?"}days=${days}`,
   );
 }
+
+// ── 증권사 연동 (키 등록 · 계좌 확인 · 동기화) ───────────────────────────────
+// ⚠️키는 **보내기만** 한다. 어떤 응답에도 키가 실려 오지 않는다(지문과 꼬리 4자리뿐).
+
+export interface BrokerAccountPreview {
+  external_account_id: string;
+  account_number_masked: string | null;
+  account_name: string | null;
+  account_type: string | null;
+}
+
+export interface CredentialsStatus {
+  configured: boolean;
+  environment: string;
+  markets: string[];
+  fingerprint: string | null;
+  app_key_tail: string | null;
+  connection_ok: boolean | null;
+  connection_reason: string | null;
+  connection_message: string | null;
+  accounts: BrokerAccountPreview[];
+}
+
+export interface SyncResult {
+  ok: boolean;
+  accounts_synced: number;
+  positions: number;
+  trades: number;
+  daily_performance: number;
+  realized_pnl: number;
+  message: string | null;
+}
+
+export function getCredentialsStatus(): Promise<CredentialsStatus> {
+  return request<CredentialsStatus>("/api/v1/brokerage/credentials");
+}
+
+/** 등록된 키로 조회되는 계좌 목록 — 연결 확인까지 같이 한다(느릴 수 있다). */
+export function getBrokerAccounts(): Promise<CredentialsStatus> {
+  return request<CredentialsStatus>("/api/v1/brokerage/accounts");
+}
+
+export function registerCredentials(body: {
+  app_key: string;
+  secret_key: string;
+  environment: string;
+  markets: string[];
+}): Promise<CredentialsStatus> {
+  return request<CredentialsStatus>("/api/v1/brokerage/credentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function runBrokerageSync(): Promise<SyncResult> {
+  return request<SyncResult>("/api/v1/brokerage/sync", { method: "POST" });
+}
