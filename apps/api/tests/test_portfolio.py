@@ -335,3 +335,128 @@ def test_summary_exposes_foreign_cash_that_cannot_be_converted(client, db, kiwoo
     # 환율이 없으니 KRW 환산은 null 이다 — 0 이 아니다.
     assert by_ccy["USD"]["krw_value"] is None
     assert Decimal(by_ccy["KRW"]["krw_value"]) == Decimal("500000")
+
+
+# ── 매매(체결) 내역 ──────────────────────────────────────────────────────────
+
+def _add_trade(db, account_id, **kw):
+    from app.models import Trade
+    from datetime import date as _date
+
+    defaults = dict(
+        id=uuid.uuid4(), account_id=account_id, ticker="SCHD",
+        asset_name="미국배당주슈왑ETF", trade_date=_date(2026, 9, 16),
+        trade_no="000000001", side="BUY", quantity=Decimal("10"),
+        price=Decimal("30.00"), currency="USD", amount_local=Decimal("300.00"),
+        settlement_amount_local=Decimal("300.75"),
+        commission_local=Decimal("0.75"), tax_local=Decimal("0.00"),
+    )
+    defaults.update(kw)
+    trade = Trade(**defaults)
+    db.add(trade)
+    db.commit()
+    return trade
+
+
+def test_trades_empty_without_accounts(client):
+    body = client.get("/api/v1/portfolio/trades").json()
+    assert body == {
+        "items": [], "total": 0, "stats": [],
+        "first_trade_date": None, "last_trade_date": None,
+    }
+
+
+def test_trades_rejects_unknown_side(client, kiwoom):
+    r = client.get("/api/v1/portfolio/trades?side=LONG")
+    assert r.status_code == 400
+    assert r.json()["error"]["details"]["allowed"] == ["BUY", "SELL"]
+
+
+def test_trades_listed_newest_first_with_account_name(client, db, kiwoom):
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_date=_date(2026, 9, 10), trade_no="000000001")
+    _add_trade(db, account_id, trade_date=_date(2026, 9, 16), trade_no="000000002",
+               ticker="HUT", asset_name="허트8")
+
+    body = client.get("/api/v1/portfolio/trades").json()
+    assert body["total"] == 2
+    assert [i["ticker"] for i in body["items"]] == ["HUT", "SCHD"]
+    assert body["items"][0]["account_name"] == "키움 주계좌"
+    assert body["first_trade_date"] == "2026-09-10"
+    assert body["last_trade_date"] == "2026-09-16"
+
+
+def test_trades_stats_split_by_currency(client, db, kiwoom):
+    """USD 거래와 KRW 거래를 한 숫자로 더하지 않는다 — 환산 환율이 없다."""
+    from datetime import date as _date
+
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_no="000000001", side="BUY",
+               currency="USD", amount_local=Decimal("300.00"),
+               commission_local=Decimal("0.75"))
+    _add_trade(db, account_id, trade_no="000000002", side="SELL",
+               currency="USD", amount_local=Decimal("500.00"),
+               commission_local=Decimal("1.25"), tax_local=Decimal("0.05"))
+    _add_trade(db, account_id, trade_no="000000003", side="BUY",
+               currency="KRW", ticker="005930", amount_local=Decimal("700000"),
+               commission_local=Decimal("105"), tax_local=Decimal("0"))
+
+    body = client.get("/api/v1/portfolio/trades").json()
+    stats = {s["currency"]: s for s in body["stats"]}
+    assert set(stats) == {"KRW", "USD"}
+
+    usd = stats["USD"]
+    assert usd["buy_count"] == 1 and usd["sell_count"] == 1
+    assert Decimal(usd["buy_amount"]) == Decimal("300.00")
+    assert Decimal(usd["sell_amount"]) == Decimal("500.00")
+    assert Decimal(usd["commission"]) == Decimal("2.00")
+    assert Decimal(usd["tax"]) == Decimal("0.05")
+
+    krw = stats["KRW"]
+    assert krw["buy_count"] == 1 and krw["sell_count"] == 0
+    assert Decimal(krw["buy_amount"]) == Decimal("700000")
+
+
+def test_trades_filter_by_side_and_ticker(client, db, kiwoom):
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_no="000000001", side="BUY", ticker="SCHD")
+    _add_trade(db, account_id, trade_no="000000002", side="SELL", ticker="HUT")
+
+    sells = client.get("/api/v1/portfolio/trades?side=SELL").json()
+    assert [i["ticker"] for i in sells["items"]] == ["HUT"]
+
+    by_ticker = client.get("/api/v1/portfolio/trades?ticker=schd").json()
+    assert [i["ticker"] for i in by_ticker["items"]] == ["SCHD"]
+
+
+def test_trades_respect_day_window(client, db, kiwoom):
+    """days 보다 오래된 체결은 빠진다."""
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_no="000000001",
+               trade_date=_date.today() - _td(days=400))
+    _add_trade(db, account_id, trade_no="000000002", trade_date=_date.today())
+
+    year = client.get("/api/v1/portfolio/trades?days=365").json()
+    assert year["total"] == 1
+    all_time = client.get("/api/v1/portfolio/trades?days=3000").json()
+    assert all_time["total"] == 2
+
+
+def test_trades_carry_sector_when_asset_is_known(client, db, kiwoom):
+    """이미 판 종목은 asset 이 없을 수 있다 — 그래도 목록에는 남아야 한다."""
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_no="000000001", ticker="005930",
+               asset_id=kiwoom["samsung"].id)
+    _add_trade(db, account_id, trade_no="000000002", ticker="QLD",
+               asset_name="QQQ2배프로셰어즈ETF", asset_id=None)
+
+    body = client.get("/api/v1/portfolio/trades").json()
+    by_ticker = {i["ticker"]: i for i in body["items"]}
+    assert set(by_ticker) == {"005930", "QLD"}
+    # 마스터가 없는 종목도 이름은 체결 기록 자체에 남아 있다.
+    assert by_ticker["QLD"]["asset_name"] == "QQQ2배프로셰어즈ETF"
+    assert by_ticker["QLD"]["sector"] is None

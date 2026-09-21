@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -313,3 +313,49 @@ class HoldingSectorPatch(BaseModel):
 
     sector: str | None = Field(default=None, max_length=64)
     industry: str | None = Field(default=None, max_length=64)
+
+
+# ── 매매(체결) 내역 ──────────────────────────────────────────────────────────
+
+class TradeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    account_id: uuid.UUID
+    account_name: str | None
+    trade_date: date
+    trade_no: str
+    side: str
+    ticker: str
+    asset_name: str | None
+    sector: str | None
+    currency: str
+    quantity: Decimal
+    price: Decimal | None
+    amount_local: Decimal | None
+    settlement_amount_local: Decimal | None
+    commission_local: Decimal | None
+    tax_local: Decimal | None
+    exchange: str | None
+    channel: str | None
+    processed_at: str | None
+
+
+class TradeStatsOut(BaseModel):
+    """기간 합계. 통화가 섞이면 합산하지 않는다 — 통화별로 나눠 내보낸다."""
+
+    currency: str
+    buy_count: int
+    sell_count: int
+    buy_amount: Decimal
+    sell_amount: Decimal
+    commission: Decimal
+    tax: Decimal
+
+
+class TradeListOut(BaseModel):
+    items: list[TradeOut]
+    total: int
+    stats: list[TradeStatsOut]
+    first_trade_date: date | None
+    last_trade_date: date | None

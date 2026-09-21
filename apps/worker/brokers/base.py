@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 
@@ -82,6 +82,32 @@ class AccountPortfolio:
     raw_pages: list[tuple[str, dict]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TradeRow:
+    """체결 한 건 — 증권사 필드명을 벗겨낸 형태.
+
+    ⚠️금액은 **거래 통화 기준**이다. 해외 거래는 증권사가 원화 금액을 0 으로 주므로
+      KRW 환산은 여기서 만들지 않는다(amount_krw 는 증권사가 실제로 줄 때만 채운다).
+    """
+
+    trade_date: date
+    trade_no: str
+    side: str  # BUY / SELL
+    ticker: str
+    name: str | None
+    currency: str
+    quantity: Decimal
+    price: Decimal | None = None
+    amount_local: Decimal | None = None
+    settlement_amount_local: Decimal | None = None
+    commission_local: Decimal | None = None
+    tax_local: Decimal | None = None
+    amount_krw: Decimal | None = None
+    exchange: str | None = None
+    channel: str | None = None
+    processed_at: str | None = None
+
+
 class BrokerAdapter:
     """증권사 하나에 대한 읽기 어댑터.
 
@@ -112,4 +138,8 @@ class BrokerAdapter:
         raise NotImplementedError
 
     def fetch_portfolio(self, account: AccountRef) -> AccountPortfolio:
+        raise NotImplementedError
+
+    def fetch_trades(self, account: AccountRef, start: date, end: date) -> list[TradeRow]:
+        """기간 내 체결 내역. 증권사마다 조회 기간 상한이 다르므로 구현체가 쪼갠다."""
         raise NotImplementedError

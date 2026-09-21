@@ -2779,3 +2779,62 @@ export function setAssetSector(
     body: JSON.stringify(body),
   });
 }
+
+// ── 매매(체결) 내역 ──────────────────────────────────────────────────────────
+
+export interface Trade {
+  id: string;
+  account_id: string;
+  account_name: string | null;
+  trade_date: string;
+  trade_no: string;
+  side: "BUY" | "SELL";
+  ticker: string;
+  asset_name: string | null;
+  sector: string | null;
+  currency: string;
+  quantity: string;
+  price: string | null;
+  amount_local: string | null;
+  settlement_amount_local: string | null;
+  commission_local: string | null;
+  tax_local: string | null;
+  exchange: string | null;
+  channel: string | null;
+  processed_at: string | null;
+}
+
+export interface TradeStats {
+  currency: string;
+  buy_count: number;
+  sell_count: number;
+  buy_amount: string;
+  sell_amount: string;
+  commission: string;
+  tax: string;
+}
+
+export interface TradeList {
+  items: Trade[];
+  total: number;
+  // 통화별로 나뉜다 — USD 와 KRW 를 한 숫자로 더하지 않는다(환산 환율이 없다).
+  stats: TradeStats[];
+  first_trade_date: string | null;
+  last_trade_date: string | null;
+}
+
+export function getTrades(params: {
+  accountId?: string | null;
+  days?: number;
+  side?: "BUY" | "SELL" | null;
+  ticker?: string | null;
+}): Promise<TradeList> {
+  const q = new URLSearchParams();
+  if (params.accountId && params.accountId !== "all") {
+    q.set("account_id", params.accountId);
+  }
+  if (params.days) q.set("days", String(params.days));
+  if (params.side) q.set("side", params.side);
+  if (params.ticker) q.set("ticker", params.ticker);
+  return request<TradeList>(`/api/v1/portfolio/trades?${q.toString()}`);
+}

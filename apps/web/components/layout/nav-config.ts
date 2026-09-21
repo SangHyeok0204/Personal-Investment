@@ -89,7 +89,7 @@ export const navItems: NavItem[] = [
       {
         label: "체결 내역",
         href: "/trading/executions",
-        status: "placeholder",
+        status: "live",
         hint: "일자별 매수/매도 체결",
       },
       {

@@ -12,10 +12,17 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..base import AccountPortfolio, AccountRef, BalanceRow, BrokerAdapter, PositionRow
+from ..base import (
+    AccountPortfolio,
+    AccountRef,
+    BalanceRow,
+    BrokerAdapter,
+    PositionRow,
+    TradeRow,
+)
 from ..registry import register
 from . import auth as auth_module
 from . import domestic
@@ -122,6 +129,48 @@ class KiwoomAdapter(BrokerAdapter):
             )
         return refs
 
+    def fetch_trades(self, account: AccountRef, start: date, end: date) -> list[TradeRow]:
+        """기간 내 체결 내역(해외). 1년 상한이 있어 창을 나눠 이어 붙인다.
+
+        ⚠️`krw_repl_skip_yn="Y"` — 원화대용 입출금을 제외한다. 매매가 아닌 자금
+          이동까지 섞이면 "체결 내역"이 아니게 된다.
+        """
+        if "US" not in self._markets:
+            return []
+
+        rows: list[TradeRow] = []
+        seen: set[tuple] = set()
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=_TRADE_WINDOW_DAYS), end)
+            pages = self._client.request_tr(
+                API_US_TRADES,
+                {
+                    "strt_dt": window_start.strftime("%Y%m%d"),
+                    "end_dt": window_end.strftime("%Y%m%d"),
+                    "tp": "3",  # 3:매매 (입출금·대체 제외)
+                    "stex_tp": "",
+                    "stk_cd": "",
+                    "krw_repl_skip_yn": "Y",
+                },
+                path=us_equities.US_ACNT_PATH,
+            )
+            for page in pages:
+                for raw in page.get("result_list") or []:
+                    row = _to_trade_row(raw)
+                    if row is None:
+                        continue
+                    # 창이 겹칠 때 같은 체결이 두 번 들어오지 않게 한다.
+                    key = (row.trade_date, row.trade_no)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(row)
+            window_start = window_end + timedelta(days=1)
+
+        rows.sort(key=lambda r: (r.trade_date, r.trade_no))
+        return rows
+
     def fetch_portfolio(self, account: AccountRef) -> AccountPortfolio:
         raw_account = {
             "external_account_id": account.external_account_id,
@@ -198,6 +247,15 @@ class KiwoomAdapter(BrokerAdapter):
             as_of=datetime.now(timezone.utc),
             raw_pages=raw_pages,
         )
+
+
+# 키움 거래내역(ust21100) 상수. 값은 api_guide.md §5 / 공식 명세 참조.
+API_US_TRADES = "ust21100"
+#: 조회 기간 상한. 초과하면 return_code=20 / 501058 "조회기간은 1년 이내로만 가능합니다".
+#: 실측상 365일도 거부되므로 여유를 둔다.
+_TRADE_WINDOW_DAYS = 360
+#: 매수/매도 구분은 deal_kind_nm(전부 "매매")이 아니라 rmrk_nm(적요명)에 있다.
+_SIDE_BY_REMARK = {"매수": "BUY", "매도": "SELL"}
 
 
 def _usd_rate(us_detail):
@@ -289,3 +347,47 @@ def _to_balance_row(b: dict) -> BalanceRow:
 def _opt(value):
     """None 은 None 으로 둔다 — to_decimal 이 0 으로 바꾸면 '미수집'이 '0원'이 된다."""
     return None if value is None else to_decimal(value)
+
+
+def _to_trade_row(raw: dict) -> TradeRow | None:
+    """ust21100 result_list 한 행 → TradeRow. 매수/매도가 아니면 버린다."""
+    side = _SIDE_BY_REMARK.get((raw.get("rmrk_nm") or "").strip())
+    if side is None:
+        return None
+    trade_date = _parse_yyyymmdd(raw.get("deal_dt"))
+    if trade_date is None:
+        return None
+    return TradeRow(
+        trade_date=trade_date,
+        # 0 패딩을 벗기지 않는다 — 증권사가 준 형태 그대로가 자연키의 일부다.
+        trade_no=(raw.get("deal_no") or "").strip(),
+        side=side,
+        ticker=(raw.get("stk_cd") or "").strip(),
+        name=(raw.get("stk_nm") or None),
+        currency=(raw.get("crnc_code") or "USD").strip(),
+        quantity=to_decimal(raw.get("deal_qty")),
+        # uv_exrt 는 '거래단가/환율' 겸용 필드 — 해외 거래에서는 단가다.
+        price=_opt(raw.get("uv_exrt")),
+        amount_local=_opt(raw.get("fc_deal_amt")),
+        settlement_amount_local=_opt(raw.get("fc_exct_amt")),
+        commission_local=_opt(raw.get("fc_cmsn")),
+        tax_local=_opt(raw.get("fc_deal_tax")),
+        # ⚠️해외 거래는 원화 금액이 0 으로 온다. 0 을 금액으로 저장하면 "거래금액
+        #   0원"이라는 틀린 사실이 남으므로, 0 이면 '없음'으로 둔다.
+        amount_krw=_nonzero(raw.get("deal_amt")),
+        exchange=(raw.get("stex_nm") or None),
+        channel=(raw.get("mdia_nm") or None),
+        processed_at=(raw.get("proc_time") or None),
+    )
+
+
+def _parse_yyyymmdd(value):
+    text = (value or "").strip()
+    if len(text) != 8 or not text.isdigit():
+        return None
+    return date(int(text[:4]), int(text[4:6]), int(text[6:]))
+
+
+def _nonzero(value):
+    dec = _opt(value)
+    return None if dec is None or dec == 0 else dec

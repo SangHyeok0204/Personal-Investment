@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -412,4 +413,53 @@ class PortfolioSnapshot(Base):
 
     __table_args__ = (
         Index("ix_portfolio_snapshots_account_snapshot_at", "account_id", "snapshot_at"),
+    )
+
+
+class Trade(Base):
+    """체결 한 건 (alembic 0007).
+
+    ⚠️`trade_no` 는 증권사 안에서 **일자별로 리셋**된다. 유일키는 계좌+일자+번호다.
+    ⚠️해외 거래는 원화 금액이 0 으로 오므로 amount_krw 는 NULL 일 수 있다 —
+      0 으로 채우면 "거래금액 0원"이라는 틀린 사실이 화면에 뜬다.
+    """
+
+    __tablename__ = "trades"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    # 이미 판 종목도 남는다 — 종목 마스터가 없을 수 있어 nullable.
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True
+    )
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    trade_no: Mapped[str] = mapped_column(String, nullable=False)
+    side: Mapped[str] = mapped_column(String, nullable=False)  # BUY / SELL
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    currency: Mapped[str] = mapped_column(String, nullable=False)
+    amount_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    settlement_amount_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    commission_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    tax_local: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    amount_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    exchange: Mapped[str | None] = mapped_column(String, nullable=True)
+    channel: Mapped[str | None] = mapped_column(String, nullable=True)
+    processed_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "trade_date", "trade_no", name="uq_trades_account_date_no"),
+        Index("ix_trades_account_date", "account_id", "trade_date"),
+        Index("ix_trades_ticker", "ticker"),
     )

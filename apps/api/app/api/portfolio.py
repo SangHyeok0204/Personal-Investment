@@ -13,7 +13,7 @@
 어긋나고, 그 차이는 화면에서 "합이 안 맞는다"로 보인다.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
@@ -30,6 +30,7 @@ from app.models import (
     BrokerageConnection,
     CurrentPosition,
     PortfolioSnapshot,
+    Trade,
 )
 from app.schemas import (
     AccountListOut,
@@ -44,6 +45,9 @@ from app.schemas import (
     PortfolioHistoryOut,
     PortfolioSummaryOut,
     SnapshotPointOut,
+    TradeListOut,
+    TradeOut,
+    TradeStatsOut,
 )
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
@@ -471,3 +475,125 @@ def set_asset_sector(
     asset.classified_at = datetime.now(timezone.utc) if asset.sector else None
     db.commit()
     return HoldingSectorPatch(sector=asset.sector, industry=asset.industry)
+
+
+# ── 매매(체결) 내역 ──────────────────────────────────────────────────────────
+
+_SIDES = {"BUY", "SELL"}
+
+
+@router.get("/trades", response_model=TradeListOut)
+def list_trades(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(365, ge=1, le=3650),
+    side: str | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> TradeListOut:
+    """체결 내역 — 최근순.
+
+    ⚠️합계는 **통화별로** 나눠 내보낸다. USD 거래와 KRW 거래를 한 숫자로 더하면
+      의미 없는 값이 된다. 환산해서 더하려면 거래 시점 환율이 있어야 하는데,
+      증권사가 해외 거래의 원화 금액을 0 으로 주므로 그 환율이 없다.
+    """
+    if side is not None and side.upper() not in _SIDES:
+        raise AppError(
+            400, "VALIDATION_ERROR", "Unknown side.", {"allowed": sorted(_SIDES)}
+        )
+
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return TradeListOut(
+            items=[], total=0, stats=[], first_trade_date=None, last_trade_date=None
+        )
+
+    since = date.today() - timedelta(days=days)
+    conditions = [Trade.account_id.in_(account_ids), Trade.trade_date >= since]
+    if side is not None:
+        conditions.append(Trade.side == side.upper())
+    if ticker:
+        conditions.append(Trade.ticker == ticker.upper())
+
+    rows = db.execute(
+        select(Trade, Account.account_name, Asset.sector)
+        .join(Account, Account.id == Trade.account_id)
+        .outerjoin(Asset, Asset.id == Trade.asset_id)
+        .where(*conditions)
+        .order_by(Trade.trade_date.desc(), Trade.trade_no.desc())
+        .limit(limit)
+    ).all()
+
+    total = db.execute(
+        select(func.count()).select_from(Trade).where(*conditions)
+    ).scalar_one()
+
+    stats_rows = db.execute(
+        select(
+            Trade.currency,
+            Trade.side,
+            func.count(),
+            func.sum(Trade.amount_local),
+            func.sum(Trade.commission_local),
+            func.sum(Trade.tax_local),
+        )
+        .where(*conditions)
+        .group_by(Trade.currency, Trade.side)
+    ).all()
+
+    by_currency: dict[str, dict] = {}
+    for currency, trade_side, count, amount, commission, tax in stats_rows:
+        entry = by_currency.setdefault(
+            currency,
+            {
+                "buy_count": 0, "sell_count": 0,
+                "buy_amount": Decimal("0"), "sell_amount": Decimal("0"),
+                "commission": Decimal("0"), "tax": Decimal("0"),
+            },
+        )
+        if trade_side == "BUY":
+            entry["buy_count"] = count
+            entry["buy_amount"] = amount or Decimal("0")
+        else:
+            entry["sell_count"] = count
+            entry["sell_amount"] = amount or Decimal("0")
+        entry["commission"] += commission or Decimal("0")
+        entry["tax"] += tax or Decimal("0")
+
+    span = db.execute(
+        select(func.min(Trade.trade_date), func.max(Trade.trade_date)).where(*conditions)
+    ).one()
+
+    return TradeListOut(
+        items=[
+            TradeOut(
+                id=trade.id,
+                account_id=trade.account_id,
+                account_name=account_name,
+                trade_date=trade.trade_date,
+                trade_no=trade.trade_no,
+                side=trade.side,
+                ticker=trade.ticker,
+                asset_name=trade.asset_name,
+                sector=sector,
+                currency=trade.currency,
+                quantity=trade.quantity,
+                price=trade.price,
+                amount_local=trade.amount_local,
+                settlement_amount_local=trade.settlement_amount_local,
+                commission_local=trade.commission_local,
+                tax_local=trade.tax_local,
+                exchange=trade.exchange,
+                channel=trade.channel,
+                processed_at=trade.processed_at,
+            )
+            for trade, account_name, sector in rows
+        ],
+        total=total,
+        stats=[
+            TradeStatsOut(currency=currency, **values)
+            for currency, values in sorted(by_currency.items())
+        ],
+        first_trade_date=span[0],
+        last_trade_date=span[1],
+    )
