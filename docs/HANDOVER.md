@@ -3,7 +3,7 @@
 > 2026-07-12 초기 구현 완료 시점 기준. 이 문서 하나로 "시스템이 어떻게 돌고, 다음 기능을 어디에 어떻게 붙이는지"를 파악할 수 있게 쓴다.
 > **갱신 메모(2026-08-13)**: 골격(job 파이프라인·n8n 패턴·개발 루틴)은 아래 설명 그대로 유효하다. 그 뒤에 붙은 것 두 가지만 머리에 얹고 읽으면 된다 —
 > ① `apps/collector`(§2.8) 가 S: 레거시 엔진을 재사용해 계산하는 별도 갈래로 생겼고, ② 화면이 3개에서 십여 개로 늘었다(§6.5).
-> 키움 연동은 **제거됐다**(§5).
+> 키움 연동은 2026-08-13 시점엔 제거된 상태였으나 **2026-09-21 개인 대시보드 개조에서 되살렸다**(커밋 80fad01 이전 구현을 git 이력에서 복구). §5 의 '제거됨' 서술은 그 시점 기록으로 남겨 둔다.
 > 상세 스펙은 `init.md`, 전체 설계는 `personal_investment_dashboard_architecture.md`, 서비스 간 인터페이스 계약은 `docs/architecture/contract.md`, 실행 방법은 `README.md`.
 
 ---
@@ -203,7 +203,8 @@ docker compose build worker && docker compose up -d worker
 ## 5. 다음 개발 로드맵 (설계 문서와의 연결)
 
 1. **Phase 4 — 첫 실제 도메인** (아키텍처 §21): 계좌·거래·보유자산 테이블(portfolio 스키마) + CSV를 실제 포트폴리오에 적재하는 handler + Portfolio 화면.
-2. **키움증권 연동** — ❌ **제거됨** (커밋 80fad01 "GE 하우스 스타일 리디자인 + 키움 포트폴리오 백엔드 전면 제거"). 2라운드에서 `SYNC_KIWOOM_PORTFOLIO` 작업 + `/portfolio` 화면까지 구현했지만 방향을 접었다. 계약 문서(`contract-kiwoom.md`)와 API 근거 문서(`kiwoom-api-reference.md`)도 함께 삭제됐으니 찾지 말 것. 남은 흔적은 마이그레이션 파일 두 개(`0002_kiwoom_portfolio.py`, `0003_asset_classification.py`)뿐이다 — 되돌리지 않고 두는 이력이다.
+2. **키움증권 연동** — ✅ **복구됨 (2026-09-21)**. 2라운드에서 구현했다가 커밋 80fad01 로 전면 제거했던 것을, 개인 대시보드 개조에서 git 이력으로부터 되살렸다: `apps/worker/brokers/kiwoom/**`, `repositories/**`, `handlers/sync_kiwoom_portfolio.py`, 테스트 842줄, 계약 문서(`contract-kiwoom.md`)·API 근거 문서(`kiwoom-api-reference.md`). 새로 쓰지 않고 복구한 이유는, 그 구현이 이미 검증돼 있었고 레퍼런스 문서가 필드별 출처 태그(`[G]`/`[Y]`/`[D]`/`[TV]`)까지 달고 있어 추측으로 다시 만드는 것보다 정확하기 때문이다.
+   - ⚠️키움 Open API 는 **IP 허용목록**을 쓴다. 등록 전에는 키가 맞아도 토큰 발급이 `return_code=3 / 8050 IP가 등록되지 않았습니다` 로 거부된다(2026-09-21 실측). 키움 REST API 홈페이지 > API 사용신청에서 서버 공인 IP 를 등록해야 한다.
 3. **시장 데이터 수집**: §3.3 레시피 그대로. 데이터가 커지면 그때 Parquet + DuckDB 도입(아키텍처 §4.5).
 4. **뉴스·공시 수집** → research 스키마.
 5. 지금 넣지 않기로 한 것(init.md §18: Redis, Celery, AI, 백테스트, 자동매매 등)은 필요성이 명확해질 때까지 추가하지 않는다.

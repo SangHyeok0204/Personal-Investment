@@ -2,8 +2,9 @@
 
 > **Status (2026-08-13)**: sections 3–5 (DB schema, job lifecycle, endpoint shapes) still bind.
 > Section 1 has drifted — a `collector` service and three extra n8n env keys were added; the table below is updated.
-> Round 2 (Kiwoom REST API portfolio sync) was **reverted** in commit 80fad01; `contract-kiwoom.md` and
-> `kiwoom-api-reference.md` were deleted along with it. Do not go looking for them.
+> Round 2 (Kiwoom REST API portfolio sync) was reverted in commit 80fad01, then **restored from git
+> history on 2026-09-21** for the personal-dashboard rework. `contract-kiwoom.md` and
+> `kiwoom-api-reference.md` are back in this directory and bind again.
 
 This document pins every cross-service interface for the initial skeleton.
 Builders implement AGAINST this contract; do not renegotiate it unilaterally.
@@ -12,7 +13,7 @@ Full requirements: `init.md` (spec), `DESIGN.md` (UI system), `personal_investme
 ## 0. Scope decisions (deviations from init.md, already decided)
 
 - **Kiwoom API (init.md §2-11) is DEFERRED.** It conflicts with §18 (실제 증권사 API 금지) and Kiwoom OpenAPI+ is Windows-only COM (cannot run in Linux containers). Documented in README as next-phase work (Kiwoom REST API recommended).
-  - *Later*: Round 2 shipped it over REST anyway, then removed it entirely (80fad01). Only migrations `0002_kiwoom_portfolio.py` / `0003_asset_classification.py` remain, deliberately un-reverted.
+  - *Later*: Round 2 shipped it over REST anyway, then removed it entirely (80fad01), then **restored it (2026-09-21)** — the migrations `0002_kiwoom_portfolio.py` / `0003_asset_classification.py` had been left un-reverted, so the schema was already in place.
 - **Added endpoint** `GET /api/v1/jobs/stats` — required by the Overview screen (§10 counts).
 - **alembic.ini lives at repo root**, migrations in `database/migrations/` (honors §5 folder layout; runnable from container WORKDIR /app and from repo root).
 - **Tailwind v3.4** (not v4), **no Radix**; shadcn-style components are hand-vendored.
