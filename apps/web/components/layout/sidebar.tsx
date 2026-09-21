@@ -3,117 +3,27 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Boxes,
-  CandlestickChart,
-  ChevronRight,
-  History,
-  LayoutGrid,
-  Newspaper,
-  Settings,
-  Sigma,
-  TrendingUp,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { ChevronRight, Wallet } from "lucide-react";
 import { useSidebar } from "@/components/layout/sidebar-context";
+import { navItems, type NavChild } from "@/components/layout/nav-config";
 import { cn } from "@/lib/utils";
 
-// 분류 체계 (시장 / 상품 / 종목 / 뉴스 모니터링 · Quant · 성과 분석 · 기타 · 설정).
-// href 가 있는 항목만 실제 라우팅되고, 나머지는 아직 준비 중인 placeholder 다.
-type NavItem = {
-  label: string;
-  icon: LucideIcon;
-  href?: string;
-  children?: { label: string; href?: string }[];
-};
+// 메뉴 항목 목록은 `nav-config.ts` 로 분리했다(2026-09-21) — 개조 중에는 IA 가
+// 자주 바뀌는데, 목록과 렌더링이 한 파일에 있으면 매번 컴포넌트를 건드리게 된다.
 
-const navItems: NavItem[] = [
-  {
-    // 메인(/)은 브랜드 로고 클릭으로만 진입 — 이 항목은 플라이아웃 전용.
-    label: "시장 모니터링",
-    icon: TrendingUp,
-    children: [
-      { label: "iNAV 모니터", href: "/inav" },
-      { label: "WRAP", href: "/wrap" },
-      { label: "LP 평가", href: "/lp-eval" },
-      // ★2026-09-01 개명(사용자 지시): "종목 모니터" → "자산 가격/수익률".
-      //   아래 [종목 모니터링](개별 종목·미국/한국/중국)과 이름이 겹쳐 층위가 헷갈렸다 —
-      //   이 화면이 다루는 건 종목이 아니라 87개 **시장·지수**의 가격과 수익률이다.
-      //   경로(/stock-monitor)와 API 는 그대로 둔다 — 북마크가 깨지고 얻는 게 없다.
-      { label: "자산 가격/수익률", href: "/stock-monitor" },
-      // 하위 페이지 `/ai-key-data/epoch` 는 2026-08-28 사용자 지시로 폐지 —
-      // Epoch AI·ADP·FOMC내재확률이 전부 메인 카드(탭)로 편입됐다.
-      { label: "AI Key Data", href: "/ai-key-data" },
-    ],
-  },
-  {
-    // 상품(펀드·ETF) 단위로 보는 자리 — 시장(지수)과 종목 사이의 층위다.
-    // ETF 순매수/수익률은 2026-09-01 에 열었다(국내상장ETF 모니터링.xlsm value 시트).
-    // 펀드공시는 아직 화면이 없다 — 원천(펀드공시모니터)은 이미 있다.
-    label: "상품 모니터링",
-    icon: Boxes,
-    children: [
-      { label: "펀드공시" },
-      { label: "ETF 순매수/수익률", href: "/etf-class" },
-    ],
-  },
-  {
-    // 개별 종목을 시장별로 보는 자리. 미국부터 연다(어닝 + 이슈).
-    // 한국·중국은 같은 배선(S: 가 굽고 대시보드는 읽는다)을 이어받을 자리만 잡아 뒀다.
-    label: "종목 모니터링",
-    icon: CandlestickChart,
-    children: [
-      { label: "미국", href: "/stock/us" },
-      { label: "한국" },
-      { label: "중국" },
-    ],
-  },
-  {
-    label: "뉴스 모니터링",
-    icon: Newspaper,
-    children: [
-      { label: "기사" },
-      { label: "텔레그램", href: "/telegram-news" },
-      { label: "placeholder" },
-      { label: "placeholder" },
-    ],
-  },
-  {
-    label: "Quant",
-    icon: Sigma,
-    children: [
-      { label: "매크로", href: "/macro" },
-      { label: "모멘텀" },
-      { label: "재무" },
-      { label: "기술적 분석" },
-      { label: "sentiment" },
-    ],
-  },
-  {
-    label: "성과 분석",
-    icon: History,
-    children: [
-      { label: "TORUS/AI테크", href: "/track-record/torus-aicoretech" },
-      { label: "FUND3" },
-    ],
-  },
-  {
-    label: "기타",
-    icon: LayoutGrid,
-    children: [
-      { label: "AI token usage", href: "/ai-token-usage" },
-      { label: "LAN dashboard", href: "/lan-dashboard" },
-      { label: "종토방", href: "/stock-discussion" },
-      { label: "회의", href: "/meeting" },
-    ],
-  },
-  {
-    label: "설정",
-    icon: Settings,
-    href: "/settings",
-    children: [{ label: "placeholder" }, { label: "placeholder" }],
-  },
-];
+/** 플라이아웃 항목 오른쪽 끝에 붙는 상태 점. 아직 안 붙은 자리를 눈으로 구분한다. */
+function StatusDot({ status }: { status: NavChild["status"] }) {
+  if (status === "live") return null; // 동작하는 게 기본 — 표시하지 않는다.
+  return (
+    <span
+      title={status === "placeholder" ? "화면만 있음 (데이터 미연결)" : "준비 중"}
+      className={cn(
+        "ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
+        status === "placeholder" ? "bg-amber-400" : "bg-slate-300",
+      )}
+    />
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -142,22 +52,29 @@ export function Sidebar() {
         className="mb-7 flex items-center gap-2.5 px-6 transition-opacity hover:opacity-85"
       >
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
-          <TrendingUp className="h-5 w-5 text-white" strokeWidth={2.2} />
+          <Wallet className="h-5 w-5 text-white" strokeWidth={2.2} />
         </div>
         <div className="leading-tight">
           <div className="text-[15px] font-extrabold tracking-tight text-white">
-            GE Dashboard
+            My Portfolio
           </div>
           <div className="text-[10px] font-semibold tracking-[0.18em] text-white/70">
-            INVEST INTELLIGENCE
+            PERSONAL INVESTING
           </div>
         </div>
       </Link>
 
-      <nav className="flex flex-1 flex-col gap-1.5">
+      <nav className="flex flex-1 flex-col gap-1.5 overflow-y-auto">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const active = item.href != null && pathname === item.href;
+          // 하위 경로(`/portfolio/holdings`)에 있어도 상위 그룹이 켜져 보이게 한다.
+          const hrefs = [
+            item.href,
+            ...(item.children ?? []).map((c) => c.href),
+          ].filter((h): h is string => h != null);
+          const active = hrefs.some(
+            (h) => pathname === h || (h !== "/" && pathname.startsWith(`${h}/`)),
+          );
           const open = openLabel === item.label;
           const rowClass = cn(
             "flex items-center gap-3 rounded-r-[24px] py-3 pl-6 pr-4 transition-colors",
@@ -238,7 +155,7 @@ export function Sidebar() {
                       : "pointer-events-none -translate-x-2 opacity-0 duration-0",
                   )}
                 >
-                  <div className="min-w-[184px] rounded-2xl bg-white p-3 shadow-[0_16px_36px_rgba(36,59,94,0.26)] ring-1 ring-hairline">
+                  <div className="min-w-[214px] rounded-2xl bg-white p-3 shadow-[0_16px_36px_rgba(36,59,94,0.26)] ring-1 ring-hairline">
                     <div className="mb-1.5 flex items-center gap-2 px-2 pb-1.5">
                       <Icon className="h-4 w-4 text-ge-point" strokeWidth={2.6} />
                       <span className="text-[11px] font-bold tracking-wide text-ge-point">
@@ -246,12 +163,31 @@ export function Sidebar() {
                       </span>
                     </div>
                     {item.children.map((child, i) => {
-                      const childClass =
-                        "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-[14px] font-extrabold text-ge-navy transition-colors hover:bg-ge-blue-bg";
+                      const childActive =
+                        child.href != null && pathname === child.href;
+                      const childClass = cn(
+                        "flex w-full items-start justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                        child.href
+                          ? "hover:bg-ge-blue-bg"
+                          : "cursor-default opacity-55",
+                        childActive && "bg-ge-blue-bg",
+                      );
                       const childInner = (
                         <>
-                          {child.label}
-                          <ChevronRight className="h-4 w-4 text-ge-point" />
+                          <span className="min-w-0">
+                            <span className="flex items-center text-[14px] font-extrabold text-ge-navy">
+                              {child.label}
+                              <StatusDot status={child.status} />
+                            </span>
+                            {child.hint && (
+                              <span className="mt-0.5 block text-[11px] font-medium leading-tight text-ink-muted">
+                                {child.hint}
+                              </span>
+                            )}
+                          </span>
+                          {child.href && (
+                            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-ge-point" />
+                          )}
                         </>
                       );
                       return child.href ? (
@@ -263,13 +199,9 @@ export function Sidebar() {
                           {childInner}
                         </Link>
                       ) : (
-                        <button
-                          key={`${child.label}-${i}`}
-                          type="button"
-                          className={childClass}
-                        >
+                        <div key={`${child.label}-${i}`} className={childClass}>
                           {childInner}
-                        </button>
+                        </div>
                       );
                     })}
                   </div>

@@ -1,0 +1,251 @@
+import {
+  Boxes,
+  CandlestickChart,
+  LineChart,
+  Newspaper,
+  PiggyBank,
+  Receipt,
+  Settings,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 개인 투자 대시보드 정보구조(IA).
+//
+// ★2026-09-21 개조: 원본(GE 팀 대시보드)은 "운용사가 시장·상품을 감시하는" 층위로
+//   짜여 있었다. 개인 계좌(키움 API) 기준으로 다시 세우면 1순위는 **내 돈이 지금
+//   어떤 상태인가**이고, 시장/리서치는 그 판단을 돕는 보조 층위로 내려간다.
+//   그래서 순서를 내 자산 → 매매 → 성과 → 시장 → 리서치 → 뉴스 → 현금흐름 → 연동
+//   으로 뒤집었다. 디자인(플라이아웃·색·라운드)은 원본 그대로 둔다.
+//
+// `href` 가 있으면 실제 라우팅되고, 없으면 아직 화면이 없는 자리(플라이아웃에서
+// 비활성 버튼으로 렌더)다. `status` 는 그 자리가 어떤 상태인지 표시한다:
+//   - "live"        실제 데이터가 붙어 동작 중
+//   - "placeholder" 화면 골격만 있고 데이터는 더미/미연결
+//   - "planned"     화면 자체가 아직 없음(href 없음)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type NavStatus = "live" | "placeholder" | "planned";
+
+export type NavChild = {
+  label: string;
+  href?: string;
+  status?: NavStatus;
+  /** 플라이아웃에서 항목 아래 한 줄로 붙는 설명. 없으면 라벨만. */
+  hint?: string;
+};
+
+export type NavItem = {
+  label: string;
+  icon: LucideIcon;
+  href?: string;
+  children?: NavChild[];
+};
+
+export const navItems: NavItem[] = [
+  {
+    // 대시보드의 1면. 키움 잔고 API 가 붙는 순간 여기부터 실데이터가 된다.
+    label: "내 자산",
+    icon: Wallet,
+    href: "/portfolio",
+    children: [
+      {
+        label: "자산 현황",
+        href: "/portfolio",
+        status: "placeholder",
+        hint: "총평가 · 예수금 · 평가손익",
+      },
+      {
+        label: "보유 종목",
+        href: "/portfolio/holdings",
+        status: "placeholder",
+        hint: "종목별 수량 · 평단 · 손익",
+      },
+      {
+        label: "계좌별 잔고",
+        href: "/portfolio/accounts",
+        status: "placeholder",
+        hint: "키움 · 토스 · 연금 계좌 합산",
+      },
+      {
+        label: "자산 배분",
+        href: "/portfolio/allocation",
+        status: "placeholder",
+        hint: "자산군 · 섹터 · 통화 비중",
+      },
+      {
+        label: "환노출",
+        status: "planned",
+        hint: "USD/KRW 노출과 환헤지 상태",
+      },
+    ],
+  },
+  {
+    label: "매매",
+    icon: Receipt,
+    children: [
+      {
+        label: "체결 내역",
+        href: "/trading/executions",
+        status: "placeholder",
+        hint: "일자별 매수/매도 체결",
+      },
+      {
+        label: "주문/미체결",
+        href: "/trading/orders",
+        status: "placeholder",
+        hint: "당일 주문 상태",
+      },
+      {
+        label: "실현손익",
+        href: "/trading/realized",
+        status: "placeholder",
+        hint: "종목별 · 기간별 실현 PnL",
+      },
+      {
+        label: "매매일지",
+        href: "/trading/journal",
+        status: "placeholder",
+        hint: "진입 근거 · 복기 메모",
+      },
+      { label: "수수료/세금", status: "planned", hint: "거래비용 집계" },
+    ],
+  },
+  {
+    label: "성과 분석",
+    icon: LineChart,
+    children: [
+      {
+        label: "수익률 추이",
+        href: "/performance/returns",
+        status: "placeholder",
+        hint: "TWR · MWR 시계열",
+      },
+      {
+        label: "벤치마크 비교",
+        href: "/performance/benchmark",
+        status: "placeholder",
+        hint: "KOSPI · S&P500 대비 초과수익",
+      },
+      {
+        label: "리스크 지표",
+        href: "/performance/risk",
+        status: "placeholder",
+        hint: "변동성 · MDD · 샤프",
+      },
+      {
+        label: "기여도 분석",
+        status: "planned",
+        hint: "종목/섹터별 수익 기여",
+      },
+      { label: "기간 리포트", status: "planned", hint: "월간 · 분기 요약" },
+    ],
+  },
+  {
+    // 원본에서 살아남은 층위 — 실제 데이터가 붙어 있는 화면이 가장 많다.
+    label: "시장 모니터링",
+    icon: TrendingUp,
+    children: [
+      {
+        label: "관심종목",
+        href: "/watchlist",
+        status: "placeholder",
+        hint: "내가 보는 종목 보드",
+      },
+      {
+        label: "자산 가격/수익률",
+        href: "/stock-monitor",
+        status: "live",
+        hint: "시장·지수 가격과 수익률",
+      },
+      { label: "매크로", href: "/macro", status: "live", hint: "금리 · 환율 · 원자재" },
+      { label: "iNAV 모니터", href: "/inav", status: "live" },
+      { label: "AI Key Data", href: "/ai-key-data", status: "live" },
+    ],
+  },
+  {
+    label: "상품/ETF",
+    icon: Boxes,
+    children: [
+      {
+        label: "ETF 순매수/수익률",
+        href: "/etf-class",
+        status: "live",
+      },
+      {
+        label: "ETF 비교",
+        status: "planned",
+        hint: "보수 · 추적오차 · 괴리율 비교",
+      },
+      { label: "펀드/연금", status: "planned", hint: "퇴직연금 · IRP 상품" },
+    ],
+  },
+  {
+    label: "종목 리서치",
+    icon: CandlestickChart,
+    children: [
+      { label: "미국", href: "/stock/us", status: "live", hint: "어닝 · 이슈" },
+      { label: "한국", status: "planned" },
+      {
+        label: "재무/밸류에이션",
+        status: "planned",
+        hint: "실적 추이 · 멀티플",
+      },
+      { label: "공시", status: "planned", hint: "DART · SEC 공시" },
+    ],
+  },
+  {
+    label: "뉴스",
+    icon: Newspaper,
+    children: [
+      { label: "텔레그램", href: "/telegram-news", status: "live" },
+      { label: "종토방", href: "/stock-discussion", status: "live" },
+      { label: "기사", status: "planned" },
+      { label: "보유종목 뉴스", status: "planned", hint: "내 포지션에 걸린 뉴스만" },
+    ],
+  },
+  {
+    label: "현금흐름",
+    icon: PiggyBank,
+    children: [
+      {
+        label: "배당 캘린더",
+        href: "/income/dividends",
+        status: "placeholder",
+        hint: "배당락 · 지급일 · 예상 배당금",
+      },
+      {
+        label: "입출금",
+        href: "/income/transfers",
+        status: "placeholder",
+        hint: "납입 · 인출 이력",
+      },
+      { label: "월별 현금흐름", status: "planned" },
+      { label: "세금", status: "planned", hint: "양도소득세 · 배당소득세 추정" },
+    ],
+  },
+  {
+    label: "연동/설정",
+    icon: Settings,
+    href: "/settings",
+    children: [
+      {
+        label: "계좌 연동",
+        href: "/settings/connections",
+        status: "placeholder",
+        hint: "키움 · 토스 API 키 등록",
+      },
+      {
+        label: "수집 상태",
+        href: "/data-operations",
+        status: "live",
+        hint: "배치 · 잡 모니터",
+      },
+      { label: "AI token usage", href: "/ai-token-usage", status: "live" },
+      { label: "환경설정", href: "/settings", status: "live" },
+      { label: "알림", status: "planned", hint: "가격 · 체결 · 배당 알림" },
+    ],
+  },
+];
