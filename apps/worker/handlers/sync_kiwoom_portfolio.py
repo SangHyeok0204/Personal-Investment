@@ -420,13 +420,17 @@ def run(engine, job_id, payload, storage_dir, log_job):
         with engine.begin() as conn:
             seeded = sectors_repo.apply_sector_seed(conn)
             unclassified = sectors_repo.unclassified_held_count(conn)
-        if seeded or unclassified:
-            log_job(
-                engine, job_id, "INFO", "classify_assets",
-                f"Seeded {seeded} sector(s)"
-                + (f"; {unclassified} held ticker(s) still unclassified"
-                   if unclassified else ""),
-            )
+            # AI/Tech 밸류체인 3단계 분류(전통 섹터와 다른 축).
+            tech = sectors_repo.apply_tech_classification(conn)
+            tech_missing = sectors_repo.unclassified_tech_held(conn)
+        log_job(
+            engine, job_id, "INFO", "classify_assets",
+            f"Sector seed {seeded}"
+            + (f" ({unclassified} held unclassified)" if unclassified else "")
+            + f"; tech ETF {tech['etf']} / seed {tech['seed']}"
+            + (f" ({len(tech_missing)} held unclassified: "
+               f"{', '.join(tech_missing[:8])})" if tech_missing else ""),
+        )
 
         log_job(engine, job_id, "INFO", "upsert_positions",
                 f"Upserted {total_positions} position(s)")

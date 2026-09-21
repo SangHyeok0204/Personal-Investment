@@ -12,12 +12,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // ⚠️값이 null 인 점은 **결측**이지 0 이 아니다. 선을 끊어서 그린다 — 0 으로 이으면
 //   "그날 자산이 0원이었다"는 없는 사실이 그려진다.
 
-const GRID = "#EDF0F5";
-const AXIS_TEXT = "#8a94a6";
-const LINE = "#4a7ab5";
-const FILL_TOP = "rgba(74,122,181,0.18)";
-const FILL_BOTTOM = "rgba(74,122,181,0.01)";
-const CROSS = "#B7C0CE";
+// 가이드 §6·§8 — 팔레트 안에서만. 선은 BROWN(메인), 격자·축은 그레이 스케일.
+const GRID = "#F2F2F2"; // Light Gray
+const AXIS_TEXT = "#7F7F7F"; // Gray
+const LINE = "#4C2C19"; // BROWN
+const FILL_TOP = "rgba(76,44,25,0.14)";
+const FILL_BOTTOM = "rgba(76,44,25,0.01)";
+const CROSS = "#A6A6A6";
 
 const PAD_L = 62;
 const PAD_R = 10;

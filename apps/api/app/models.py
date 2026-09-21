@@ -301,6 +301,12 @@ class Asset(Base):
     # 증권사가 쓰는 거래소 코드(키움 ND/NY/NA). 우리 분류(country/market)와 다른 축이라
     # 별도로 둔다 — 배당 조회(usa21730)가 이 값을 **필수**로 요구한다.
     broker_exchange_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    # AI/Tech 밸류체인 3단계 분류(alembic 0010). `sector`(전통 섹터)와 **다른 축**이다 —
+    # 같은 종목이 두 축에서 다른 자리에 놓이고, 둘 다 볼 이유가 있다.
+    tech_l1: Mapped[str | None] = mapped_column(String, nullable=True)
+    tech_l2: Mapped[str | None] = mapped_column(String, nullable=True)
+    tech_l3: Mapped[str | None] = mapped_column(String, nullable=True)
+    tech_source: Mapped[str | None] = mapped_column(String, nullable=True)
     classified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -315,6 +321,7 @@ class Asset(Base):
     __table_args__ = (
         UniqueConstraint("country", "market", "ticker", name="uq_assets_country_market_ticker"),
         Index("ix_assets_sector", "sector"),
+        Index("ix_assets_tech_l1", "tech_l1"),
     )
 
 

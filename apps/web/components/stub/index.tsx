@@ -208,14 +208,14 @@ export function StubTable({
   rows?: number;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-hairline">
-      <table className="w-full border-collapse text-left">
+    <div className="overflow-hidden">
+      <table className="w-full border-collapse border-t border-ink text-left">
         <thead>
-          <tr className="bg-ge-th">
+          <tr className="border-b border-hairline bg-ge-th">
             {columns.map((c) => (
               <th
                 key={c}
-                className="whitespace-nowrap px-3 py-2 text-[11px] font-extrabold text-ge-navy"
+                className="whitespace-nowrap px-3 py-2 text-[11px] font-bold text-ink"
               >
                 {c}
               </th>
@@ -260,15 +260,18 @@ export function DataTable({
     : Boolean(children);
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-hairline">
-      <table className="w-full border-collapse text-left">
+    // 가이드 §7.1 — 표는 **좌우 테두리가 없다**. 위는 검정 실선, 나머지는 옅은 회색.
+    //   바깥 박스로 감싸면 좌우 선이 생기므로 border 를 주지 않는다.
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse border-t border-ink text-left">
         <thead>
-          <tr className="bg-ge-th">
+          <tr className="border-b border-hairline bg-ge-th">
             {columns.map((c, i) => (
               <th
                 key={c}
                 className={cn(
-                  "whitespace-nowrap px-3 py-2 text-[11px] font-extrabold text-ge-navy",
+                  // 가이드 §7.2 — 표 제목 11p Bold Black.
+                  "whitespace-nowrap px-3 py-2 text-[11px] font-bold text-ink",
                   (align?.[i] ?? (i === 0 ? "left" : "right")) === "right" &&
                     "text-right",
                 )}
@@ -314,9 +317,10 @@ export function Cell({
   return (
     <td
       className={cn(
+        // 가이드 §7.2 — 표 본문 9p Regular #595959. 강조 행만 Bold Black.
         "whitespace-nowrap px-3 py-2.5 text-[12px] tabular-nums",
         left ? "text-left" : "text-right",
-        strong ? "font-extrabold text-ge-navy" : "font-semibold text-ink",
+        strong ? "font-bold text-ink" : "font-normal text-ink-secondary",
         tone === "up" && "text-bid",
         tone === "down" && "text-ask",
         tone === "muted" && "text-ink-faint",

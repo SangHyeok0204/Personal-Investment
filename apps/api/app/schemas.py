@@ -255,6 +255,10 @@ class HoldingOut(BaseModel):
     sector: str | None
     industry: str | None
     sector_source: str | None
+    # AI/Tech 밸류체인 3단계(전통 섹터와 다른 축)
+    tech_l1: str | None
+    tech_l2: str | None
+    tech_l3: str | None
     quantity: Decimal
     average_purchase_price: Decimal | None
     current_price: Decimal | None

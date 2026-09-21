@@ -2657,6 +2657,10 @@ export interface PortfolioHolding {
   industry: string | null;
   // "MANUAL" = 사람이 지정한 값. 자동 분류가 덮지 않는다.
   sector_source: string | null;
+  // AI/Tech 밸류체인 3단계 — 전통 섹터와 다른 축이다.
+  tech_l1: string | null;
+  tech_l2: string | null;
+  tech_l3: string | null;
   quantity: string;
   average_purchase_price: string | null;
   current_price: string | null;
@@ -2735,6 +2739,9 @@ export function getPortfolioHistory(
 // 화면마다 다르게 보인다.
 
 export type AllocationDimension =
+  | "tech_l1"
+  | "tech_l2"
+  | "tech_l3"
   | "sector"
   | "industry"
   | "asset_type"

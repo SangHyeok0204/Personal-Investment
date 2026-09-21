@@ -280,6 +280,9 @@ def list_holdings(
             sector=asset.sector,
             industry=asset.industry,
             sector_source=asset.sector_source,
+            tech_l1=asset.tech_l1,
+            tech_l2=asset.tech_l2,
+            tech_l3=asset.tech_l3,
             quantity=position.quantity,
             average_purchase_price=position.average_purchase_price,
             current_price=position.current_price,
@@ -373,6 +376,11 @@ def get_history(
 # 갈려 같은 숫자가 화면마다 다르게 보인다. 분모(총 평가금액)도 한 곳에서 정한다.
 
 _ALLOCATION_DIMENSIONS = {
+    # AI/Tech 밸류체인 3단계 — 사용자가 준 분류표(alembic 0010).
+    # 전통 섹터(sector)와 **다른 축**이라 같이 제공한다.
+    "tech_l1": (Asset.tech_l1, "미분류"),
+    "tech_l2": (Asset.tech_l2, "미분류"),
+    "tech_l3": (Asset.tech_l3, "미분류"),
     "sector": (Asset.sector, "미분류"),
     "industry": (Asset.industry, "미분류"),
     "asset_type": (Asset.asset_type, "미분류"),

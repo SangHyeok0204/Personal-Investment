@@ -26,6 +26,7 @@ import {
   getPortfolioAllocation,
   getPortfolioHoldings,
   getPortfolioSummary,
+  type AllocationDimension,
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
@@ -47,11 +48,22 @@ import { cn } from "@/lib/utils";
 //   · 보유 종목을 **도넛 + 범례**로 보여주고, 조각을 누르면 그 종목 상세가 팝업으로.
 //   · 5초마다 화면을 갱신한다(useLiveQueryOptions).
 
+// 배분 축. AI/Tech 밸류체인(L1~L3)과 전통 섹터는 서로 다른 관점이다 —
+// 한 도넛에 섞으면 어느 축인지 알 수 없게 된다.
+const AXES: { id: AllocationDimension; label: string }[] = [
+  { id: "tech_l1", label: "AI/Tech 대분류" },
+  { id: "tech_l2", label: "중분류" },
+  { id: "sector", label: "전통 섹터" },
+  { id: "country", label: "국가" },
+];
+
 export default function PortfolioPage() {
   const { accountId, connected, isError: accountsError } = useAccount();
   const live = useLiveQueryOptions();
   const [trendOpen, setTrendOpen] = useState(false);
   const [picked, setPicked] = useState<PortfolioHolding | null>(null);
+  // 배분 축 — 전통 섹터와 AI/Tech 밸류체인은 **다른 축**이라 전환해서 본다.
+  const [axis, setAxis] = useState<AllocationDimension>("tech_l1");
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -68,8 +80,8 @@ export default function PortfolioPage() {
   });
 
   const allocation = useQuery({
-    queryKey: ["portfolioAllocation", "sector", accountId],
-    queryFn: () => getPortfolioAllocation("sector", accountId),
+    queryKey: ["portfolioAllocation", axis, accountId],
+    queryFn: () => getPortfolioAllocation(axis, accountId),
     staleTime: 3_000,
     ...live,
   });
@@ -181,7 +193,7 @@ export default function PortfolioPage() {
           </StubCard>
 
           <StubCard
-            title="섹터 배분"
+            title="배분"
             subtitle={
               allocation.data?.unclassified_market_value_krw &&
               Number(allocation.data.unclassified_market_value_krw) > 0
@@ -189,17 +201,35 @@ export default function PortfolioPage() {
                 : "평가금액(KRW) 기준"
             }
           >
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {AXES.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => setAxis(a.id)}
+                  aria-pressed={axis === a.id}
+                  className={cn(
+                    "rounded border px-2 py-0.5 text-[11px] font-bold transition-colors",
+                    axis === a.id
+                      ? "border-ge-point bg-ge-blue-bg text-ge-point"
+                      : "border-hairline bg-white text-ink-muted hover:bg-canvas-soft",
+                  )}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
             <DonutChart
               slices={sectorSlices}
-              size={190}
-              centerLabel="섹터"
+              size={175}
+              centerLabel={AXES.find((a) => a.id === axis)?.label}
               centerValue={
                 sectorSlices.length ? `${sectorSlices.length}개` : undefined
               }
             />
             <Link
               href="/portfolio/allocation"
-              className="mt-2 inline-block text-[11px] font-bold text-ge-point hover:text-ge-navy"
+              className="mt-2 inline-block text-[11px] font-bold text-ge-point hover:text-ink"
             >
               전체 배분 보기 →
             </Link>
@@ -378,8 +408,10 @@ function HoldingDetail({
         />
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-canvas-soft/70 p-3.5 text-[12px] sm:grid-cols-3">
-        <Small label="섹터" value={h.sector ?? "미분류"} />
-        <Small label="세부 산업" value={h.industry ?? "—"} />
+        <Small label="AI/Tech" value={h.tech_l1 ?? "미분류"} />
+        <Small label="중분류" value={h.tech_l2 ?? "—"} />
+        <Small label="소분류" value={h.tech_l3 ?? "—"} />
+        <Small label="전통 섹터" value={h.sector ?? "미분류"} />
         <Small label="비중" value={weight} />
         <Small label="통화" value={h.currency} />
         <Small
