@@ -215,6 +215,92 @@ CREATE INDEX IF NOT EXISTS ix_broker_api_raw_responses_job_id
 """
 
 
+#: ⚠️**이력 표가 시험 DB 에 없었다.** 그래서 전체 동기화 시험이 이력 단계에서
+#:  조용히 실패하고 있었다 — `except Exception` 이 삼켜 경고 한 줄만 남기고
+#:  SUCCESS 로 끝나니 시험은 통과했다. 실측으로 확인한 로그:
+#:    WARNING|sync_history|History sync failed ... relation "..." does not exist
+#:  즉 체결·일별성과·실현손익·주문·배당 경로는 **한 번도 시험된 적이 없다.**
+#:  잔고만 보는 시험이라면 없어도 되지만, 그러면 "이력이 동작한다"는 근거가
+#:  어디에도 없다. 표를 만들어 진짜로 태운다.
+HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS trades (
+    id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
+    ticker VARCHAR NOT NULL, asset_name VARCHAR, trade_date DATE NOT NULL,
+    trade_no VARCHAR NOT NULL, side VARCHAR NOT NULL,
+    quantity NUMERIC(20,6) NOT NULL, price NUMERIC(20,6),
+    currency VARCHAR NOT NULL, amount_local NUMERIC(20,4),
+    settlement_amount_local NUMERIC(20,4), commission_local NUMERIC(20,4),
+    tax_local NUMERIC(20,4), amount_krw NUMERIC(20,2), exchange VARCHAR,
+    channel VARCHAR, processed_at VARCHAR, source_job_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_trades_account_date_no UNIQUE (account_id, trade_date, trade_no)
+);
+
+CREATE TABLE IF NOT EXISTS account_daily_performance (
+    id UUID PRIMARY KEY, account_id UUID NOT NULL, base_date DATE NOT NULL,
+    deposit_assets_krw NUMERIC(20,2), stock_value_krw NUMERIC(20,2),
+    pnl_krw NUMERIC(20,2), cumulative_pnl_krw NUMERIC(20,2),
+    dividend_krw NUMERIC(20,2), commission_tax_krw NUMERIC(20,2),
+    buy_amount_krw NUMERIC(20,2), sell_amount_krw NUMERIC(20,2),
+    deposit_krw NUMERIC(20,2), withdrawal_krw NUMERIC(20,2),
+    return_rate NUMERIC(12,6), exchange_rate NUMERIC(12,4), source_job_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_daily_perf_account_date UNIQUE (account_id, base_date)
+);
+
+CREATE TABLE IF NOT EXISTS realized_pnl (
+    id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
+    ticker VARCHAR NOT NULL, asset_name VARCHAR, sell_date DATE NOT NULL,
+    quantity NUMERIC(20,6) NOT NULL, currency VARCHAR NOT NULL,
+    avg_buy_price NUMERIC(20,6), avg_sell_price NUMERIC(20,6),
+    buy_amount_local NUMERIC(20,4), sell_amount_local NUMERIC(20,4),
+    commission_tax_local NUMERIC(20,4), pnl_local NUMERIC(20,4),
+    buy_amount_krw NUMERIC(20,2), sell_amount_krw NUMERIC(20,2),
+    commission_tax_krw NUMERIC(20,2), pnl_krw NUMERIC(20,2),
+    pnl_rate NUMERIC(12,6), buy_exchange_rate NUMERIC(12,4),
+    sell_exchange_rate NUMERIC(12,4), fx_pnl_krw NUMERIC(20,2), exchange VARCHAR,
+    source_job_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_realized_account_date_ticker UNIQUE (account_id, sell_date, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
+    ticker VARCHAR NOT NULL, asset_name VARCHAR, order_date DATE NOT NULL,
+    order_no VARCHAR NOT NULL, order_time VARCHAR, side VARCHAR NOT NULL,
+    order_type VARCHAR, currency VARCHAR NOT NULL, order_quantity NUMERIC(20,6),
+    filled_quantity NUMERIC(20,6), cancelled_quantity NUMERIC(20,6),
+    modified_quantity NUMERIC(20,6), remaining_quantity NUMERIC(20,6),
+    order_price NUMERIC(20,6), filled_price NUMERIC(20,6),
+    stop_price NUMERIC(20,6), filled_amount NUMERIC(20,4), exchange VARCHAR,
+    channel VARCHAR, reserve_type VARCHAR, source_job_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_orders_account_date_no UNIQUE (account_id, order_date, order_no)
+);
+
+CREATE TABLE IF NOT EXISTS dividends (
+    id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
+    ticker VARCHAR NOT NULL, asset_name VARCHAR, pay_date DATE NOT NULL,
+    amount_krw NUMERIC(20,2) NOT NULL, currency VARCHAR NOT NULL,
+    source_job_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_dividends_account_date_ticker UNIQUE (account_id, pay_date, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS broker_exchange_codes (
+    ticker VARCHAR PRIMARY KEY, code VARCHAR NOT NULL,
+    source VARCHAR NOT NULL DEFAULT 'probe',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+
 @pytest.fixture(scope="session")
 def test_engine():
     base_url = _database_url()
@@ -236,6 +322,7 @@ def test_engine():
     engine = create_engine(test_url)
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        conn.execute(text(HISTORY_DDL))
 
     yield engine
     engine.dispose()
@@ -248,7 +335,11 @@ def db(test_engine):
             text(
                 "TRUNCATE jobs, job_logs, imports, brokers, brokerage_connections, "
                 "accounts, assets, current_positions, account_balances, "
-                "portfolio_snapshots, position_snapshots, broker_api_raw_responses "
+                "portfolio_snapshots, position_snapshots, broker_api_raw_responses, "
+                # ⚠️이력 표도 비운다. 안 비우면 앞 시험이 남긴 행이 다음 시험의
+                #   '몇 건 들어왔나'를 바꾼다.
+                "trades, account_daily_performance, realized_pnl, orders, "
+                "dividends, broker_exchange_codes "
                 "RESTART IDENTITY CASCADE"
             )
         )

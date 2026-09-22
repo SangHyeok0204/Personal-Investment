@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 import main
 import handlers.sync_kiwoom_portfolio as handler_mod
+import brokers.kiwoom.broker as broker_mod
 from brokers.kiwoom import auth, domestic
 from brokers.kiwoom.adapter import normalize_ticker, normalize_us_ticker, to_decimal, us_market
 from brokers.kiwoom.client import KiwoomClient
@@ -385,15 +386,24 @@ def _reset_env_and_cache(monkeypatch):
 
 @pytest.fixture
 def patch_client(monkeypatch):
-    """Install a factory so the handler builds a KiwoomClient over the fake http."""
+    """Install a factory so the handler builds a KiwoomClient over the fake http.
+
+    ⚠️**어댑터도 같이 바꾼다.** 핸들러만 바꿔 두면 이력 동기화가
+      `adapter_cls(credentials, ...)` 로 **자기 클라이언트를 새로 만들어** 진짜
+      네트워크를 탄다. 실제로 그랬다 — 시험이 매 실행마다 mockapi.kiwoom.com 에
+      붙어 "8005 Token이 유효하지 않습니다" 를 받고 있었고, 이력 단계는 전부
+      실패한 채로 시험은 통과했다(예외를 삼키므로).
+    """
 
     def _install(fake_http):
-        def factory(base_url, app_key, secret_key):
+        def factory(base_url, app_key, secret_key, http_client=None, **kwargs):
             return KiwoomClient(
-                base_url, app_key, secret_key, http_client=fake_http, sleep=lambda _s: None
+                base_url, app_key, secret_key,
+                http_client=fake_http, sleep=lambda _s: None,
             )
 
         monkeypatch.setattr(handler_mod, "KiwoomClient", factory)
+        monkeypatch.setattr(broker_mod, "KiwoomClient", factory)
 
     return _install
 
@@ -651,6 +661,108 @@ def test_empty_holdings_with_nonzero_total_does_not_wipe_positions(
     assert _get_job(db, job2)["status"] == "SUCCESS"
     # 국내 2종목이 살아 있어야 한다 — 지웠다면 3(미국)만 남는다.
     assert _count(db, "current_positions") == 5
+
+
+def _history_responses():
+    """이력 TR 최소 응답. 키움 실제 키 이름을 쓴다."""
+    return {
+        "ust21100": FakeResponse({  # 체결 — 매수/매도는 rmrk_nm(적요명)에 있다
+            "result_list": [{
+                "deal_dt": "20260918", "deal_no": "000000001", "rmrk_nm": "매수",
+                "stk_cd": "AAPL", "stk_nm": "Apple", "deal_qty": "3",
+                "deal_uv": "220.00", "deal_amt": "660.00", "crnc_cd": "USD",
+            }],
+            "return_code": 0,
+        }),
+        "usa21670": FakeResponse({  # 일별 계좌성과
+            "result_list": [{
+                "base_dt": "20260918", "dpst_aset_amt": "1000000",
+                "stk_evlt_amt": "800000", "pl_amt": "1000", "acum_pl_amt": "5000",
+            }],
+            "return_code": 0,
+        }),
+        "ust21530": FakeResponse({  # 실현손익
+            "result_list": [{
+                "sell_dt": "20260911", "stk_cd": "QCOM", "stk_nm": "퀄컴",
+                "sell_qty": "1", "crnc_cd": "USD", "pl_amt": "29012",
+            }],
+            "return_code": 0,
+        }),
+        "ust21180": FakeResponse({  # 주문 — 매수/매도는 slby_tp_nm 에 있다
+            "result_list": [{
+                "ord_dt": "20260916", "ord_no": "000004644", "slby_tp_nm": "매수",
+                "stk_cd": "EETH", "stk_nm": "이더리움", "ord_qty": "2",
+                "cntr_qty": "2", "crnc_cd": "USD",
+            }],
+            "return_code": 0,
+        }),
+        "usa21730": FakeResponse({  # 일별 종목수익률(배당을 여기서 캔다)
+            "result_list": [{
+                "last_base_dt": "20260910", "dvid_amt": "5178", "stk_nm": "Apple",
+            }],
+            "return_code": 0,
+        }),
+    }
+
+
+def test_history_sync_actually_runs(db, tmp_path, patch_client):
+    """⚠️**이력 경로는 한 번도 시험된 적이 없었다.**
+
+    시험 DB 에 이력 표가 없어서, 전체 동기화 시험이 이력 단계에서 조용히
+    실패하고 있었다 — `except Exception` 이 삼켜 경고 한 줄만 남기고 SUCCESS 로
+    끝나니 시험은 통과했다. 실측 로그:
+        WARNING|sync_history|History sync failed ... relation "..." does not exist
+    표를 만들고, 이력 TR 도 응답을 주고, **행이 실제로 들어오는지** 본다.
+    """
+    _broker_id, connection_id = _seed_broker_and_connection(db)
+    responses = _happy_responses([SAMSUNG, HYNIX])
+    responses.update(_history_responses())
+    patch_client(FakeHttpClient(responses))
+
+    job = _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+
+    assert _get_job(db, job)["status"] == "SUCCESS"
+    assert _count(db, "trades") == 1
+    assert _count(db, "account_daily_performance") == 1
+    assert _count(db, "realized_pnl") == 1
+    assert _count(db, "orders") == 1
+    # 배당은 종목별 조회라 보유 종목 수만큼 행이 생긴다 — 0 이 아니면 됐다.
+    assert _count(db, "dividends") > 0
+
+
+def test_one_failed_history_step_does_not_cancel_the_rest(db, tmp_path, patch_client):
+    """⚠️**한 단계가 죽어도 나머지는 받는다.**
+
+    예전에는 다섯 조회가 한 try 안에 있어서 체결 하나가 죽으면 일별성과·
+    실현손익·주문·배당이 **시도조차 안 됐다.** 남는 것은 "History sync failed:
+    ..." 한 줄이라 어디까지 됐는지 알 수 없었고, 화면에는 전부 0건으로 보였다.
+    """
+    _broker_id, connection_id = _seed_broker_and_connection(db)
+    responses = _happy_responses([SAMSUNG, HYNIX])
+    responses.update(_history_responses())
+    # 체결 조회만 죽인다.
+    responses["ust21100"] = FakeResponse(
+        {"return_code": 3, "return_msg": "인증에 실패했습니다"}
+    )
+    patch_client(FakeHttpClient(responses))
+
+    job = _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+
+    assert _get_job(db, job)["status"] == "SUCCESS"
+    assert _count(db, "trades") == 0            # 이 단계만 못 받았다
+    assert _count(db, "account_daily_performance") == 1  # 나머지는 들어왔다
+    assert _count(db, "realized_pnl") == 1
+    assert _count(db, "orders") == 1
+
+    # 그리고 **어느 단계가 죽었는지** 이름으로 남는다.
+    warnings = _query(
+        db, "SELECT message FROM job_logs WHERE level = 'WARNING'"
+    )
+    joined = " ".join(w["message"] for w in warnings)
+    assert "체결" in joined
+    assert "일별성과" not in joined  # 성공한 단계는 적지 않는다
 
 
 def test_sync_preserves_user_asset_classification(db, tmp_path, patch_client):

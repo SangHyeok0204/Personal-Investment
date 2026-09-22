@@ -169,6 +169,23 @@ def _account_ref(raw_account):
 
 # ---- handler ------------------------------------------------------------------
 
+def _step(name: str, errors: list[str], fn):
+    """이력 조회 한 단계. 죽으면 **이름과 함께 적고** None 을 돌려준다.
+
+    ⚠️예전에는 다섯 조회가 한 try 안에 있었다. 체결 하나가 죽으면 나머지 넷은
+      시도조차 안 됐고, 남는 것은 "History sync failed: ..." 한 줄이라 어디까지
+      됐는지 알 수 없었다 — 화면에는 전부 0건으로 보인다.
+
+    ⚠️돌려주는 None 은 **못 받은 것**이지 0건이 아니다. 호출부가 그 둘을 섞지
+      않도록 빈 목록 대신 None 을 쓴다.
+    """
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 — 한 단계 실패로 나머지를 버리지 않는다
+        errors.append(f"{name}({type(exc).__name__}: {exc})")
+        return None
+
+
 def _unread_currencies(balances, positions) -> list[str]:
     """**총평가금액은 0이 아닌데 보유가 한 줄도 안 온** 통화들.
 
@@ -499,6 +516,8 @@ def run(engine, job_id, payload, storage_dir, log_job):
             "orders": 0,
         }
         history_error: str | None = None
+        #: 단계별 실패. 한 단계가 죽어도 나머지는 받고, 무엇이 죽었는지 남긴다.
+        stage_errors: list[str] = []
         # ⚠️에러가 아니라 **조용히 0건**인 경우를 잡는다. 실측(2026-09-22 07:00 KST):
         #   usa21670 이 "정상적으로 처리되었습니다 / result_list 빈 배열" 을 돌려줬다.
         #   증권사 일일 배치 시간대로 보인다(같은 조회가 23시에는 530행이었다).
@@ -513,34 +532,64 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     if account_id is None:
                         continue
                     account_ref = _account_ref(entry["account"])
-                    trades = adapter.fetch_trades(account_ref, history_start, now.date())
-                    perf = adapter.fetch_daily_performance(
-                        account_ref, history_start, now.date()
+                    # ⚠️**단계마다 따로 감싼다.** 예전에는 다섯 조회가 한 try 안에
+                    #   있어서, 체결 조회 하나가 죽으면 일별성과·실현손익·주문·배당이
+                    #   **아예 시도조차 안 됐다.** 그리고 남는 메시지는
+                    #   "History sync failed: ..." 한 줄이라 어디까지 됐는지 알 수
+                    #   없었다 — 화면은 전부 0건으로 보인다.
+                    #   한 단계가 죽어도 나머지는 받고, 무엇이 죽었는지 이름으로 적는다.
+                    trades = _step(
+                        "체결", stage_errors,
+                        lambda: adapter.fetch_trades(
+                            account_ref, history_start, now.date()
+                        ),
                     )
-                    realized = adapter.fetch_realized_pnl(
-                        account_ref, history_start, now.date()
+                    perf = _step(
+                        "일별성과", stage_errors,
+                        lambda: adapter.fetch_daily_performance(
+                            account_ref, history_start, now.date()
+                        ),
+                    )
+                    realized = _step(
+                        "실현손익", stage_errors,
+                        lambda: adapter.fetch_realized_pnl(
+                            account_ref, history_start, now.date()
+                        ),
                     )
                     # 주문 내역 — 체결에 없는 것(미체결·취소·슬리피지)을 담는다.
-                    orders = adapter.fetch_orders(account_ref, history_start, now.date())
+                    orders = _step(
+                        "주문", stage_errors,
+                        lambda: adapter.fetch_orders(
+                            account_ref, history_start, now.date()
+                        ),
+                    )
                     # ★체결을 **먼저** 저장한다. 배당 조회 대상(현재 보유 + 과거 체결
                     #   종목)을 DB 에서 뽑는데, 체결을 나중에 쓰면 첫 동기화에서
                     #   이미 판 종목이 통째로 빠진다 — 실측에서 SGOV 등이 빠져
                     #   배당이 20건 중 10건만 들어왔다(예외 없음).
+                    # ⚠️None 은 **못 받은 것**이다 — 빈 목록(0건)과 다르다.
+                    #   못 받은 단계를 upsert 에 넘기지 않는다.
                     with engine.begin() as conn:
-                        history_counts["trades"] += history_repo.upsert_trades(
-                            conn, account_id, trades, job_id
-                        )
-                        history_counts["daily_performance"] += (
-                            history_repo.upsert_daily_performance(
-                                conn, account_id, perf, job_id
+                        if trades is not None:
+                            history_counts["trades"] += history_repo.upsert_trades(
+                                conn, account_id, trades, job_id
                             )
-                        )
-                        history_counts["realized_pnl"] += history_repo.upsert_realized_pnl(
-                            conn, account_id, realized, job_id
-                        )
-                        history_counts["orders"] += history_repo.upsert_orders(
-                            conn, account_id, orders, job_id
-                        )
+                        if perf is not None:
+                            history_counts["daily_performance"] += (
+                                history_repo.upsert_daily_performance(
+                                    conn, account_id, perf, job_id
+                                )
+                            )
+                        if realized is not None:
+                            history_counts["realized_pnl"] += (
+                                history_repo.upsert_realized_pnl(
+                                    conn, account_id, realized, job_id
+                                )
+                            )
+                        if orders is not None:
+                            history_counts["orders"] += history_repo.upsert_orders(
+                                conn, account_id, orders, job_id
+                            )
 
                     # 배당은 종목별 조회라(usa21730 이 stk_cd 필수) 대상을 먼저 정한다.
                     # 이미 판 종목도 그 해에 배당을 받았을 수 있으므로 체결까지 본다.
@@ -548,9 +597,14 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         dividend_targets = history_repo.tickers_for_dividends(
                             conn, account_id
                         )
-                    fetched = adapter.fetch_dividends(
-                        account_ref, dividend_targets, history_start, now.date()
+                    fetched = _step(
+                        "배당", stage_errors,
+                        lambda: adapter.fetch_dividends(
+                            account_ref, dividend_targets, history_start, now.date()
+                        ),
                     )
+                    if fetched is None:
+                        continue
                     dividend_skipped = fetched.skipped
                     with engine.begin() as conn:
                         history_counts["dividends"] += history_repo.upsert_dividends(
@@ -590,6 +644,15 @@ def run(engine, job_id, payload, storage_dir, log_job):
             #   이미 겪은 일이다 — 주문 조회는 명세 예시가 `result_lsit`(오타)라
             #   두 키를 모두 받아 주고 있다. 어댑터가 모아 둔 것을 여기서 알린다.
             history_notes.extend(getattr(adapter, "shape_warnings", []))
+
+            # ⚠️단계 실패를 **0건과 섞지 않는다.** 어느 단계가 죽었는지 이름으로
+            #   적어야 "거래가 없는 것"과 "못 받은 것"을 구분할 수 있다.
+            if stage_errors:
+                history_notes.append(
+                    f"{len(stage_errors)}개 단계를 받지 못했습니다 — "
+                    + "; ".join(stage_errors)
+                    + ". 그 화면들은 **0건이 아니라 미수집** 상태입니다."
+                )
 
             for note in history_notes:
                 log_job(engine, job_id, "WARNING", "sync_history", note)
