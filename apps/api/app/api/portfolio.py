@@ -541,11 +541,18 @@ def get_allocation(
     #   되므로 예수금도 한 조각으로 넣는다 — 분모에만 더하고 조각에서 빼면
     #   비중 합이 100% 가 안 되고, 사용자는 그걸 버그로 읽는다.
     cash = None
+    cash_by_currency: dict[str, Decimal] = {}
     if inv.CASH_IN_ASSETS:
         balances = db.execute(
             select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
         ).scalars().all()
         cash = _sum([_cash_krw(b) for b in balances])
+        for b in balances:
+            value = _cash_krw(b)
+            if value:
+                cash_by_currency[b.currency] = (
+                    cash_by_currency.get(b.currency, Decimal("0")) + value
+                )
 
     total = _sum([value for _, value, _, _ in rows])
     if total is not None and cash:
@@ -577,17 +584,58 @@ def get_allocation(
         )
 
     if cash:
-        amount = cash.quantize(_MONEY, rounding=ROUND_HALF_UP)
-        items.append(
-            AllocationSliceOut(
-                key=CASH_TICKER,
-                label="예수금",
-                market_value_krw=amount,
-                weight=(amount / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
-                # 현금은 '종목 수'가 없다. 0 으로 두면 "0종목"이 찍히므로 1 로 센다.
-                position_count=1,
+        # ⚠️**통화 축에서는 예수금을 통화에 합친다.** 따로 떼어 놓으면 그 축이
+        #   재려는 것을 못 재게 된다 — 실측으로 예수금 전액이 USD($982.92)인데
+        #   화면은 "USD 96.50% · 예수금 3.50%" 라고 적고 있었다. 사실은 USD 100%
+        #   다. 통화 비중을 보는 사람은 "내 돈의 몇 %가 달러인가"를 묻는 것이고,
+        #   달러 예수금은 그 답에 들어가야 한다.
+        #   다른 축(섹터·자산군·국가)에서는 합치지 않는다 — 현금에 섹터가 없고,
+        #   USD 예수금이 곧 '미국 자산'이라는 것도 우리가 정할 일이 아니다.
+        if dimension == "currency":
+            by_key = {i.key: i for i in items}
+            for currency, value in cash_by_currency.items():
+                amount = value.quantize(_MONEY, rounding=ROUND_HALF_UP)
+                existing = by_key.get(currency)
+                if existing is None:
+                    items.append(
+                        AllocationSliceOut(
+                            key=currency,
+                            label=currency,
+                            market_value_krw=amount,
+                            weight=(amount / total).quantize(
+                                _RATIO, rounding=ROUND_HALF_UP
+                            ),
+                            position_count=1,
+                        )
+                    )
+                    continue
+                merged = existing.market_value_krw + amount
+                items[items.index(existing)] = AllocationSliceOut(
+                    key=existing.key,
+                    label=existing.label,
+                    market_value_krw=merged,
+                    weight=(merged / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
+                    # 예수금도 한 항목으로 센다 — 따로 낼 때 1 로 세던 것과 같은 규칙.
+                    position_count=existing.position_count + 1,
+                )
+        else:
+            amount = cash.quantize(_MONEY, rounding=ROUND_HALF_UP)
+            # 통화를 적어 둔다. 국가 축에서 "예수금 3.5%" 만 보이면 그 돈이
+            # 원화인지 달러인지 알 수 없다.
+            currencies = sorted(cash_by_currency)
+            label = (
+                f"예수금 ({currencies[0]})" if len(currencies) == 1 else "예수금"
             )
-        )
+            items.append(
+                AllocationSliceOut(
+                    key=CASH_TICKER,
+                    label=label,
+                    market_value_krw=amount,
+                    weight=(amount / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
+                    # 현금은 '종목 수'가 없다. 0 으로 두면 "0종목"이 찍히므로 1 로 센다.
+                    position_count=1,
+                )
+            )
 
     # 큰 것부터. 미분류는 크기와 무관하게 맨 뒤로 민다 — 목록의 의미가 다르다.
     items.sort(key=lambda i: (i.key is None, -i.market_value_krw))

@@ -431,6 +431,28 @@ class Audit:
             "holdings", "rebalance",
         )
 
+        # ⚠️**종목 비중이 화면마다 갈리지 않는지.** 한 번 고친 적이 있는데
+        #   (자산 현황 20.9% vs 리밸런싱 20.1%), 배분 화면의 '종목 비중' 카드가
+        #   클라이언트에서 주식 평가액으로만 나누는 바람에 되살아나 있었다
+        #   (SOXL 20.6% vs 리밸런싱 19.9%). 화면이 쓰는 것과 같은 식으로 잰다.
+        by_ticker = {
+            line["ticker"]: line
+            for line in rebalance["lines"] + rebalance["untargeted"]
+        }
+        top = max(
+            (h for h in holdings["items"] if h.get("market_value_krw")),
+            key=lambda h: dec(h["market_value_krw"]),
+            default=None,
+        )
+        if top and top["ticker"] in by_ticker:
+            self.same(
+                f'종목 비중 {top["ticker"]} (배분 화면 계산식 vs 리밸런싱)',
+                (dec(top["market_value_krw"]) / dec(allocation["total_market_value_krw"]))
+                .quantize(Decimal("0.000001")),
+                dec(by_ticker[top["ticker"]]["current_weight"]),
+                "holdings÷allocation", "rebalance",
+            )
+
         # ── 원장 신선도 ────────────────────────────────────────────────
         print("\n[원장 신선도]")
         self.not_stale(

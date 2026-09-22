@@ -145,7 +145,8 @@ export default function AllocationPage() {
           ))}
           {data?.total_market_value_krw && (
             <span className="ml-auto text-[11px] font-semibold text-ink-faint">
-              기준 평가금액 {formatKrwString(data.total_market_value_krw)}
+              기준 총자산 {formatKrwString(data.total_market_value_krw)} · 주식 +
+              예수금 · 마지막 동기화
             </span>
           )}
         </div>
@@ -182,9 +183,15 @@ export default function AllocationPage() {
             <WeightBars items={data?.items ?? []} />
           </StubCard>
 
+          {/* ⚠️분모는 **위 카드와 같은 총자산**이어야 한다. 예전에는 여기만
+              주식 평가액(holdings.total)으로 나눠서, 같은 화면에서 SOXL 이
+              섹터 쪽 기준으로는 19.9% 인데 이 카드에서는 20.6% 로 보였다.
+              머리글에 적힌 '기준 총자산' 과도 어긋났다. 리밸런싱 화면과
+              분모가 갈려 같은 버그를 한 번 고친 적이 있는데, 이 카드가
+              클라이언트에서 따로 계산하는 바람에 되살아나 있었다. */}
           <StubCard
             title="종목 비중"
-            subtitle="평가금액 순 상위 8"
+            subtitle="총자산 대비 · 평가금액 순 상위 8"
             className="min-h-0 flex-1"
             scrollBody
           >
@@ -194,11 +201,11 @@ export default function AllocationPage() {
                 label: h.name ?? h.ticker,
                 market_value_krw: h.market_value_krw ?? "0",
                 weight:
-                  holdings.data?.total_market_value_krw &&
-                  Number(holdings.data.total_market_value_krw) !== 0
+                  data?.total_market_value_krw &&
+                  Number(data.total_market_value_krw) !== 0
                     ? String(
                         Number(h.market_value_krw ?? 0) /
-                          Number(holdings.data.total_market_value_krw),
+                          Number(data.total_market_value_krw),
                       )
                     : "0",
                 position_count: 1,

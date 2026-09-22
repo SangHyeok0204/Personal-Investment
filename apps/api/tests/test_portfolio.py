@@ -261,9 +261,14 @@ def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
     """
     body = client.get("/api/v1/portfolio/allocation?dimension=country").json()
     labels = {i["label"]: i for i in body["items"]}
+    # ⚠️예수금 조각은 **key 로 찾는다**. 라벨에는 통화가 붙어("예수금 (KRW)")
+    #   라벨로 찾으면 통화가 바뀔 때 조용히 못 찾는다.
+    cash = next(i for i in body["items"] if i["key"] == "__CASH__")
     # 국내 800,000 / 미국 1,680,000 / 예수금 500,000 → 합 2,980,000
     assert Decimal(body["total_market_value_krw"]) == Decimal("2980000")
-    assert Decimal(labels["예수금"]["market_value_krw"]) == Decimal("500000.00")
+    assert Decimal(cash["market_value_krw"]) == Decimal("500000.00")
+    # ★통화를 라벨에 적는다 — "예수금 3.5%" 만 보이면 원화인지 달러인지 모른다.
+    assert cash["label"] == "예수금 (KRW)"
     assert Decimal(labels["미국"]["market_value_krw"]) == Decimal("1680000.00")
     assert Decimal(labels["한국"]["market_value_krw"]) == Decimal("800000.00")
     assert sum(Decimal(i["weight"]) for i in body["items"]).quantize(
@@ -271,6 +276,38 @@ def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
     ) == Decimal("1.0000")
     # 큰 것부터
     assert body["items"][0]["label"] == "미국"
+
+
+def test_allocation_by_currency_folds_cash_into_its_currency(client, db, kiwoom):
+    """통화 축에서는 예수금을 **그 통화에 합친다.**
+
+    ⚠️따로 떼어 놓으면 그 축이 재려는 것을 못 재게 된다. 실계좌에서 예수금
+      전액이 USD($982.92)인데 화면은 "USD 96.50% · 예수금 3.50%" 라고 적고
+      있었다 — 사실은 USD 100% 다. 통화 비중을 보는 사람은 "내 돈의 몇 %가
+      달러인가"를 묻는 것이고, 달러 예수금은 그 답에 들어가야 한다.
+    """
+    from app.models import AccountBalance
+
+    # 환산 가능한 USD 예수금을 하나 더 넣는다(환율이 있어야 합계에 들어간다).
+    db.add(AccountBalance(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, currency="USD",
+        cash_balance=Decimal("100"), exchange_rate=Decimal("1400"), as_of=NOW,
+    ))
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/allocation?dimension=currency").json()
+    by_key = {i["key"]: i for i in body["items"]}
+
+    # 예수금이 따로 떨어진 조각으로 남아 있으면 안 된다.
+    assert "__CASH__" not in by_key
+
+    # USD 주식 1,680,000 + USD 예수금 140,000 = 1,820,000
+    assert Decimal(by_key["USD"]["market_value_krw"]) == Decimal("1820000.00")
+    # KRW 주식 800,000 + KRW 예수금 500,000 = 1,300,000
+    assert Decimal(by_key["KRW"]["market_value_krw"]) == Decimal("1300000.00")
+    assert sum(Decimal(i["weight"]) for i in body["items"]).quantize(
+        Decimal("0.0001")
+    ) == Decimal("1.0000")
 
 
 def test_allocation_surfaces_unclassified_instead_of_hiding_it(client, kiwoom):
@@ -281,7 +318,7 @@ def test_allocation_surfaces_unclassified_instead_of_hiding_it(client, kiwoom):
     body = client.get("/api/v1/portfolio/allocation?dimension=sector").json()
     # 미분류 한 조각 + 예수금 한 조각.
     assert len(body["items"]) == 2
-    only = next(i for i in body["items"] if i["label"] != "예수금")
+    only = next(i for i in body["items"] if i["key"] != "__CASH__")
     assert only["key"] is None
     assert only["label"] == "미분류"
     assert Decimal(body["unclassified_market_value_krw"]) == Decimal("2480000.00")
