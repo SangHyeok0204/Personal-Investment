@@ -1470,12 +1470,33 @@ def get_inclusion(
 
     buys: dict[str, int] = {}
     sells: dict[str, int] = {}
+    # ★'누적 매수'와 '보유 원가'는 다른 숫자다. 실측으로 매수 $42,213 인데 보유
+    #   원가는 $24,247 다 — 판 것과 이미 회수한 원금이 빠지기 때문이다. 화면이
+    #   보유 원가를 "누적 투자원금"이라고 부르고 있었는데, 그 이름이면 $42,213
+    #   을 기대하게 된다. 둘 다 내보내고 이름을 갈라 준다.
+    total_buy = Decimal("0")
+    total_sell = Decimal("0")
     for t in trades:
         (buys if t.is_buy else sells)[t.ticker] = (
             (buys if t.is_buy else sells).get(t.ticker, 0) + 1
         )
+        if t.amount is not None:
+            if t.is_buy:
+                total_buy += t.amount
+            else:
+                total_sell += t.amount
 
+    # ⚠️같은 종목이 화면마다 다른 이름으로 보이면 안 된다. 체결 원장의 종목명은
+    #   증권사가 준 날것이라 띄어쓰기가 없다 — GLD 가 여기서는
+    #   "SPDRGOLDSHARESHKD", 다른 화면에서는 "금 SPDR ETF" 였다.
+    #   **자산 표의 이름을 먼저 쓰고**, 없을 때만 체결 원장 이름으로 떨어진다
+    #   (이미 판 종목은 자산 표에 없을 수 있다).
     names = {t.ticker: t.asset_name for t in trades if t.asset_name}
+    for ticker, name in db.execute(
+        select(Asset.ticker, Asset.name).where(Asset.ticker.in_(names.keys()))
+    ).all():
+        if name:
+            names[ticker] = name
     today = date.today()
     holdings = []
     for ticker, (entry, exited) in sorted(periods.items()):
@@ -1521,7 +1542,10 @@ def get_inclusion(
             InclusionEventOut(
                 event_date=e.event_date,
                 ticker=e.ticker,
-                asset_name=e.asset_name or names.get(e.ticker),
+                # ⚠️`names` 가 먼저다. 이벤트의 이름은 체결 원장 날것이라
+                #   띄어쓰기가 없다 — 같은 종목이 왼쪽 표와 오른쪽 목록에서
+                #   다른 이름으로 보이면 다른 종목으로 읽힌다.
+                asset_name=names.get(e.ticker) or e.asset_name,
                 kind=e.kind,
                 quantity=e.quantity,
                 amount=e.amount,
@@ -1539,6 +1563,8 @@ def get_inclusion(
             for w in pt.month_end_weights(history)
         ],
         total_cost=total_cost,
+        total_buy=total_buy,
+        total_sell=total_sell,
         open_count=sum(1 for h in holdings if h.status == "OPEN"),
         exited_count=sum(1 for h in holdings if h.status != "OPEN"),
     )

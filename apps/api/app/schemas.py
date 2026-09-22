@@ -563,7 +563,13 @@ class InclusionOut(BaseModel):
     holdings: list[InclusionHoldingOut]
     events: list[InclusionEventOut]
     monthly_weights: list[InclusionWeightPointOut]
+    #: **지금 들고 있는 종목의 매입원가 합**이다. '누적 투자원금'이 아니다 —
+    #  판 종목과 이미 회수한 원금이 빠진다(실측 매수 $42,213 vs 보유 원가 $24,247).
     total_cost: Decimal | None
+    #: 계좌를 연 뒤 산 금액의 합(USD).
+    total_buy: Decimal | None = None
+    #: 계좌를 연 뒤 판 금액의 합(USD).
+    total_sell: Decimal | None = None
     open_count: int
     exited_count: int
 

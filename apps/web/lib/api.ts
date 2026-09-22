@@ -3084,7 +3084,12 @@ export interface Inclusion {
   holdings: InclusionHolding[];
   events: InclusionEvent[];
   monthly_weights: InclusionWeightPoint[];
+  /** **지금 들고 있는 종목의 매입원가 합**이다. 누적 투자원금이 아니다. */
   total_cost: string | null;
+  /** 계좌를 연 뒤 산 금액의 합(USD). */
+  total_buy: string | null;
+  /** 계좌를 연 뒤 판 금액의 합(USD). */
+  total_sell: string | null;
   open_count: number;
   exited_count: number;
 }

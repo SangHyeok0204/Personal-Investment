@@ -68,6 +68,7 @@ export default function InclusionPage() {
   const live = useLiveQueryOptions();
   const [picked, setPicked] = useState<InclusionHolding | null>(null);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [basisOpen, setBasisOpen] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["inclusion", accountId],
@@ -115,13 +116,26 @@ export default function InclusionPage() {
           <StatTile
             label="보유 종목"
             value={data ? `${data.open_count}` : null}
-            hint={data?.first_trade_date ? `${data.first_trade_date}부터` : undefined}
+            hint={
+              data?.first_trade_date
+                ? `${data.first_trade_date}부터 · 눌러서 설명`
+                : undefined
+            }
+            actionHint="눌러서 읽는 법 보기"
+            onClick={() => setBasisOpen(true)}
             loading={isLoading}
           />
+          {/* ⚠️이름을 '누적 투자원금'에서 바꿨다. 이 값은 **지금 들고 있는
+              종목의 원가**라, 그 이름이면 실제 누적 매수액을 기대하게 된다 —
+              실측 매수 $42,213 vs 보유 원가 $24,247. */}
           <StatTile
-            label="누적 투자원금"
+            label="보유 원가"
             value={data?.total_cost ? usd(data.total_cost) : null}
-            hint="보유 종목 원가 합 (USD)"
+            hint={
+              data?.total_buy
+                ? `누적 매수 ${usd(data.total_buy)} 중 남은 원가`
+                : "지금 들고 있는 종목의 원가 (USD)"
+            }
             loading={isLoading}
           />
           <StatTile
@@ -261,6 +275,47 @@ export default function InclusionPage() {
           </StubCard>
         </div>
       </PageContainer>
+
+      <Modal
+        open={basisOpen}
+        onClose={() => setBasisOpen(false)}
+        title="이 화면만 기준이 다릅니다"
+        subtitle="기간도 통화도 비중의 뜻도"
+      >
+        <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
+          <li>
+            <strong>기간이 다릅니다.</strong> 다른 화면은 투자 시작일(2026-06-04)
+            이후만 보는데, 여기는 <strong>{data?.first_trade_date}</strong> 부터
+            — 매매 이력 전체를 봅니다. 편입비는 &quot;언제 처음 샀나&quot;와
+            &quot;얼마를 넣었나&quot;를 되감는 화면이라 중간부터 자르면 원가가
+            통째로 틀립니다. 실제로 시작일을 적용했더니 그 전에 산 종목이 목록에서
+            사라졌습니다.
+          </li>
+          <li>
+            <strong>비중의 뜻이 다릅니다.</strong> 여기 비중은{" "}
+            <strong>원가 기준</strong>(내가 각 종목에 넣은 돈)이고, 자산 현황·배분·
+            리밸런싱의 비중은 <strong>평가액 기준</strong>(지금 얼마나 들고 있나)
+            입니다. 같은 종목이 두 화면에서 다른 % 로 보이는 건 그래서입니다 —
+            오른 종목은 평가 비중이 더 큽니다.
+          </li>
+          <li>
+            <strong>통화가 다릅니다.</strong> 금액은 <strong>USD 그대로</strong>
+            입니다. 체결의 원화 금액이 비어 있고 거래일 환율도 없어서, 오늘 환율을
+            과거 거래에 곱하지 않았습니다.
+          </li>
+          <li>
+            <strong>&apos;보유 원가&apos;는 누적 투자원금이 아닙니다.</strong>{" "}
+            지금 들고 있는 종목의 원가 합입니다 — 판 종목과 이미 회수한 원금은
+            빠집니다. 누적으로는 매수 {usd(data?.total_buy)} · 매도{" "}
+            {usd(data?.total_sell)} 입니다.
+          </li>
+          <li>
+            <strong>이력이 어긋난 종목은 숨기지 않습니다.</strong> 매도 체결이
+            빠져 이미 판 종목이 보유로 남는 경우가 실제로 있었습니다(SKHY).
+            비중 분모에서는 빼되 목록에는 STALE 로 남깁니다.
+          </li>
+        </ul>
+      </Modal>
 
       <Modal
         open={eventsOpen}

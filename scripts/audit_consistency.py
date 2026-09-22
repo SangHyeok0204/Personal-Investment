@@ -455,6 +455,65 @@ class Audit:
                 "holdings÷allocation", "rebalance",
             )
 
+        # ── 편입비 ─────────────────────────────────────────────────────
+        # ★편입비의 '보유 원가'는 **매매 이력을 되감아** 만든 값이고, 보유 종목
+        #   화면의 '총 매입금액'은 **증권사 포지션 기록**에서 온다. 원천이 다르니
+        #   정확히 같을 수는 없지만, 크게 벌어지면 둘 중 하나가 틀린 것이다.
+        #   ⚠️검사가 아니라 **관찰**이다 — 통화도 다르고(USD vs KRW) 환율 반올림이
+        #     섞인다. 실측 차이 ₩19 / ₩33,352,051.
+        print("\n[편입비]")
+        if inclusion.get("total_cost") and summary.get("purchase_amount_krw"):
+            rate = next(
+                (dec(h["exchange_rate"]) for h in holdings["items"]
+                 if h.get("exchange_rate")),
+                None,
+            )
+            if rate:
+                replayed = dec(inclusion["total_cost"]) * rate
+                broker = dec(summary["purchase_amount_krw"])
+                diff = abs(replayed - broker)
+                share = diff / broker * 100 if broker else Decimal("0")
+                print(
+                    f"  ·  원천이 다르다(체결 원장 되감기 vs 포지션 기록) — "
+                    f"차이 {money(diff)} ({share:.4f}%)"
+                )
+                # 정확히 같을 수는 없으니 **1% 안에 드는지**만 본다.
+                self.same(
+                    "보유 원가 (이력 복원 vs 증권사, 1% 이내)",
+                    replayed, broker, "inclusion×환율", "summary",
+                    tol=broker * Decimal("0.01"),
+                )
+        # ⚠️같은 종목이 화면마다 다른 이름으로 보이면 사용자는 다른 종목으로
+        #   읽는다. 체결 원장의 이름은 증권사 날것이라 띄어쓰기가 없다
+        #   (GLD: "SPDRGOLDSHARESHKD" vs "금 SPDR ETF").
+        holding_names = {
+            h["ticker"]: h.get("name") for h in holdings["items"] if h.get("name")
+        }
+        mismatched = [
+            f'{h["ticker"]}: {h["asset_name"]} vs {holding_names[h["ticker"]]}'
+            for h in inclusion["holdings"]
+            if h["ticker"] in holding_names
+            and h.get("asset_name")
+            and h["asset_name"] != holding_names[h["ticker"]]
+        ]
+        self.checked += 1
+        if mismatched:
+            print(f"  X  종목명 (편입비 vs 보유 종목): {len(mismatched)}건 다름")
+            for line in mismatched[:5]:
+                print(f"       {line}")
+            self.failures.append("종목명 (편입비 vs 보유 종목)")
+        else:
+            print(f"  OK 종목명 (편입비 vs 보유 종목): {len(holding_names)}종목 일치")
+
+        # '보유 원가'가 누적 매수와 헷갈리지 않게, 둘을 나란히 찍는다.
+        if inclusion.get("total_buy"):
+            print(
+                f"  ·  누적 매수 ${dec(inclusion['total_buy']):,.2f} · "
+                f"누적 매도 ${dec(inclusion['total_sell']):,.2f} · "
+                f"보유 원가 ${dec(inclusion['total_cost']):,.2f} "
+                f"— '보유 원가'는 누적 투자원금이 아니다"
+            )
+
         # ── 환노출 ─────────────────────────────────────────────────────
         # ⚠️환노출의 분모는 배분 화면의 통화 축과 **같은 총자산**이어야 한다.
         #   예전에는 환노출만 주식으로 세서 외화 예수금이 빠졌다(실측
