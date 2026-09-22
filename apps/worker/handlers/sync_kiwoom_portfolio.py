@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -167,6 +168,26 @@ def _account_ref(raw_account):
 
 
 # ---- handler ------------------------------------------------------------------
+
+def _unread_currencies(balances, positions) -> list[str]:
+    """**총평가금액은 0이 아닌데 보유가 한 줄도 안 온** 통화들.
+
+    그런 통화가 있으면 우리가 응답을 못 읽은 것이다 — 다 판 것이 아니다.
+
+    ⚠️총평가금액을 자산 합계로 쓰지 말 것. 통화가 섞여 있고 예수금 포함 여부도
+      필드마다 다르다. 여기서는 **0인지 아닌지**만 본다.
+    """
+    held = {(p.get("currency") or "").upper() for p in positions or []}
+    unread = []
+    for balance in balances or []:
+        currency = (balance.get("currency") or "").upper()
+        value = balance.get("total_market_value_local")
+        if not currency or not value:
+            continue
+        if Decimal(str(value)) != 0 and currency not in held:
+            unread.append(currency)
+    return sorted(set(unread))
+
 
 def run(engine, job_id, payload, storage_dir, log_job):
     payload = payload or {}
@@ -358,6 +379,10 @@ def run(engine, job_id, payload, storage_dir, log_job):
             )
             for e in per_account
         ]
+        # ⚠️여기서 선언한다. 예전에는 이력 동기화 직전(아래)에서야 만들었는데,
+        #   잔고 저장 단계에서도 알릴 일이 생긴다(보유 0건 방어). 선언보다 먼저
+        #   쓰면 NameError 가 나는데 그 경로는 평소에 안 타서 안 보인다.
+        history_notes: list[str] = []
         all_positions = [p for n in normalized for p in n["positions"]]
         total_positions = len(all_positions)
         total_balances = sum(len(n["balances"]) for n in normalized)
@@ -403,7 +428,33 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     )
                     kept_asset_ids.append(asset_id)
                     asset_positions.append((asset_id, position))
-                positions_repo.delete_absent_positions(conn, account_id, kept_asset_ids)
+                # ⚠️**"팔아서 0"과 "못 읽어서 0"을 가른다.**
+                #   이 함수는 이번 동기화에 안 보인 보유를 **지운다**. 다 팔았으면
+                #   그게 맞다. 그런데 증권사가 잔고 응답의 배열 키 이름을 바꾸면
+                #   파서가 조용히 빈 목록을 내놓는다(pydantic 모델이
+                #   `default_factory=list` 라 에러도 안 난다). 그때 포트폴리오가
+                #   날아가고 동기화는 **성공**으로 끝난다.
+                #
+                #   증권사는 같은 응답에 통화별 **총평가금액**을 함께 준다.
+                #   어떤 통화의 총평가금액이 0이 아닌데 그 통화 보유가 하나도
+                #   없으면 우리가 못 읽은 것이다 — 그때는 아무것도 지우지 않는다.
+                #
+                #   ⚠️통화별로 본다. 계좌 전체가 0건일 때만 막으면, **한쪽 시장만**
+                #     못 읽은 흔한 경우를 놓친다(실측 시험: 국내를 못 읽었는데
+                #     미국 3종목이 와서 방어가 안 걸리고 국내 2종목이 지워졌다).
+                unread = _unread_currencies(
+                    account_data["balances"], account_data["positions"]
+                )
+                if unread:
+                    history_notes.append(
+                        f"{', '.join(unread)} 보유가 0건으로 왔는데 증권사가 말한"
+                        f" 총평가금액은 0이 아닙니다 — **읽지 못한 것으로 보고 기존"
+                        f" 보유를 지우지 않았습니다.** 응답 형식이 바뀌었을 수 있습니다."
+                    )
+                else:
+                    positions_repo.delete_absent_positions(
+                        conn, account_id, kept_asset_ids
+                    )
 
                 snapshot_id = snapshots_repo.insert_portfolio_snapshot(
                     conn, account_id, account_data["snapshot"], now, job_id
@@ -453,7 +504,6 @@ def run(engine, job_id, payload, storage_dir, log_job):
         #   증권사 일일 배치 시간대로 보인다(같은 조회가 23시에는 530행이었다).
         #   에러가 아니니 예외도 안 나고 history_error 도 안 찍힌다 — 새 DB 로
         #   그 시간에 동기화하면 이력이 **빈 채로 굳는다**. 실제로 그렇게 됐다.
-        history_notes: list[str] = []
         try:
             history_start = now.date() - timedelta(days=HISTORY_DAYS)
             adapter_cls = get_adapter_class("KIWOOM")
@@ -534,6 +584,13 @@ def run(engine, job_id, payload, storage_dir, log_job):
                     history_notes.append(
                         "배당이 0건입니다 — 같은 이유일 수 있으니 나중에 다시 동기화하세요."
                     )
+            # ⚠️**응답 모양이 바뀌면 0건이 조용히 돌아온다.** 모든 파서가
+            #   `result_list` 를 기대하는데, 증권사가 키 이름을 바꾸면 동기화는
+            #   성공으로 끝나고 화면은 "거래 없음"이라고 말한다. 가정이 아니라
+            #   이미 겪은 일이다 — 주문 조회는 명세 예시가 `result_lsit`(오타)라
+            #   두 키를 모두 받아 주고 있다. 어댑터가 모아 둔 것을 여기서 알린다.
+            history_notes.extend(getattr(adapter, "shape_warnings", []))
+
             for note in history_notes:
                 log_job(engine, job_id, "WARNING", "sync_history", note)
 

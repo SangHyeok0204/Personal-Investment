@@ -78,10 +78,45 @@ class KiwoomAdapter(BrokerAdapter):
             http_client=http_client,
             **kwargs,
         )
+        #: 응답 모양이 예상과 다른 경우를 모은다. `shape_warnings` 로 꺼내 쓴다.
+        self._shape_warnings: list[str] = []
 
     @property
     def credentials(self):
         return self._credentials
+
+    @property
+    def shape_warnings(self) -> list[str]:
+        """응답에서 **아는 키를 하나도 못 찾은** 조회들.
+
+        ★왜 필요한가: 모든 파서가 `page.get("result_list") or []` 로 시작한다.
+          그래서 증권사가 키 이름을 바꾸면 **0건이 조용히 돌아온다** — 동기화는
+          성공으로 끝나고 화면은 "거래 없음"이라고 말한다. 가정이 아니라 이미
+          겪은 일이다: 주문 조회(ust21180)는 명세 예시가 `result_lsit`(오타)라
+          두 키를 모두 받아 주고 있다. 다음번엔 못 맞힐 수도 있다.
+
+        ⚠️**'데이터 없음'과 '모양이 바뀜'은 다르다.** 빈 목록(`result_list: []`)은
+          데이터가 없는 것이고, 키 자체가 없는 것은 우리가 못 읽는 것이다.
+          후자를 0건으로 넘기면 아무도 모른다.
+        """
+        return list(self._shape_warnings)
+
+    def _rows(self, page: dict, *keys: str, tr: str) -> list:
+        """응답 한 장에서 행 목록을 꺼낸다. 아는 키가 없으면 **기록하고** 빈 목록.
+
+        ⚠️여기서 예외를 던지지 않는다. 한 장이 이상하다고 동기화 전체를 죽이면
+          잔고까지 못 받는다 — 모아서 알리고 나머지는 계속 받는다.
+        """
+        for key in keys:
+            if key in page:
+                return page.get(key) or []
+        seen = ", ".join(sorted(k for k in page if not k.startswith("return_"))[:6])
+        self._shape_warnings.append(
+            f"{tr}: 응답에서 {' / '.join(keys)} 를 찾지 못했습니다"
+            f"(있는 키: {seen or '없음'}). 0건으로 읽었지만 **데이터가 없다는 뜻이"
+            f" 아닙니다** — 증권사 응답 형식이 바뀌었을 수 있습니다."
+        )
+        return []
 
     @property
     def markets(self):
@@ -166,7 +201,7 @@ class KiwoomAdapter(BrokerAdapter):
                 path=us_equities.US_ACNT_PATH,
             )
             for page in pages:
-                for raw in page.get("result_list") or []:
+                for raw in self._rows(page, "result_list", tr=API_US_TRADES):
                     row = _to_trade_row(raw)
                     if row is None:
                         continue
@@ -220,7 +255,9 @@ class KiwoomAdapter(BrokerAdapter):
                     continue
                 raise
             for page in pages:
-                for raw in page.get("result_list") or page.get("result_lsit") or []:
+                for raw in self._rows(
+                    page, "result_list", "result_lsit", tr=API_US_ORDERS
+                ):
                     row = _to_order_row(raw)
                     if row is None:
                         continue
@@ -248,7 +285,7 @@ class KiwoomAdapter(BrokerAdapter):
                 path=us_equities.US_ACNT_PATH,
             )
             for page in pages:
-                for raw in page.get("result_list") or []:
+                for raw in self._rows(page, "result_list", tr=API_US_DAILY_PERF):
                     base = _parse_yyyymmdd(raw.get("base_dt"))
                     if base is None:
                         continue
@@ -300,7 +337,7 @@ class KiwoomAdapter(BrokerAdapter):
                         continue  # 이 창에는 매도가 없었다 — 실패가 아니다.
                     raise
                 for page in pages:
-                    for raw in page.get("result_list") or []:
+                    for raw in self._rows(page, "result_list", tr=API_US_REALIZED):
                         sell_date = _parse_yyyymmdd(raw.get("sell_dt"))
                         ticker = (raw.get("stk_cd") or "").strip()
                         if sell_date is None or not ticker:
@@ -395,7 +432,7 @@ class KiwoomAdapter(BrokerAdapter):
                     continue
                 raise
             for page in pages:
-                for raw in page.get("result_list") or []:
+                for raw in self._rows(page, "result_list", tr=API_US_STOCK_DAILY):
                     amount = _opt(raw.get("dvid_amt"))
                     if not amount:
                         continue  # 배당 없는 날 — 대부분이다.

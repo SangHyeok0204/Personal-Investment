@@ -607,6 +607,52 @@ def test_sold_position_removed_on_next_sync(db, tmp_path, patch_client):
     assert _count(db, "assets") == 5
 
 
+def test_empty_holdings_with_nonzero_total_does_not_wipe_positions(
+    db, tmp_path, patch_client
+):
+    """⚠️**"팔아서 0"과 "못 읽어서 0"을 가른다.**
+
+    보유가 하나도 안 오면 동기화는 그 계좌의 포지션을 **전부 지운다**(정상이다 —
+    다 팔았으면 그래야 한다). 그런데 증권사가 잔고 응답의 배열 키 이름을 바꾸면
+    파서가 조용히 빈 목록을 내놓는다 — pydantic 모델이 `default_factory=list`
+    라 에러도 안 난다. 그때 포트폴리오가 통째로 날아가고 동기화는 **성공**으로
+    끝난다.
+
+    증권사는 같은 응답에 **총평가금액**(tot_evlt_amt)을 함께 준다. 보유는 0인데
+    그 값이 0이 아니면 우리가 못 읽은 것이다.
+    """
+    _broker_id, connection_id = _seed_broker_and_connection(db)
+
+    patch_client(FakeHttpClient(_happy_responses([SAMSUNG, HYNIX])))
+    _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+    assert _count(db, "current_positions") == 5
+
+    # 배열 키 이름이 바뀐 응답 — 총평가금액은 그대로 1,670,000 이다.
+    renamed = FakeResponse(
+        {
+            "tot_pur_amt": "000000001700000",
+            "tot_evlt_amt": "000000001670000",
+            "tot_evlt_pl": "-00000000034000",
+            "tot_prft_rt": "-2.00",
+            "prsm_dpst_aset_amt": "000000001850000",
+            # ← acnt_evlt_remn_indv_tot 이 아니라 다른 이름으로 왔다
+            "holdings_v2": [SAMSUNG, HYNIX],
+            "return_code": 0,
+            "return_msg": "조회가 완료되었습니다",
+        }
+    )
+    responses = _happy_responses([])
+    responses["kt00018"] = renamed
+    patch_client(FakeHttpClient(responses))
+    job2 = _insert_sync_job(db, {"connection_id": str(connection_id)})
+    main.run_one_cycle(db, str(tmp_path))
+
+    assert _get_job(db, job2)["status"] == "SUCCESS"
+    # 국내 2종목이 살아 있어야 한다 — 지웠다면 3(미국)만 남는다.
+    assert _count(db, "current_positions") == 5
+
+
 def test_sync_preserves_user_asset_classification(db, tmp_path, patch_client):
     """asset_type belongs to the USER — a re-sync must never stomp it back to STOCK.
 
@@ -843,6 +889,47 @@ def test_dividend_fetch_reports_tickers_it_could_not_ask_about():
     assert fetched.skipped == ["GHOST"]
     # 알아낸 코드는 돌려줘야 다음 동기화에서 다시 안 더듬는다.
     assert fetched.exchange_codes == {"GOOD": "ND"}
+
+
+def test_unknown_response_shape_is_reported_not_silently_zero():
+    """⚠️**응답 모양이 바뀌면 0건이 조용히 돌아온다.**
+
+    모든 파서가 `result_list` 를 기대한다. 증권사가 키 이름을 바꾸면 동기화는
+    성공으로 끝나고 화면은 "거래 없음"이라고 말한다 — 가정이 아니다. 주문
+    조회(ust21180)는 명세 예시가 `result_lsit`(오타)라 두 키를 모두 받아 준다.
+    다음번엔 못 맞힐 수도 있다. **'데이터 없음'과 '모양이 바뀜'을 가른다.**
+    """
+    from brokers.base import AccountRef
+    from brokers.credentials import BrokerCredentials
+    from brokers.kiwoom.broker import KiwoomAdapter
+
+    def make(payload):
+        return KiwoomAdapter(
+            BrokerCredentials(
+                broker_code="KIWOOM", app_key="k", secret_key="s",
+                base_url="https://mockapi.kiwoom.com",
+            ),
+            http_client=FakeHttpClient({"ust21100": FakeResponse(payload)}),
+            sleep=lambda _s: None,
+            markets=("US",),
+        )
+
+    account = AccountRef(external_account_id="1")
+
+    # 1) 빈 목록은 **데이터가 없는 것**이다 — 알릴 일이 아니다.
+    empty = make({"result_list": [], "return_code": 0})
+    assert empty.fetch_trades(account, date(2026, 9, 1), date(2026, 9, 23)) == []
+    assert empty.shape_warnings == []
+
+    # 2) 아는 키가 없으면 **우리가 못 읽은 것**이다 — 0건으로 넘기지 않는다.
+    renamed = make({"trade_list": [{"stk_cd": "AAPL"}], "return_code": 0})
+    assert renamed.fetch_trades(account, date(2026, 9, 1), date(2026, 9, 23)) == []
+    assert len(renamed.shape_warnings) >= 1
+    warning = renamed.shape_warnings[0]
+    assert "ust21100" in warning
+    assert "result_list" in warning
+    # 어떤 키가 왔는지 적어 둬야 무엇으로 바뀌었는지 알 수 있다.
+    assert "trade_list" in warning
 
 
 def test_exchange_probe_rejects_an_empty_response():
