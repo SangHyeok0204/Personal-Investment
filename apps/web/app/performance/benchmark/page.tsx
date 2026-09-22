@@ -224,12 +224,36 @@ export default function BenchmarkPage() {
             <strong>통화를 맞춥니다.</strong> {data?.currency_note} 기간 상세를 열면
             USD 기준 수익률도 함께 보여, 환율이 얼마나 갉아먹었는지 알 수 있습니다.
           </li>
+          {/* ⚠️예전에는 "컴퓨팅 인프라가 47%" 라고 숫자를 박아 뒀다. 비중은
+              매일 바뀌므로 그런 문구는 곧 거짓이 된다 — 세는 것은 서버가 한다. */}
           <li>
-            <strong>기준 지수는 보유 구성에서 골랐습니다.</strong> 섹터 축에서 컴퓨팅
-            인프라가 47%이고 최대 비중이 SOXL(반도체 3배)이라, 시장 전체(S&amp;P 500)와
-            반도체(SOX)를 나란히 둡니다 — 하나만 보면 &quot;시장을 이겼나&quot;와
-            &quot;내 분야를 이겼나&quot;가 섞입니다.
+            <strong>기준 지수는 보유 구성에서 골랐습니다.</strong>{" "}
+            {data?.top_ticker ? (
+              <>
+                지금 최대 비중이 {data.top_ticker}
+                {data.top_weight &&
+                  ` (${(Number(data.top_weight) * 100).toFixed(1)}%)`}
+                이라,{" "}
+              </>
+            ) : null}
+            시장 전체(S&amp;P 500)와 반도체(SOX)를 나란히 둡니다 — 하나만 보면
+            &quot;시장을 이겼나&quot;와 &quot;내 분야를 이겼나&quot;가 섞입니다.
           </li>
+          {/* ★지수는 1배다. 이걸 안 적으면 오른 장에서는 실력처럼, 빠진 장에서는
+              불운처럼 읽힌다. */}
+          {data?.effective_exposure && (
+            <li>
+              <strong>
+                지수는 1배인데 이 계좌는{" "}
+                {Number(data.effective_exposure).toFixed(2)}배입니다.
+              </strong>{" "}
+              레버리지 상품 때문에 같은 시장 움직임에 그만큼 크게 반응합니다 —
+              지수를 이기고 지는 폭이 실력보다 크게 나옵니다. 초과수익을 읽을 때
+              이 배수를 같이 보세요.{" "}
+              <strong>이 값은 하루 기준입니다</strong> — 레버리지 ETF 는 여러
+              날에 걸치면 변동성 끌림 때문에 배수 × 기간수익률이 되지 않습니다.
+            </li>
+          )}
           <li>
             <strong>내 수익률에는 예수금이 포함됩니다.</strong> 키움 예탁자산 기준이라
             현금을 들고 있던 기간만큼 희석됩니다. 지수는 100% 투자된 상태입니다.

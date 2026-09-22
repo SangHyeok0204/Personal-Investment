@@ -2133,7 +2133,11 @@ def get_benchmark(
             )
         )
 
+    exposure, top_ticker, top_weight = _effective_exposure(db, account_ids)
     return BenchmarkOut(
+        effective_exposure=exposure,
+        top_ticker=top_ticker,
+        top_weight=top_weight,
         series=series_out,
         periods=periods_out,
         benchmarks=[name for _, name in _BENCHMARKS],
@@ -3585,6 +3589,50 @@ def _leverage_seed() -> tuple[dict, str]:
     sys.modules["_etf_exposure_seed"] = module
     spec.loader.exec_module(module)
     return module.ETF_LEVERAGE, module.LEVERAGE_NOTE
+
+
+def _effective_exposure(db: Session, account_ids: list) -> tuple[Decimal | None, str | None, Decimal | None]:
+    """지금 포트폴리오의 **실효 노출**과 최대 비중 종목.
+
+    ★왜 벤치마크 화면이 이걸 알아야 하나: 지수는 1배다. 레버리지 상품을 들고
+      있으면 같은 시장 움직임에 **더 크게** 반응하는데, 그 사실을 안 적으면
+      오른 장에서는 실력처럼, 빠진 장에서는 불운처럼 읽힌다.
+      실측: SOXL 이 비중 20% 인데 3배라 하루 움직임으로는 60% 를 들고 있는 것과
+      같고, 계좌 전체 실효 노출은 1.39배다.
+
+    ⚠️이 값은 **하루 수익률** 기준이다. 레버리지 ETF 는 여러 날에 걸치면
+      변동성 끌림 때문에 배수 × 기간수익률이 되지 않는다.
+    """
+    rows = db.execute(
+        select(Asset.ticker, Asset.name, CurrentPosition.market_value_krw)
+        .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+    ).all()
+    stock_total = _sum([value for _, _, value in rows]) or Decimal("0")
+
+    cash = Decimal("0")
+    if inv.CASH_IN_ASSETS:
+        balances = db.execute(
+            select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
+        ).scalars().all()
+        cash = _sum([_cash_krw(b) for b in balances]) or Decimal("0")
+
+    total = stock_total + cash
+    if not total:
+        return None, None, None
+
+    holdings = [
+        pc.Holding(ticker=ticker, name=name, weight=(value / total))
+        for ticker, name, value in rows
+        if value is not None
+    ]
+    if cash:
+        holdings.append(
+            pc.Holding(ticker=CASH_TICKER, name="예수금", weight=(cash / total))
+        )
+    leverage_map, _note = _leverage_seed()
+    character = pc.build(holdings, leverage_map, cash_ticker=CASH_TICKER)
+    return character.effective_exposure, character.top1_ticker, character.top1_weight
 
 
 def _character(plan: rb.Plan) -> PortfolioCharacterOut:

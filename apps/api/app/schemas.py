@@ -992,12 +992,25 @@ class BenchmarkPeriodOut(BaseModel):
 
 
 class BenchmarkOut(BaseModel):
+    """내 계좌 vs 기준 지수.
+
+    ⚠️**지수는 1배다.** 레버리지 상품을 들고 있으면 같은 시장 움직임에 더 크게
+      반응하는데, 그 사실을 안 적으면 오른 장에서는 실력처럼, 빠진 장에서는
+      불운처럼 읽힌다. `effective_exposure` 를 같이 낸다.
+    """
+
     series: list[BenchmarkPointOut]
     periods: list[BenchmarkPeriodOut]
     benchmarks: list[str]
     currency_note: str
     first_date: date | None
     last_date: date | None
+    #: 계좌 전체의 **하루 기준** 실효 노출(1.0 = 지수와 같은 크기).
+    #: ⚠️여러 날에 걸치면 배수 × 기간수익률이 되지 않는다(변동성 끌림).
+    effective_exposure: Decimal | None = None
+    #: 최대 비중 종목 — 왜 그 지수를 골랐는지의 근거다.
+    top_ticker: str | None = None
+    top_weight: Decimal | None = None
 
 
 # ── 실적 발표 일정 ───────────────────────────────────────────────────────────

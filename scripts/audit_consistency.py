@@ -619,6 +619,31 @@ class Audit:
                 f"— '보유 원가'는 누적 투자원금이 아니다"
             )
 
+        # ⚠️실효 노출을 **두 화면이 따로 계산한다**(벤치마크는 포지션에서 바로,
+        #   리밸런싱은 계획의 비중에서). 같은 사실이므로 갈리면 안 된다 —
+        #   비중을 어디서 가져오느냐가 달라지면 여기서 먼저 보인다.
+        if benchmark.get("effective_exposure") and rebalance.get("character"):
+            self.same(
+                "실효 노출 (벤치마크 vs 리밸런싱)",
+                benchmark["effective_exposure"],
+                rebalance["character"]["effective_exposure"],
+                "benchmark", "rebalance",
+                tol=Decimal("0.0001"),
+            )
+            self.same(
+                "최대 비중 (벤치마크 vs 리밸런싱)",
+                benchmark["top_weight"],
+                rebalance["character"]["top1_weight"],
+                "benchmark", "rebalance",
+                tol=Decimal("0.0001"),
+            )
+            # ⚠️`same` 의 출력은 금액 서식이라 비율이 "1" 로 뭉개진다. 값을 따로 찍는다.
+            print(
+                f"  ·  실효 노출 {dec(benchmark['effective_exposure']):.3f}배 "
+                f"(지수는 1배) · 최대 비중 {benchmark['top_ticker']} "
+                f"{dec(benchmark['top_weight']) * 100:.1f}% — **하루 기준**이다"
+            )
+
         # ── 환노출 ─────────────────────────────────────────────────────
         # ⚠️환노출의 분모는 배분 화면의 통화 축과 **같은 총자산**이어야 한다.
         #   예전에는 환노출만 주식으로 세서 외화 예수금이 빠졌다(실측

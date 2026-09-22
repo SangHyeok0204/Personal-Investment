@@ -3532,6 +3532,11 @@ export interface Benchmark {
   currency_note: string;
   first_date: string | null;
   last_date: string | null;
+  /** 계좌 전체의 **하루 기준** 실효 노출(1.0 = 지수와 같은 크기). */
+  effective_exposure: string | null;
+  /** 최대 비중 종목 — 왜 그 지수를 골랐는지의 근거. */
+  top_ticker: string | null;
+  top_weight: string | null;
 }
 
 export function getBenchmark(accountId?: string | null, days = 1095): Promise<Benchmark> {
