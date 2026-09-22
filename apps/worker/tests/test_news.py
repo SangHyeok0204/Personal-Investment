@@ -65,3 +65,51 @@ def test_title_key_ignores_publisher_tails():
 
 def test_title_key_does_not_collapse_different_stories():
     assert title_key("Why Corning Stock Is Up") != title_key("Why Corning Stock Is Down")
+
+
+# ── 주제 시드 ────────────────────────────────────────────────────────────────
+# 시드는 썩기 쉽다 — 주제를 늘리다 키가 겹치거나 키워드를 비워 두면 그 주제가
+# 조용히 모든 기사를 걸러 내거나(빈 키워드) 화면에서 서로 덮어쓴다(중복 키).
+
+import importlib.util  # noqa: E402
+
+_SEED = Path(__file__).resolve().parents[3] / "database" / "seeds" / "news_topics.py"
+
+
+def _seed():
+    spec = importlib.util.spec_from_file_location("_news_topics_seed_test", _SEED)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_topic_keys_are_unique():
+    keys = [t[0] for t in _seed().NEWS_TOPICS]
+    assert len(keys) == len(set(keys))
+
+
+def test_every_topic_has_both_languages_and_keywords():
+    """⚠️키워드가 비면 그 주제는 **모든 기사를 걸러 낸다.**"""
+    for key, label, en, ko, keywords in _seed().NEWS_TOPICS:
+        assert label.strip(), key
+        assert en.strip(), key
+        assert ko.strip(), key
+        assert keywords, key
+        assert all(k.strip() for k in keywords), key
+
+
+def test_topic_order_matches_the_topics():
+    seed = _seed()
+    assert seed.TOPIC_ORDER == [t[0] for t in seed.NEWS_TOPICS]
+
+
+def test_keywords_cover_both_scripts():
+    """한국어 검색 결과를 영어 키워드로만 판정하면 전부 걸러진다.
+
+    실측에서 전력 주제를 69% 로 잘못 쟀던 이유가 판정 키워드 누락이었다 —
+    질의가 아니라 **재는 쪽**이 틀렸다.
+    """
+    for key, _label, _en, _ko, keywords in _seed().NEWS_TOPICS:
+        has_hangul = any(any("가" <= ch <= "힣" for ch in k) for k in keywords)
+        has_latin = any(any("a" <= ch.lower() <= "z" for ch in k) for k in keywords)
+        assert has_hangul and has_latin, key

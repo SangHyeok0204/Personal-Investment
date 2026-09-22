@@ -237,7 +237,15 @@ export const navItems: NavItem[] = [
         hint: "collector 필요 — 현재 미가동",
       },
       { label: "종토방", href: "/stock-discussion", status: "live" },
-      { label: "기사", status: "planned" },
+      {
+        // ★"기사"를 **시장 뉴스**로 바꿨다. 그대로 만들면 보유종목 뉴스와
+        //   소스가 같아 거의 같은 화면이 하나 더 생긴다. 주제별로 보면
+        //   "내가 아직 안 산 쪽"을 보게 되어 질문이 달라진다.
+        label: "시장 뉴스",
+        href: "/news/market",
+        status: "live",
+        hint: "반도체 · AI · 전력 · 금리 · 크립토",
+      },
       {
         label: "보유종목 뉴스",
         href: "/news/holdings",

@@ -219,3 +219,106 @@ def fetch_news(
                     wanted,
                 )
             )
+
+
+# ── 주제 뉴스 ────────────────────────────────────────────────────────────────
+# ★주제 검색은 종목 검색과 정확도가 **다르다.** 실측(2026-09-22, 주제당 100건):
+#     주제(영어) 97~100% · 주제(한국어) 97~100% ↔ 종목(한국어) 82.8%, 최저 32%.
+#   주제어는 모호하지 않아서 그렇다 — 그래서 여기서는 한국어도 쓴다.
+
+
+@dataclass(frozen=True)
+class TopicNews:
+    key: str
+    label: str
+    query: str
+    lang: str
+    ok: bool
+    reason: str | None
+    articles: list[Article] = field(default_factory=list)
+    filtered_out: int = 0
+
+
+def _topic_one(
+    client: httpx.Client,
+    key: str,
+    label: str,
+    query: str,
+    keywords: list[str],
+    lang: str,
+    limit: int,
+    since: datetime,
+) -> TopicNews:
+    loc = (
+        {"hl": "en-US", "gl": "US", "ceid": "US:en"}
+        if lang == "en"
+        else {"hl": "ko", "gl": "KR", "ceid": "KR:ko"}
+    )
+    try:
+        response = client.get(RSS, params={"q": query, **loc})
+        if response.status_code != 200:
+            return TopicNews(key, label, query, lang, False,
+                             f"구글 뉴스 응답 {response.status_code}")
+        body = response.text
+    except Exception as exc:
+        return TopicNews(key, label, query, lang, False,
+                         f"조회 실패 ({type(exc).__name__})")
+
+    articles: list[Article] = []
+    filtered = 0
+    seen: set[str] = set()
+    lowered_kw = [k.lower() for k in keywords]
+
+    for blob in re.findall(r"<item>(.*?)</item>", body, re.S):
+        title = _tag("title", blob)
+        link = _tag("link", blob)
+        if not title or not link:
+            continue
+        publisher = _tag("source", blob)
+        if publisher and title.endswith(f" - {publisher}"):
+            title = title[: -len(publisher) - 3].strip()
+        when = _when(_tag("pubDate", blob))
+        if when is not None and when < since:
+            continue
+        # ⚠️주제는 티커가 없으므로 **키워드로** 관련성을 본다. 그냥 다 싣지 않는다.
+        if not any(k in title.lower() for k in lowered_kw):
+            filtered += 1
+            continue
+        dedupe = title_key(title)
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        articles.append(
+            Article(ticker=key, company=label, title=title,
+                    publisher=publisher, published_at=when, url=link)
+        )
+        if len(articles) >= limit:
+            break
+
+    return TopicNews(key, label, query, lang, True, None, articles, filtered)
+
+
+def fetch_topic_news(
+    topics: list[tuple[str, str, str, str, list[str]]],
+    *,
+    lang: str = "ko",
+    days: int = 3,
+    limit_per_topic: int = 12,
+    timeout: float = 20.0,
+    max_workers: int = 5,
+) -> list[TopicNews]:
+    """주제별 최근 뉴스. `topics` 는 `(key, label, en_query, ko_query, keywords)`."""
+    if not topics:
+        return []
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    with httpx.Client(timeout=timeout, headers={"User-Agent": _UA}) as client:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(topics))) as pool:
+            return list(
+                pool.map(
+                    lambda t: _topic_one(
+                        client, t[0], t[1], t[2] if lang == "en" else t[3],
+                        t[4], lang, limit_per_topic, since,
+                    ),
+                    topics,
+                )
+            )

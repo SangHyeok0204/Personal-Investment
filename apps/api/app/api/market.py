@@ -20,9 +20,17 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.models import Asset, CurrentPosition
 
 from app.schemas import (
+    MarketNewsOut,
+    TopicArticleOut,
+    TopicOut,
     AcceleratorOut,
     AiDataOut,
     EarningsEventOut,
@@ -474,4 +482,118 @@ def get_ai_data(refresh: bool = Query(default=False)) -> AiDataOut:
     built = _build_ai_data()
     with _ai_lock:
         _ai_cache = (time.monotonic(), built)
+    return built
+
+
+# ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────
+
+_TOPICS_SEED = (
+    Path(__file__).resolve().parents[4] / "database" / "seeds" / "news_topics.py"
+)
+
+# 주제 뉴스는 분 단위로 바뀌지 않고, 주제 수만큼 구글을 두드려야 한다. 30분 캐시.
+MARKET_NEWS_TTL_SECONDS = 1800.0
+MARKET_NEWS_WINDOW_DAYS = 3
+
+_market_news_lock = threading.Lock()
+_market_news_cache: dict[str, tuple[float, "MarketNewsOut"]] = {}
+
+
+def _load_topics():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_news_topics_seed", _TOPICS_SEED)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_news_topics_seed"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _build_market_news(lang: str, holdings: list[tuple[str, str | None]]) -> "MarketNewsOut":
+    from prices import news as news_source
+
+    seed = _load_topics()
+    results = news_source.fetch_topic_news(
+        seed.NEWS_TOPICS, lang=lang, days=MARKET_NEWS_WINDOW_DAYS
+    )
+
+    articles: list[TopicArticleOut] = []
+    topics: list[TopicOut] = []
+    seen: set[str] = set()
+
+    for r in results:
+        for a in r.articles:
+            # ⚠️같은 기사가 **여러 주제에** 걸린다(반도체 ↔ AI 인프라). 전체
+            #   목록에서 한 번 더 걸러 내지 않으면 같은 제목이 두 번 보인다.
+            key = news_source.title_key(a.title)
+            if key in seen:
+                continue
+            seen.add(key)
+            # 제목에 걸린 내 보유 종목 — 보유종목 뉴스에서 이미 봤을 수 있다.
+            hit = [
+                ticker
+                for ticker, name in holdings
+                if news_source._relevant(a.title, ticker, name)
+            ]
+            articles.append(
+                TopicArticleOut(
+                    topic=r.key, topic_label=r.label, title=a.title,
+                    publisher=a.publisher, published_at=a.published_at,
+                    url=a.url, holdings=hit,
+                )
+            )
+        topics.append(
+            TopicOut(
+                key=r.key, label=r.label, query=r.query, ok=r.ok, reason=r.reason,
+                article_count=len(r.articles), filtered_out=r.filtered_out,
+            )
+        )
+
+    # 시각을 모르는 기사는 뒤로. 지금 시각으로 채우면 최신인 척한다.
+    articles.sort(key=lambda a: (a.published_at is not None, a.published_at), reverse=True)
+
+    return MarketNewsOut(
+        articles=articles,
+        topics=topics,
+        lang=lang,
+        window_days=MARKET_NEWS_WINDOW_DAYS,
+        filtered_total=sum(t.filtered_out for t in topics),
+        holdings_hit_count=sum(1 for a in articles if a.holdings),
+        source_ok=any(t.ok for t in topics),
+        notes=list(seed.NOTES),
+    )
+
+
+@router.get("/news", response_model=MarketNewsOut)
+def get_market_news(
+    lang: str = Query(default="ko", pattern="^(ko|en)$"),
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> MarketNewsOut:
+    """시장 뉴스 — 내가 **아직 안 산 쪽에서** 무슨 일이 있나.
+
+    ★보유종목 뉴스와 같은 소스지만 답하는 질문이 다르다. 거기는 "내 종목에 무슨
+      일이 있었나", 여기는 "판이 어떻게 돌아가는가"다.
+
+    ★**한국어를 쓴다.** 종목 검색에서는 한국어가 무너졌지만(최저 32%), 주제
+      검색은 97~100% 다(실측) — 주제어가 모호하지 않기 때문이다. 한국 매체가
+      국내 공급망(한미반도체·하이닉스)을 먼저 다루므로 오히려 유용하다.
+
+    ⚠️제목에 걸린 보유 종목을 표시한다 — 보유종목 뉴스에서 이미 본 기사를
+      여기서 또 읽지 않도록.
+    """
+    now = time.monotonic()
+    with _market_news_lock:
+        hit = _market_news_cache.get(lang)
+        if not refresh and hit is not None and now - hit[0] < MARKET_NEWS_TTL_SECONDS:
+            return hit[1]
+
+    rows = db.execute(
+        select(Asset.ticker, Asset.name)
+        .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+        .distinct()
+    ).all()
+    built = _build_market_news(lang, [(t, n) for t, n in rows if t])
+    with _market_news_lock:
+        _market_news_cache[lang] = (time.monotonic(), built)
     return built

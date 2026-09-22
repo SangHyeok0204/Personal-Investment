@@ -1528,3 +1528,42 @@ class AlertsOut(BaseModel):
     disabled_count: int
     delivery_configured: bool
     notes: list[str]
+
+
+# ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────
+
+class TopicArticleOut(BaseModel):
+    topic: str
+    topic_label: str
+    title: str
+    publisher: str | None
+    published_at: datetime | None
+    url: str
+    #: 제목에 걸린 내 보유 종목. 있으면 보유종목 뉴스에서 이미 봤을 수 있다.
+    holdings: list[str]
+
+
+class TopicOut(BaseModel):
+    key: str
+    label: str
+    query: str
+    ok: bool
+    reason: str | None
+    article_count: int
+    filtered_out: int
+
+
+class MarketNewsOut(BaseModel):
+    """시장 뉴스 — 내 포지션이 아니라 판이 어떻게 돌아가는가.
+
+    ⚠️`source_ok=False` 면 화면이 "뉴스가 없습니다"라고 말하면 안 된다.
+    """
+
+    articles: list[TopicArticleOut]
+    topics: list[TopicOut]
+    lang: str
+    window_days: int
+    filtered_total: int
+    holdings_hit_count: int
+    source_ok: bool
+    notes: list[str]

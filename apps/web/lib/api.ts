@@ -3627,6 +3627,48 @@ export function getTradingCosts(
   );
 }
 
+// ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────
+// ★보유종목 뉴스와 같은 소스지만 질문이 다르다 — 거기는 "내 종목", 여기는 "판".
+// ★**한국어를 쓴다.** 종목 검색은 한국어가 무너졌지만(최저 32%) 주제 검색은
+//   97~100% 다(실측) — 주제어가 모호하지 않기 때문이다.
+
+export interface TopicArticle {
+  topic: string;
+  topic_label: string;
+  title: string;
+  publisher: string | null;
+  published_at: string | null;
+  url: string;
+  /** 제목에 걸린 내 보유 종목 — 보유종목 뉴스에서 이미 봤을 수 있다. */
+  holdings: string[];
+}
+
+export interface NewsTopic {
+  key: string;
+  label: string;
+  query: string;
+  ok: boolean;
+  reason: string | null;
+  article_count: number;
+  filtered_out: number;
+}
+
+export interface MarketNews {
+  articles: TopicArticle[];
+  topics: NewsTopic[];
+  lang: string;
+  window_days: number;
+  filtered_total: number;
+  holdings_hit_count: number;
+  /** false 면 화면이 "뉴스가 없습니다"라고 말하면 안 된다. */
+  source_ok: boolean;
+  notes: string[];
+}
+
+export function getMarketNews(lang: "ko" | "en" = "ko"): Promise<MarketNews> {
+  return request<MarketNews>(`/api/v1/market/news?lang=${lang}`);
+}
+
 // ── 알림 ─────────────────────────────────────────────────────────────────────
 // ★**아직 보내지 않는다.** 전달 경로(텔레그램 등)가 붙기 전까지 `delivery_configured`
 //   는 항상 false 다 — 화면이 "보냈다"고 말하면 안 된다.
