@@ -3627,6 +3627,77 @@ export function getTradingCosts(
   );
 }
 
+// ── 기간 리포트 ──────────────────────────────────────────────────────────────
+// ⚠️**기간별 평가 기여도는 없다.** 종목별 "이번 달 기여"를 내려면 보유 일별
+//   시계열이 필요한데 스냅샷이 6건뿐이다. 실현손익(증권사 실측)만 종목별로 온다.
+
+export interface ReportPeriod {
+  key: string;
+  label: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface ReportRealized {
+  ticker: string;
+  name: string | null;
+  pnl_krw: string;
+  fx_pnl_krw: string | null;
+  sell_count: number;
+}
+
+export interface ReportPositionChange {
+  ticker: string;
+  name: string | null;
+  kind: "NEW" | "CLOSED";
+  first_date: string;
+  last_date: string;
+  trade_count: number;
+}
+
+export interface ReportBenchmark {
+  name: string;
+  return_krw: string | null;
+  excess: string | null;
+}
+
+export interface Report {
+  periods: ReportPeriod[];
+  period: ReportPeriod | null;
+  opening_assets_krw: string | null;
+  closing_assets_krw: string | null;
+  net_flow_krw: string;
+  pnl_krw: string;
+  /** ⚠️환차손익이라고 부르지 않는다 — 실측할 수 없다. */
+  unexplained_krw: string | null;
+  /** 구간이 짧아 계산할 수 없으면 null(0 이 아니다). */
+  twr: string | null;
+  benchmarks: ReportBenchmark[];
+  buy_count: number;
+  sell_count: number;
+  turnover_krw: string;
+  cost_krw: string;
+  dividend_krw: string;
+  realized: ReportRealized[];
+  realized_total_krw: string;
+  changes: ReportPositionChange[];
+  best_day: string | null;
+  best_day_krw: string | null;
+  worst_day: string | null;
+  worst_day_krw: string | null;
+  trading_days: number;
+  notes: string[];
+}
+
+export function getReport(
+  accountId?: string | null,
+  period?: string | null,
+): Promise<Report> {
+  const q = accountQuery(accountId);
+  const suffix = period ? `${q ? `${q}&` : "?"}period=${period}` : q;
+  return request<Report>(`/api/v1/portfolio/report${suffix}`);
+}
+
 // ── 공시 (SEC EDGAR) ─────────────────────────────────────────────────────────
 // ★키가 필요 없다. ⚠️내부자 서식(3/4/5/144)은 **건수로만** 온다 — 실측 NVDA
 //   최근 1001건 중 803건이 임원 서류라 나열하면 나머지가 안 보인다.

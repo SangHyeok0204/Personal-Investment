@@ -146,7 +146,13 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "위험지표 · 월별 · 종목 기여도",
       },
-      { label: "기간 리포트", status: "planned", hint: "월간 · 분기 요약" },
+      {
+        label: "기간 리포트",
+        href: "/performance/report",
+        status: "live",
+        // 다른 화면과 겹치지 않는 부분은 **기간을 고른다**는 것이다.
+        hint: "월·분기·연도별 — 무슨 일이 있었나",
+      },
     ],
   },
   {

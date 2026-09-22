@@ -79,6 +79,11 @@ from app.schemas import (
     FilingOut,
     FilingTickerOut,
     FilingsOut,
+    ReportBenchmarkOut,
+    ReportOut,
+    ReportPeriodOut,
+    ReportPositionChangeOut,
+    ReportRealizedOut,
     MonthlyCashflowOut,
     MonthlyCashflowRowOut,
     TaxOut,
@@ -2590,3 +2595,341 @@ def get_filings(
     with _filings_lock:
         _filings_cache[key] = (time.monotonic(), built)
     return built
+
+
+# ── 기간 리포트 ──────────────────────────────────────────────────────────────
+
+_REPORT_NOTES = [
+    "**기간별 평가 기여도는 내지 않았습니다.** 종목마다 '이번 달 얼마 기여했나'를"
+    " 계산하려면 보유 종목의 일별 시계열이 필요한데, 스냅샷이 6건뿐입니다."
+    " 만들면 그럴듯해 보이지만 근거가 없으므로 실현손익(증권사 실측)만 종목별로 냅니다.",
+    "**신규/청산은 체결 기록으로 판단합니다.** 그 기간에 처음 산 종목을 신규,"
+    " 기간 끝에 보유가 없는 종목을 청산으로 봅니다 — 기간 전에 샀다가 그 안에"
+    " 추가 매수만 한 종목은 신규가 아닙니다.",
+    "**거래대금은 원화입니다**(일별성과 원천). 수수료/세금 화면의 달러 금액과"
+    " 출처가 달라 이어 붙이지 마세요.",
+    "'그 외'를 환차손익이라고 적지 않았습니다 — 일별성과의 환율 칸이 비어 있어"
+    " 실측할 수 없습니다(월별 현금흐름 화면과 같은 이유).",
+]
+
+
+def _report_periods(first: date, last: date) -> list[ReportPeriodOut]:
+    """고를 수 있는 기간. **데이터가 있는 구간만** 만든다."""
+    out: list[ReportPeriodOut] = []
+
+    def add(key: str, label: str, start: date, end: date) -> None:
+        start = max(start, first)
+        end = min(end, last)
+        if start <= end:
+            out.append(ReportPeriodOut(key=key, label=label, start_date=start, end_date=end))
+
+    # 최근 달부터 12개월.
+    year, month = last.year, last.month
+    for _ in range(12):
+        start = date(year, month, 1)
+        end = (date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1))
+        if end < first:
+            break
+        add(f"{year:04d}-{month:02d}", f"{year}년 {month}월", start, end)
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+
+    # 분기 — 최근 4개.
+    q_year, q = last.year, (last.month - 1) // 3 + 1
+    for _ in range(4):
+        start = date(q_year, (q - 1) * 3 + 1, 1)
+        end_month = q * 3
+        end = date(q_year + (end_month == 12), (end_month % 12) + 1, 1) - timedelta(days=1)
+        if end < first:
+            break
+        add(f"{q_year:04d}-Q{q}", f"{q_year}년 {q}분기", start, end)
+        q -= 1
+        if q == 0:
+            q_year, q = q_year - 1, 4
+
+    # 연도.
+    for y in range(last.year, first.year - 1, -1):
+        add(f"{y:04d}", f"{y}년", date(y, 1, 1), date(y, 12, 31))
+
+    return out
+
+
+def _report_benchmarks(
+    points: list[pa.DailyPoint], start: date, end: date
+) -> tuple[Decimal | None, list[ReportBenchmarkOut]]:
+    """기간 TWR 과 벤치마크 대비.
+
+    ⚠️구간 시작으로 **다시 기준을 잡는다**(rebase). 전체 구간 지수를 그대로
+      잘라 쓰면 1개월 수익률이 누적값 차이로 나온다.
+    ⚠️양쪽에 다 있는 날짜만 쓴다. 한쪽을 앞으로 채우면 없는 날의 움직임이 생긴다.
+    """
+    returns = [r for r in pa.daily_returns(points) if start <= r.base_date <= end]
+    if len(returns) < 2:
+        return None, []
+
+    mine = {r.base_date: r.index for r in returns}
+    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
+    fx = history.get(_FX_SYMBOL)
+
+    usable = sorted(
+        d for d in mine
+        if all(
+            (series := history.get(symbol)) is not None
+            and series.close_on_or_before(d) is not None
+            for symbol, _ in _BENCHMARKS
+        )
+        and (fx is None or fx.close_on_or_before(d) is not None)
+    )
+    first_day = returns[0].base_date
+    last_day = returns[-1].base_date
+    twr = (
+        (mine[last_day] / mine[first_day] - Decimal("1")).quantize(
+            _RATIO, rounding=ROUND_HALF_UP
+        )
+        if mine.get(first_day) and mine.get(last_day)
+        else None
+    )
+    if len(usable) < 2:
+        return twr, []
+
+    def level(symbol: str, when: date) -> Decimal | None:
+        series = history.get(symbol)
+        value = series.close_on_or_before(when) if series else None
+        rate = fx.close_on_or_before(when) if fx else None
+        return None if value is None or rate is None else value * rate
+
+    b_start, b_end = usable[0], usable[-1]
+    # ⚠️벤치마크와 비교할 때는 내 수익률도 **같은 날짜 범위**로 다시 잰다.
+    #   지수에 없는 날을 포함해 버리면 비교가 어긋난다.
+    mine_change = (
+        (mine[b_end] / mine[b_start] - Decimal("1")).quantize(
+            _RATIO, rounding=ROUND_HALF_UP
+        )
+        if mine.get(b_start) and mine.get(b_end)
+        else None
+    )
+
+    out: list[ReportBenchmarkOut] = []
+    for symbol, name in _BENCHMARKS:
+        a, b = level(symbol, b_end), level(symbol, b_start)
+        ret = (
+            (a / b - Decimal("1")).quantize(_RATIO, rounding=ROUND_HALF_UP)
+            if a is not None and b is not None and b != 0
+            else None
+        )
+        out.append(
+            ReportBenchmarkOut(
+                name=name,
+                return_krw=ret,
+                excess=(
+                    mine_change - ret
+                    if mine_change is not None and ret is not None
+                    else None
+                ),
+            )
+        )
+    return twr, out
+
+
+@router.get("/report", response_model=ReportOut)
+def get_report(
+    account_id: uuid.UUID | None = Query(default=None),
+    period: str | None = Query(default=None, description="2026-09 · 2026-Q3 · 2026"),
+    db: Session = Depends(get_db),
+) -> ReportOut:
+    """기간 리포트 — 그 기간에 무슨 일이 있었나.
+
+    ★다른 화면과 겹치지 않는 부분은 **기간을 고른다**는 것이다. 성과 분석은
+      전체를, 월별 현금흐름은 흐름만 본다. 여기는 한 달/분기/연도를 잘라
+      자산 변화 · 수익률 · 매매 · 실현손익 · 신규/청산을 한 장에 모은다.
+
+    ⚠️**기간별 평가 기여도를 만들지 않는다.** 종목별로 "이번 달 얼마 기여했나"를
+      내려면 보유 종목의 일별 시계열이 있어야 하는데 스냅샷이 6건뿐이다(실측).
+      그럴듯한 숫자를 만드는 대신 실현손익만 종목별로 낸다.
+    """
+    empty = ReportOut(
+        periods=[], period=None, opening_assets_krw=None, closing_assets_krw=None,
+        net_flow_krw=Decimal("0"), pnl_krw=Decimal("0"), unexplained_krw=None,
+        twr=None, benchmarks=[], buy_count=0, sell_count=0,
+        turnover_krw=Decimal("0"), cost_krw=Decimal("0"), dividend_krw=Decimal("0"),
+        realized=[], realized_total_krw=Decimal("0"), changes=[],
+        best_day=None, best_day_krw=None, worst_day=None, worst_day_krw=None,
+        trading_days=0, notes=_REPORT_NOTES,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    daily = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+            func.sum(AccountDailyPerformance.pnl_krw),
+            func.sum(AccountDailyPerformance.dividend_krw),
+            func.sum(AccountDailyPerformance.commission_tax_krw),
+            func.sum(AccountDailyPerformance.buy_amount_krw),
+            func.sum(AccountDailyPerformance.sell_amount_krw),
+        )
+        .where(AccountDailyPerformance.account_id.in_(account_ids))
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date)
+    ).all()
+    if not daily:
+        return empty
+
+    periods = _report_periods(daily[0][0], daily[-1][0])
+    if not periods:
+        return empty
+    chosen = next((p for p in periods if p.key == period), periods[0])
+
+    zero = Decimal("0")
+    opening: Decimal | None = None
+    closing: Decimal | None = None
+    net_flow = pnl = dividend = cost = buy = sell = zero
+    best = worst = None
+    best_v = worst_v = None
+    trading_days = 0
+
+    for row in daily:
+        d, assets, dep, wd, day_pnl, div, day_cost, day_buy, day_sell = row
+        if d < chosen.start_date:
+            # 기간 시작 **직전** 자산이 월초 잔액이다. 0 으로 두면 "무에서
+            # 시작했다"는 거짓이 된다.
+            opening = assets if assets is not None else opening
+            continue
+        if d > chosen.end_date:
+            break
+        trading_days += 1
+        closing = assets if assets is not None else closing
+        net_flow += (dep or zero) - (wd or zero)
+        pnl += day_pnl or zero
+        dividend += div or zero
+        cost += day_cost or zero
+        buy += day_buy or zero
+        sell += day_sell or zero
+        v = day_pnl or zero
+        if best_v is None or v > best_v:
+            best_v, best = v, d
+        if worst_v is None or v < worst_v:
+            worst_v, worst = v, d
+
+    points, _ = pa.reconcile_flows(
+        [
+            pa.DailyPoint(base_date=d, assets_krw=a, deposit_krw=dep, withdrawal_krw=wd)
+            for d, a, dep, wd, *_ in daily
+        ]
+    )
+    twr, benchmarks = _report_benchmarks(points, chosen.start_date, chosen.end_date)
+
+    # ── 실현손익 (종목별, 증권사 실측) ──────────────────────────────────────
+    realized_rows = db.execute(
+        select(RealizedPnl).where(
+            RealizedPnl.account_id.in_(account_ids),
+            RealizedPnl.sell_date >= chosen.start_date,
+            RealizedPnl.sell_date <= chosen.end_date,
+        )
+    ).scalars().all()
+    by_ticker: dict[str, list] = {}
+    for r in realized_rows:
+        acc = by_ticker.setdefault(r.ticker, [r.asset_name, zero, zero, 0])
+        acc[1] += r.pnl_krw or zero
+        acc[2] += r.fx_pnl_krw or zero
+        acc[3] += 1
+
+    realized = sorted(
+        [
+            ReportRealizedOut(
+                ticker=t, name=v[0], pnl_krw=v[1], fx_pnl_krw=v[2], sell_count=v[3]
+            )
+            for t, v in by_ticker.items()
+        ],
+        key=lambda x: x.pnl_krw,
+        reverse=True,
+    )
+
+    # ── 신규 편입 / 전량 청산 ───────────────────────────────────────────────
+    # ⚠️체결 기록으로 판단한다. 기간 전에 이미 있던 종목은 신규가 아니다.
+    before = {
+        t for (t,) in db.execute(
+            select(Trade.ticker).where(
+                Trade.account_id.in_(account_ids),
+                Trade.trade_date < chosen.start_date,
+            ).distinct()
+        ).all()
+    }
+    held_now = {
+        t for (t,) in db.execute(
+            select(Asset.ticker)
+            .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+            .where(CurrentPosition.account_id.in_(account_ids))
+            .distinct()
+        ).all()
+    }
+    in_period = db.execute(
+        select(Trade).where(
+            Trade.account_id.in_(account_ids),
+            Trade.trade_date >= chosen.start_date,
+            Trade.trade_date <= chosen.end_date,
+        )
+    ).scalars().all()
+
+    buy_count = sum(1 for t in in_period if t.side == "BUY")
+    sell_count = sum(1 for t in in_period if t.side == "SELL")
+
+    grouped: dict[str, list] = {}
+    for t in in_period:
+        g = grouped.setdefault(t.ticker, [t.asset_name, t.trade_date, t.trade_date, 0])
+        g[1] = min(g[1], t.trade_date)
+        g[2] = max(g[2], t.trade_date)
+        g[3] += 1
+
+    changes: list[ReportPositionChangeOut] = []
+    for ticker, (name, first_d, last_d, count) in grouped.items():
+        if ticker not in before:
+            kind = "NEW"
+        elif ticker not in held_now:
+            # ⚠️'지금 없다'는 것만 안다. 이 기간 이후에 팔았을 수도 있으므로
+            #   기간 안에 매도가 있었을 때만 청산으로 적는다.
+            if not any(t.ticker == ticker and t.side == "SELL" for t in in_period):
+                continue
+            kind = "CLOSED"
+        else:
+            continue
+        changes.append(
+            ReportPositionChangeOut(
+                ticker=ticker, name=name, kind=kind,
+                first_date=first_d, last_date=last_d, trade_count=count,
+            )
+        )
+    changes.sort(key=lambda c: (c.kind, c.first_date))
+
+    return ReportOut(
+        periods=periods,
+        period=chosen,
+        opening_assets_krw=opening,
+        closing_assets_krw=closing,
+        net_flow_krw=net_flow,
+        pnl_krw=pnl,
+        unexplained_krw=(
+            closing - opening - net_flow - pnl
+            if closing is not None and opening is not None
+            else None
+        ),
+        twr=twr,
+        benchmarks=benchmarks,
+        buy_count=buy_count,
+        sell_count=sell_count,
+        turnover_krw=buy + sell,
+        cost_krw=cost,
+        dividend_krw=dividend,
+        realized=realized,
+        realized_total_krw=sum((r.pnl_krw for r in realized), zero),
+        changes=changes,
+        best_day=best, best_day_krw=best_v,
+        worst_day=worst, worst_day_krw=worst_v,
+        trading_days=trading_days,
+        notes=_REPORT_NOTES,
+    )

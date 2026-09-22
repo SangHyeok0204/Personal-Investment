@@ -1337,3 +1337,79 @@ class FilingsOut(BaseModel):
     not_covered_count: int
     source_ok: bool
     user_agent_is_default: bool
+
+
+# ── 기간 리포트 ──────────────────────────────────────────────────────────────
+
+class ReportPeriodOut(BaseModel):
+    """고를 수 있는 기간 하나."""
+
+    key: str
+    label: str
+    start_date: date
+    end_date: date
+
+
+class ReportRealizedOut(BaseModel):
+    ticker: str
+    name: str | None
+    pnl_krw: Decimal
+    fx_pnl_krw: Decimal | None
+    sell_count: int
+
+
+class ReportPositionChangeOut(BaseModel):
+    """그 기간에 새로 산 종목 / 전량 판 종목."""
+
+    ticker: str
+    name: str | None
+    kind: str  # "NEW" | "CLOSED"
+    first_date: date
+    last_date: date
+    trade_count: int
+
+
+class ReportBenchmarkOut(BaseModel):
+    name: str
+    return_krw: Decimal | None
+    excess: Decimal | None
+
+
+class ReportOut(BaseModel):
+    """한 기간에 무슨 일이 있었나.
+
+    ⚠️**기간별 평가 기여도는 내지 않는다.** 종목별로 "이번 달 얼마 기여했나"를
+      계산하려면 보유 종목의 일별 시계열이 있어야 하는데, 스냅샷이 어제부터
+      6건뿐이다. 만들면 그럴듯해 보이지만 근거가 없다 — 대신 **실현손익**
+      (증권사 실측)만 종목별로 낸다.
+
+    ⚠️`unexplained_krw` 를 환차손익이라고 부르지 않는다(월별 현금흐름과 같은 이유).
+    """
+
+    periods: list[ReportPeriodOut]
+    period: ReportPeriodOut | None
+    #: 자산 분해 — 시작 + 순납입 + 손익 + 그 외 = 끝
+    opening_assets_krw: Decimal | None
+    closing_assets_krw: Decimal | None
+    net_flow_krw: Decimal
+    pnl_krw: Decimal
+    unexplained_krw: Decimal | None
+    #: 기간 TWR. 구간이 짧아 계산할 수 없으면 None(0 이 아니다).
+    twr: Decimal | None
+    benchmarks: list[ReportBenchmarkOut]
+    #: 그 기간의 매매
+    buy_count: int
+    sell_count: int
+    turnover_krw: Decimal
+    cost_krw: Decimal
+    dividend_krw: Decimal
+    realized: list[ReportRealizedOut]
+    realized_total_krw: Decimal
+    changes: list[ReportPositionChangeOut]
+    #: 가장 많이 오른 날 / 내린 날 (일별 손익 기준)
+    best_day: date | None
+    best_day_krw: Decimal | None
+    worst_day: date | None
+    worst_day_krw: Decimal | None
+    trading_days: int
+    notes: list[str]

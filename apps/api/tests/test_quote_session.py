@@ -91,80 +91,70 @@ def test_toss_is_omitted_without_keys(monkeypatch) -> None:
     assert _order(monkeypatch, session_open=False, has_toss_keys=False) == ["yahoo"]
 
 
-# ── 한국 데이마켓 판정 ───────────────────────────────────────────────────────
+# ── 정규장을 거치지 않은 봉 판정 ────────────────────────────────────────────
 #
-# ★2026-09-22 09:02 KST 실측 — 데이마켓 개장 2분 뒤 처음으로 창 안에서 관측했다.
-#   토스 당일 봉이 새로 생기고 그 순간부터 야후와 갈린다:
-#       NVDA 5,119주 vs 전일 정규장 81,522,377주 (1/15,930)  야후 대비 +0.05%
-#       GLW    311주 vs  4,747,667주                        야후 대비 +1.49%
-#       SOXL 108,875주 vs 31,658,379주                      야후 대비 +2.58%
-#   같은 순간 야후 값은 토스의 **전일 봉 종가와 소수점까지 일치**했다.
+# ⚠️처음엔 한국 데이마켓 시간(09:00~16:50)을 하드코딩했다. **틀렸다** —
+#   17:53 KST 에도 봉이 자라고 있었다(SOXL 거래량 614,032 → 1,355,817).
+#   게다가 그 창을 박을 때 참고한 측정 시각 자체가 틀렸다: 기계 시계가 8시간
+#   40분 어긋나 있어서 17:22 에 한 측정을 09:02 로 적었다(구글 HTTP Date
+#   헤더로 확인). 잘못된 시계 위에 시간표를 박으면 이렇게 된다.
+#
+# ★그래서 시간표를 쓰지 않는다. 토스가 주는 **봉 날짜**로 판단한다:
+#     봉 날짜의 미국 정규장이 이미 끝났으면 → 정상 종가
+#     아직 안 끝났고 지금 정규장도 아니면   → 정규장을 거치지 않은 봉
+#   주말·공휴일은 저절로 처리된다(그런 날엔 새 봉이 생기지 않는다).
+#
+# ★2026-09-22 실측 세 번 — 거래량이 12배 붙는 동안 괴리의 **부호가 뒤집혔다**:
+#     KST 17:22  NVDA +0.05%  SOXL +2.58%  (SOXL 거래량   108,875)
+#     KST 17:52  NVDA +0.15%  SOXL +3.50%  (            614,032)
+#     KST 17:53  NVDA -0.26%  SOXL -2.12%  (          1,355,817)
+#   살아 움직이는 시장이지 잡음이 아니다. 그래서 값을 버리지 않고 표시만 한다.
 
+from datetime import date as _date  # noqa: E402
 from decimal import Decimal  # noqa: E402
 
-from app.core.quote_cache import is_thin_session_quote, kr_daymarket_open  # noqa: E402
+from app.core.quote_cache import is_thin_session_quote  # noqa: E402
 from prices import Quote  # noqa: E402
 
-KST = ZoneInfo("Asia/Seoul")
 
-
-def kst(value: str) -> datetime:
-    return datetime.fromisoformat(value).replace(tzinfo=KST).astimezone(timezone.utc)
-
-
-@pytest.mark.parametrize(
-    "moment,expected",
-    [
-        ("2026-09-22T08:59", False),  # 개장 1분 전
-        ("2026-09-22T09:00", True),   # 개장
-        ("2026-09-22T09:02", True),   # 실측한 그 순간
-        ("2026-09-22T16:49", True),
-        ("2026-09-22T16:50", False),  # 종료
-        ("2026-09-22T23:30", False),  # 미국 정규장 시간대
-        ("2026-09-19T12:00", False),  # 토요일
-        ("2026-09-20T12:00", False),  # 일요일
-    ],
-)
-def test_daymarket_boundaries(moment: str, expected: bool) -> None:
-    assert kr_daymarket_open(kst(moment)) is expected
-
-
-def _toss(price: str, volume: str | None = "5119") -> Quote:
+def _toss(trade_date, volume: str | None = "5119") -> Quote:
     return Quote(
-        symbol="NVDA", price=Decimal(price), currency="USD", source="toss",
-        volume=Decimal(volume) if volume else None,
+        symbol="NVDA", price=Decimal("227.44"), currency="USD", source="toss",
+        volume=Decimal(volume) if volume else None, trade_date=trade_date,
     )
 
 
-def _yahoo(price: str) -> Quote:
-    return Quote(symbol="NVDA", price=Decimal(price), currency="USD", source="yahoo")
+@pytest.mark.parametrize(
+    "moment,bar,expected,why",
+    [
+        # 한국 데이마켓 — 미국 정규장 전. 이 봉은 아직 정규장을 거치지 않았다.
+        ("2026-09-22T04:53", _date(2026, 9, 22), True, "한국 데이마켓"),
+        # 미국 프리마켓도 마찬가지다.
+        ("2026-09-22T08:00", _date(2026, 9, 22), True, "프리마켓"),
+        # ⚠️정규장 중에는 토스 봉이 **진행 중인 그 정규장**이다 — 진짜 현재가다.
+        #   봉 날짜만 보고 판단하면 이걸 thin 으로 잡는다(실제로 한 번 그랬다).
+        ("2026-09-22T11:00", _date(2026, 9, 22), False, "정규장 중"),
+        # 마감 후에는 그 봉이 완료된 세션이다(실측 KST 06:02, 7종목 0.00% 차이).
+        ("2026-09-22T17:00", _date(2026, 9, 22), False, "마감 후 당일 봉"),
+        # 전일 봉은 언제 봐도 완료된 세션이다.
+        ("2026-09-22T04:53", _date(2026, 9, 21), False, "전일 봉"),
+    ],
+)
+def test_thin_session_uses_the_bar_date_not_a_hardcoded_schedule(
+    moment: str, bar, expected: bool, why: str
+) -> None:
+    assert is_thin_session_quote(_toss(bar), et(moment)) is expected, why
 
 
-def test_toss_quote_during_daymarket_is_flagged_thin() -> None:
-    """야후가 죽어 사슬이 토스로 넘어가면 **그 사실이 표시돼야** 한다.
-
-    평소엔 순서가 야후를 먼저 쓰므로 오지 않는 상황이다. 그러나 야후가 죽으면
-    화면은 5,119주(정규장의 1/15,930)짜리 가격을 아무 표시 없이 "현재가"로
-    띄우게 된다. 값을 버리지는 않는다 — 한국 투자자가 실제로 체결할 수 있는
-    가격이다. 다만 정규장 가격인 척하게 두지 않는다.
-    """
-    assert is_thin_session_quote(_toss("227.44"), kst("2026-09-22T09:02")) is True
-
-
-def test_yahoo_quote_is_never_flagged_even_during_daymarket() -> None:
+def test_yahoo_is_never_flagged() -> None:
     """야후는 데이마켓 체결을 담지 않는다 — 전일 정규장 종가를 준다."""
-    assert is_thin_session_quote(_yahoo("227.38"), kst("2026-09-22T09:02")) is False
+    quote = Quote(
+        symbol="NVDA", price=Decimal("227.38"), currency="USD", source="yahoo",
+        trade_date=_date(2026, 9, 22),
+    )
+    assert is_thin_session_quote(quote, et("2026-09-22T04:53")) is False
 
 
-def test_toss_quote_during_us_regular_session_is_not_thin() -> None:
-    """정규장 중의 토스 값은 진짜 현재가다(실측 5종목 야후와 0.00% 차이)."""
-    # KST 23:30 = ET 10:30, 미국 정규장 한복판.
-    assert is_thin_session_quote(_toss("227.44"), kst("2026-09-22T23:30")) is False
-
-
-def test_toss_quote_outside_both_sessions_is_not_thin() -> None:
-    """미국 마감 뒤·데이마켓 전(KST 06:00)엔 토스 당일 봉이 **완료된 정규장**이다.
-
-    실측(KST 06:02): 7종목 전부 야후와 0.00% 차이였다.
-    """
-    assert is_thin_session_quote(_toss("227.38"), kst("2026-09-22T06:00")) is False
+def test_missing_bar_date_does_not_invent_a_warning() -> None:
+    """봉 날짜를 모르면 표시하지 않는다 — 없는 경고를 만들지 않는다."""
+    assert is_thin_session_quote(_toss(None), et("2026-09-22T04:53")) is False
