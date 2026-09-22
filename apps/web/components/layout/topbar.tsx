@@ -17,8 +17,9 @@ import {
   AUTO_REFRESH_LABEL,
   useAutoRefresh,
 } from "@/components/layout/auto-refresh-context";
-import { runBrokerageSync } from "@/lib/api";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { getAlerts, runBrokerageSync } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
 /**
@@ -324,7 +325,7 @@ export function Topbar({
         )}
 
         <Search className="h-5 w-5" />
-        <Bell className="h-5 w-5" />
+        <AlertBell />
         <CircleHelp className="h-5 w-5" />
         <div className="flex items-center gap-1.5">
           <span className="h-8 w-8 rounded-full bg-slate-100" />
@@ -332,6 +333,76 @@ export function Topbar({
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * 걸어 둔 알림 중 **지금 조건에 걸린 것**을 어느 화면에서든 알린다.
+ *
+ * ★왜 필요한가: 알림 규칙은 잘 돌고 있었는데(실측 4건 걸림) **알림 설정
+ *   화면을 열어야만** 보였다. 종은 GE 템플릿에서 넘어온 **그림**이라
+ *   눌러도 아무 일이 없었다. 조건이 걸려도 아무 데도 안 닿으면 그건
+ *   알림이 아니라 그냥 목록이다.
+ *
+ * ⚠️텔레그램 전달은 아직 설정 전이라(`delivery_configured === false`)
+ *   **이 종이 유일한 전달 경로**다. 그 사실을 툴팁에 적는다 — 종을 못 보면
+ *   아무도 모른다는 뜻이니까.
+ *
+ * ⚠️조회 주기를 짧게 두지 않는다. 이 컴포넌트는 **모든 화면**에 있어서
+ *   주기가 곧 전체 부하다. 알림 조건은 초 단위로 바뀌는 값이 아니다.
+ *
+ * ★덤으로 얻은 것: 알림 판정은 이 API 를 부를 때 일어나고 `triggered_since`
+ *   를 DB 에 적는다. 예전에는 **알림 설정 화면을 연 순간에만** 돌아서 "언제부터
+ *   걸렸나"가 실제보다 늦게 잡혔다. 이제 5분마다 돌므로 그만큼 촘촘해진다.
+ *
+ * ⚠️queryKey 를 알림 화면과 **같게** 둔다(`["alerts"]`). 다르게 두면 같은 화면에
+ *   종의 숫자와 목록의 숫자가 따로 놀 수 있다.
+ */
+function AlertBell() {
+  const alerts = useQuery({
+    queryKey: ["alerts"],
+    queryFn: getAlerts,
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    // 배지가 없다고 해서 "걸린 게 없다"는 뜻이 되면 안 된다 — 못 불러왔을
+    // 때는 조용히 아무것도 안 그린다(아래 count == null).
+    retry: 1,
+  });
+
+  const count = alerts.data?.triggered_count ?? null;
+  const firing = (alerts.data?.rules ?? []).filter((r) => r.state === "TRIGGERED");
+  const title =
+    count == null
+      ? "알림"
+      : count === 0
+        ? "걸린 알림이 없습니다"
+        : [
+            `${count}건이 조건에 걸렸습니다`,
+            ...firing.map((r) => `· ${r.name ?? r.ticker ?? r.kind_label}: ${r.message}`),
+            alerts.data?.delivery_configured
+              ? ""
+              : "전달 경로가 아직 없어 이 종이 유일한 알림입니다.",
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+  return (
+    <Link
+      href="/settings/alerts"
+      title={title}
+      aria-label={title}
+      className="relative text-ink-secondary transition-colors hover:text-ink"
+    >
+      <Bell className="h-5 w-5" />
+      {count != null && count > 0 && (
+        <span
+          className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center
+                     rounded-full bg-ask px-1 text-[10px] font-bold leading-none text-white"
+        >
+          {count > 9 ? "9+" : count}
+        </span>
+      )}
+    </Link>
   );
 }
 
