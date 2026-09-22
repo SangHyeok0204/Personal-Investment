@@ -21,10 +21,23 @@ import {
   formatPriceString,
   formatQuantityString,
 } from "@/lib/format";
+import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 
 // 보유 종목 전체 — /portfolio 의 요약 표보다 컬럼이 많다(시장·통화·환율·매입금액).
 // 정렬은 클라이언트에서 한다: 행이 수십~수백 개 수준이라 서버 왕복을 늘릴 이유가 없다.
+//
+// ★2026-09-22: **상단 칸 셋을 더해 보면 안 맞았다.**
+//     총 매입금액 33,352,051 + 평가손익 2,881,334 = 36,233,385
+//     총 평가금액 36,407,647                        ← 174,262 모자람
+//   더해 본 사람에게는 고장 난 화면이다. 원인은 **키움의 평가손익이 제비용을
+//   뺀 값**이라는 것 — 낼 수수료를 미리 빼고 "지금 다 팔면 손에 남는 것"을 적는다.
+//   모형(0.25% × 매입 + 0.25% × 평가)이 174,399 로 실측과 137원 차이(99.9%)라
+//   확인됐고, 0.25% 는 체결 원장에서 잰 매수 수수료율과 같다.
+//   그래서 '제비용' 칸을 만들어 **매입 + 손익 + 제비용 = 평가금액** 이 닫히게 했다.
+//
+// ⚠️칸에 적는 값은 **실측 잔차**다. 모형값을 적으면 다시 안 맞는다 —
+//   합이 안 맞는 것이 애초에 고치려던 문제다.
 
 type SortKey =
   | "market_value_krw"
@@ -42,6 +55,7 @@ export default function HoldingsPage() {
   const { accountId, connected, isError } = useAccount();
   const [sortKey, setSortKey] = useState<SortKey>("market_value_krw");
   const [country, setCountry] = useState<string>("all");
+  const [feeOpen, setFeeOpen] = useState(false);
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -102,19 +116,15 @@ export default function HoldingsPage() {
         )}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          <StatTile
-            label="보유 종목 수"
-            value={s?.position_count ? `${s.position_count}` : undefined}
-            loading={summary.isLoading}
-          />
+          {/* ⚠️네 칸이 **더해진다**: 매입 + 평가손익 + 제비용 = 평가금액. */}
           <StatTile
             label="총 매입금액"
             value={formatKrwString(s?.purchase_amount_krw)}
-            loading={summary.isLoading}
-          />
-          <StatTile
-            label="총 평가금액"
-            value={formatKrwString(s?.securities_value_krw)}
+            hint={
+              s?.position_count
+                ? `${s.position_count}종목 · 수수료 뺀 약정금액`
+                : "수수료 뺀 약정금액"
+            }
             loading={summary.isLoading}
           />
           <StatTile
@@ -122,10 +132,27 @@ export default function HoldingsPage() {
             value={formatKrwSigned(s?.unrealized_pnl_krw)}
             hint={
               s?.unrealized_return != null
-                ? formatPercentString(s.unrealized_return)
-                : undefined
+                ? `${formatPercentString(s.unrealized_return)} · 제비용 뺀 뒤`
+                : "제비용 뺀 뒤"
             }
             accent="auto"
+            loading={summary.isLoading}
+          />
+          {/* ⚠️부호는 **+** 다. 제비용은 평가손익에서 이미 빠진 몫이라, 네 칸이
+              왼쪽에서 오른쪽으로 더해지려면 여기서 되돌려 놓아야 한다.
+              (비용인데 왜 +냐 — 빼는 게 아니라 **이미 뺀 것을 되돌리는** 칸이다.) */}
+          <StatTile
+            label="제비용 되돌림"
+            value={formatKrwSigned(s?.fee_reserve_krw)}
+            hint="평가손익에서 미리 뺀 몫 · 눌러서 설명"
+            actionHint="눌러서 읽는 법 보기"
+            onClick={() => setFeeOpen(true)}
+            loading={summary.isLoading}
+          />
+          <StatTile
+            label="총 평가금액"
+            value={formatKrwString(s?.securities_value_krw)}
+            hint="매입 + 평가손익 + 제비용"
             loading={summary.isLoading}
           />
         </div>
@@ -259,6 +286,50 @@ export default function HoldingsPage() {
           </div>
         </StubCard>
       </PageContainer>
+
+      <Modal
+        open={feeOpen}
+        onClose={() => setFeeOpen(false)}
+        title="제비용이 왜 따로 있나"
+        subtitle="매입 + 평가손익 + 제비용 = 평가금액"
+      >
+        <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
+          <li>
+            <strong>증권사 평가손익은 제비용을 뺀 값입니다.</strong> 낼 수수료를
+            미리 빼고 &quot;지금 다 팔면 손에 남는 것&quot;을 적습니다. 그래서
+            매입금액과 평가손익만 더하면 평가금액에 모자랍니다 — 실측으로{" "}
+            {formatKrwString(s?.fee_reserve_krw)} 부족했습니다. 그 몫을 칸으로
+            꺼내 산수가 닫히게 했습니다.
+          </li>
+          <li>
+            <strong>무엇인지 확인했습니다.</strong> 이미 낸 매수 수수료(매입금액의
+            0.25%)와 지금 팔면 낼 매도 수수료(평가금액의 0.25%)를 더한 모형이{" "}
+            {formatKrwString(s?.fee_reserve_modelled_krw)} 로, 실측과{" "}
+            {s?.fee_reserve_krw && s?.fee_reserve_modelled_krw
+              ? formatKrwString(
+                  String(
+                    Math.abs(
+                      Number(s.fee_reserve_krw) -
+                        Number(s.fee_reserve_modelled_krw),
+                    ),
+                  ),
+                )
+              : "—"}{" "}
+            차이입니다(99.9%). 0.25% 는 체결 원장에서 실제로 잰 매수 수수료율과
+            같습니다(17종목 전부 0.241~0.250%).
+          </li>
+          <li>
+            <strong>칸에 적는 값은 모형이 아니라 실측입니다.</strong> 모형값을
+            적으면 다시 합이 안 맞는데, 합이 안 맞는 것이 애초에 고치려던
+            문제였습니다.
+          </li>
+          <li>
+            <strong>수익률의 분모는 매입금액입니다.</strong> 분자는 제비용을 뺀
+            평가손익이라 &quot;팔고 나서의 수익률&quot;에 가깝습니다 — 주가만으로
+            본 수익률보다 조금 낮게 나옵니다.
+          </li>
+        </ul>
+      </Modal>
     </>
   );
 }

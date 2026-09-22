@@ -109,15 +109,17 @@ export function formatRelativeTime(iso: string | null | undefined): string {
 export function formatKrwString(value: string | null | undefined): string {
   const parts = splitDecimal(value);
   if (!parts) return "—";
-  return `${parts.sign}₩${groupDigits(parts.int)}`;
+  const sign = roundsToZero(parts) ? "" : parts.sign;
+  return `${sign}₩${groupDigits(roundedInt(parts))}`;
 }
 
 /** 부호를 살려 표시(손익용). "+"를 붙여 준다. */
 export function formatKrwSigned(value: string | null | undefined): string {
   const parts = splitDecimal(value);
   if (!parts) return "—";
-  const sign = parts.sign === "-" ? "-" : parts.isZero ? "" : "+";
-  return `${sign}₩${groupDigits(parts.int)}`;
+  const zero = roundsToZero(parts);
+  const sign = zero ? "" : parts.sign === "-" ? "-" : "+";
+  return `${sign}₩${groupDigits(roundedInt(parts))}`;
 }
 
 /** "0.1810" → "+18.10%". 수익률용. */
@@ -149,7 +151,7 @@ export function formatPriceString(
   const parts = splitDecimal(value);
   if (!parts) return "—";
   if (currency === "KRW" || currency == null) {
-    return `${parts.sign}${groupDigits(parts.int)}`;
+    return `${parts.sign}${groupDigits(roundedInt(parts))}`;
   }
   const frac = (parts.frac + "00").slice(0, 2);
   return `${parts.sign}${groupDigits(parts.int)}.${frac}`;
@@ -161,17 +163,19 @@ export function formatKrwCompactString(
 ): string {
   const parts = splitDecimal(value);
   if (!parts) return "—";
-  const digits = parts.int.length;
+  const int = roundedInt(parts);
+  const sign = roundsToZero(parts) ? "" : parts.sign;
+  const digits = int.length;
   if (digits > 8) {
-    // 억 단위 — 정수부만으로 계산해도 표시 오차가 없다(소수점 이하는 버린다).
-    const eok = Number(parts.int) / 100_000_000;
-    return `${parts.sign}₩${eok.toFixed(2)}억`;
+    // 억 단위 — 억으로 줄이면 원 단위 반올림은 표시에 드러나지 않는다.
+    const eok = Number(int) / 100_000_000;
+    return `${sign}₩${eok.toFixed(2)}억`;
   }
   if (digits > 4) {
-    const man = Math.round(Number(parts.int) / 10_000);
-    return `${parts.sign}₩${groupDigits(String(man))}만`;
+    const man = Math.round(Number(int) / 10_000);
+    return `${sign}₩${groupDigits(String(man))}만`;
   }
-  return `${parts.sign}₩${groupDigits(parts.int)}`;
+  return `${sign}₩${groupDigits(int)}`;
 }
 
 function splitDecimal(
@@ -185,6 +189,29 @@ function splitDecimal(
   const [int, frac = ""] = body.split(".");
   const isZero = /^0*$/.test(int) && /^0*$/.test(frac);
   return { sign: negative ? "-" : "", int, frac, isZero };
+}
+
+/** 소수점을 버리는 표시에 쓸 **반올림한** 정수부.
+ *
+ * ⚠️예전에는 잘라 버렸다(₩174,261.89 → "₩174,261"). 한 줄만 보면 1원이라 눈에
+ *   안 띄지만 **더해지는 칸끼리 합이 안 맞는다** — 보유 종목 화면에서
+ *   매입 + 평가손익 + 제비용이 평가금액보다 1원 모자랐다. 금액을 더해 보는
+ *   사람에게 그 1원은 "이 화면은 못 믿겠다"가 된다.
+ *
+ * ⚠️**소수를 살려 쓰는 곳에서 부르면 안 된다**(수량·외화 단가). 정수부만 올리면
+ *   139.90 이 "140.90" 이 된다 — 실제로 한 번 그렇게 만들었다가 되돌렸다.
+ *
+ * ⚠️자릿수가 큰 값이 올 수 있어 Number 가 아니라 BigInt 로 올린다.
+ */
+function roundedInt(parts: { int: string; frac: string }): string {
+  return parts.frac.charCodeAt(0) >= 53
+    ? (BigInt(parts.int) + 1n).toString()
+    : parts.int;
+}
+
+/** 반올림한 뒤에도 0 인가. "+₩0" 같은 표시를 막는다. */
+function roundsToZero(parts: { int: string; frac: string }): boolean {
+  return /^0*$/.test(roundedInt(parts));
 }
 
 function groupDigits(int: string): string {

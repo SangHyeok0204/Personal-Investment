@@ -2639,6 +2639,10 @@ export interface PortfolioSummary {
   purchase_amount_krw: string | null;
   unrealized_pnl_krw: string | null;
   unrealized_return: string | null;
+  /** 증권사가 평가손익에서 미리 빼 둔 제비용(실측). 매입 + 손익 + 이것 = 평가액. */
+  fee_reserve_krw: string | null;
+  /** 같은 값의 모형 추정(0.25% × (매입 + 평가)). 설명용이지 칸에 적는 값이 아니다. */
+  fee_reserve_modelled_krw: string | null;
   cash_by_currency: CashByCurrency[];
 }
 

@@ -32,6 +32,7 @@ from app.core import quote_cache
 from app.core import investing as inv
 from app.core import portfolio_character as pc
 from app.core import rebalance as rb
+from app.core import fee_reserve as fr
 from app.core import residual as rsd
 from app.core import return_bridge
 
@@ -235,6 +236,8 @@ def get_summary(
             purchase_amount_krw=None,
             unrealized_pnl_krw=None,
             unrealized_return=None,
+            fee_reserve_krw=None,
+            fee_reserve_modelled_krw=None,
             cash_by_currency=[],
         )
 
@@ -279,6 +282,8 @@ def get_summary(
         purchase_amount_krw=purchase,
         unrealized_pnl_krw=pnl,
         unrealized_return=ret,
+        fee_reserve_krw=fr.reserve_krw(securities, purchase, pnl),
+        fee_reserve_modelled_krw=fr.modelled_krw(securities, purchase),
         cash_by_currency=[
             CashByCurrencyOut(
                 currency=b.currency,

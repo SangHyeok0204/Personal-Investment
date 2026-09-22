@@ -295,6 +295,29 @@ class Audit:
             share = abs(dec(res["leftover_krw"])) / abs(dec(res["total_krw"])) * 100
             print(f"  ·  설명 안 되는 몫 {share:.1f}% — 모형(환율 추정)의 한계다")
 
+        # ── 보유 종목 산수 ─────────────────────────────────────────────
+        # ⚠️증권사 평가손익은 **제비용을 뺀 값**이라 매입 + 손익 ≠ 평가액이다.
+        #   화면에서 칸을 더해 보면 174,262 모자랐다. 그 몫을 실측 잔차로 내보내
+        #   산수가 닫히게 했으니, 닫히는지 계속 본다.
+        print("\n[보유 종목 산수]")
+        self.same(
+            "매입 + 평가손익 + 제비용 = 평가금액",
+            dec(summary["purchase_amount_krw"]) + dec(summary["unrealized_pnl_krw"])
+            + dec(summary["fee_reserve_krw"]),
+            dec(summary["securities_value_krw"]),
+            "summary", "summary",
+        )
+        # 제비용이 정말 제비용인지 — 모형(0.25% × (매입+평가))과 견준다.
+        # ★검사가 아니라 **관찰**이다. 모형이 어긋나기 시작하면 수수료율이
+        #   바뀌었거나 증권사 정의가 바뀐 것이다.
+        gap = abs(dec(summary["fee_reserve_krw"]) - dec(summary["fee_reserve_modelled_krw"]))
+        share = gap / abs(dec(summary["fee_reserve_krw"])) * 100
+        print(
+            f"  ·  제비용 {money(dec(summary['fee_reserve_krw']))} vs "
+            f"모형 {money(dec(summary['fee_reserve_modelled_krw']))} "
+            f"— 차이 {money(gap)} ({share:.1f}%). 0.25% × (매입+평가) 로 설명된다"
+        )
+
         print("\n[실현손익·배당]")
         self.same(
             "실현손익", realized["pnl_krw"], analytics["realized_pnl_krw"],

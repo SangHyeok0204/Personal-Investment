@@ -234,6 +234,12 @@ class PortfolioSummaryOut(BaseModel):
     unrealized_pnl_krw: Decimal | None
     # 매입원가 대비 평가손익률. 매입원가가 0이면 null (0% 로 그리면 거짓말이 된다).
     unrealized_return: Decimal | None
+    # ⚠️증권사 평가손익은 **제비용을 뺀 값**이다. 그래서 매입 + 손익 ≠ 평가액이고,
+    #   화면에서 세 칸을 더해 보면 안 맞았다(실측 174,262 모자람).
+    #   그 차이를 실측 잔차로 내보낸다 — 이게 있어야 산수가 닫힌다.
+    fee_reserve_krw: Decimal | None
+    # 같은 값의 모형 추정(0.25% × (매입 + 평가)). 실측이 제비용임을 설명할 때만 쓴다.
+    fee_reserve_modelled_krw: Decimal | None
     # 통화별 예수금. cash_krw 는 환산 가능한 것만 더하므로, 환율 없는 외화가 있으면
     # 합계에서 빠진다 — 그 돈이 화면에서 사라지지 않게 내역을 같이 내보낸다.
     cash_by_currency: list[CashByCurrencyOut] = []
