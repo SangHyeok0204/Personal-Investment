@@ -177,19 +177,45 @@ class Audit:
         )
 
         print("\n[입출금·증감]")
-        # ★두 화면의 '순입금'은 **의도적으로 다르다**:
-        #   · performance — 조회 구간 시작일 **이후**만(시작 자산에 이미 반영된
-        #     첫날 입금은 제외). 그래야 gain = 끝 − 시작 − 순입금이 성립한다.
-        #   · cashflow — 계좌 개설 이후 **전부**. "내가 넣은 돈"이 그 화면의 질문이다.
-        #   차이는 정확히 첫날 입금액이어야 하고, **증감은 같아야 한다**.
+        # ★두 화면의 '순입금'은 **같은 기준**을 쓴다 — 투자 시작일(2026-06-04)
+        #   이후만 세고, 시작 잔고에 이미 반영된 첫날 입금은 양쪽 다 제외한다.
+        #   예전에는 cashflow 가 계좌 개설 이후 전부를 세서 차이가 첫날 입금액
+        #   만큼 났다. 지금은 0 이 정상이고, 0 이 아니면 한쪽이 기준을 벗어난 것이다.
         self.same(
             "증감 (cashflow vs performance)",
             cashflow["gain_krw"],
             performance["gain_krw"],
             "cashflow", "performance",
         )
-        gap = dec(cashflow["net_deposit_krw"]) - dec(performance["net_deposit_krw"])
-        print(f"  ·  순입금 차이 {money(gap)} — 첫날 입금분(의도된 차이)")
+        self.same(
+            "순입금 (같은 기준을 쓰는가)",
+            cashflow["net_deposit_krw"], performance["net_deposit_krw"],
+            "cashflow", "performance",
+        )
+
+        # ⚠️수익률 추이 화면의 타일 넷은 **왼쪽에서 오른쪽으로 더해진다.**
+        #   주가 손익 + 환율 등(잔차) = 원화 증감. 이 등식이 깨지면 화면이
+        #   서로 반대되는 말을 하게 된다 — 실제로 그런 적이 있다(타일은
+        #   −₩722,749, 월별 표의 합은 +₩2,469,456).
+        bridge = performance["bridge"]
+        self.same(
+            "다리 (주가 손익 + 환율 등 = 원화 증감)",
+            dec(bridge["price_pnl_krw"]) + dec(bridge["fx_effect_krw"]),
+            dec(bridge["asset_change_krw"]),
+            "bridge", "bridge",
+        )
+        self.same(
+            "다리의 원화 증감 (타일과 같은 값인가)",
+            bridge["asset_change_krw"], performance["gain_krw"],
+            "bridge", "performance",
+        )
+        # 못 잰 날을 **0 으로 치지 않았는지** 눈으로 확인할 수 있게 적는다.
+        print(
+            f"  ·  연쇄 수익률 {dec(bridge['twr']) * 100:.2f}% "
+            f"({bridge['twr_days']}일 · 못 센 날 {bridge['unmeasured_days']} · "
+            f"손익 빈 날 {bridge['missing_pnl_days']}) — **주가 기준**이라 "
+            f"성과분석의 원화 기준 수익률과 값이 다르다"
+        )
 
         print("\n[실현손익·배당]")
         self.same(

@@ -32,6 +32,7 @@ from app.core import quote_cache
 from app.core import investing as inv
 from app.core import portfolio_character as pc
 from app.core import rebalance as rb
+from app.core import return_bridge
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
@@ -124,6 +125,7 @@ from app.schemas import (
     TradeStatsOut,
     DailyPerformanceOut,
     PerformanceSeriesOut,
+    ReturnBridgeOut,
     RealizedPnlListOut,
     RealizedPnlOut,
     DividendListOut,
@@ -735,6 +737,16 @@ def list_trades(
 
 # ── 일별 성과 (자산 추이 · 수익률) ───────────────────────────────────────────
 
+def _empty_bridge() -> ReturnBridgeOut:
+    """계좌가 없거나 데이터가 없을 때. 0 이 아니라 **None** 이다 — '증감 없음'과
+    '잴 것이 없음'은 다른 말이다."""
+    return ReturnBridgeOut(
+        price_pnl_krw=None, asset_change_krw=None, fx_effect_krw=None,
+        twr=None, twr_days=0, unmeasured_days=0, missing_pnl_days=0,
+    )
+
+
+
 @router.get("/performance", response_model=PerformanceSeriesOut)
 def get_performance(
     account_id: uuid.UUID | None = Query(default=None),
@@ -747,6 +759,15 @@ def get_performance(
 
     ⚠️기간 손익을 (끝 - 시작)으로 계산하지 않는다. 그 사이의 입금이 그대로 '수익'
       으로 보이기 때문이다. 순입금을 빼서 gain_krw 로 내보낸다.
+
+    ⚠️그런데 gain_krw 는 **원화 기준**이다. 증권사 일별 손익(pnl_krw)은 **주가
+      기준**이라, 환율이 크게 움직인 구간에서는 둘이 부호까지 갈린다(실측:
+      −₩722,749 vs +₩2,469,456). 예전에는 이 둘을 한 화면에 그냥 나란히 놓아
+      서로 반대되는 말을 하게 만들었다. 이제 `bridge` 가 사이를 잇고 TWR 도 낸다
+      — `app.core.return_bridge` 참고.
+
+    ⚠️`cumulative_pnl_krw` 로 기간 손익을 구하지 말 것. 조회 창 경계에서 그날
+      손익으로 초기화된다(실측: 2025-09-18, 2026-09-14).
     """
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
@@ -754,6 +775,7 @@ def get_performance(
             items=[], first_date=None, last_date=None,
             start_assets_krw=None, end_assets_krw=None,
             net_deposit_krw=None, gain_krw=None,
+            bridge=_empty_bridge(),
         )
 
     since = inv.since(days)
@@ -792,6 +814,7 @@ def get_performance(
             items=[], first_date=None, last_date=None,
             start_assets_krw=None, end_assets_krw=None,
             net_deposit_krw=None, gain_krw=None,
+            bridge=_empty_bridge(),
         )
 
     start_assets = items[0].deposit_assets_krw
@@ -806,6 +829,19 @@ def get_performance(
         else None
     )
 
+    bridge = return_bridge.build(
+        [
+            return_bridge.Day(
+                base_date=i.base_date,
+                assets_krw=i.deposit_assets_krw,
+                pnl_krw=i.pnl_krw,
+                deposit_krw=i.deposit_krw,
+                withdrawal_krw=i.withdrawal_krw,
+            )
+            for i in items
+        ]
+    )
+
     return PerformanceSeriesOut(
         items=items,
         first_date=items[0].base_date,
@@ -814,6 +850,15 @@ def get_performance(
         end_assets_krw=end_assets,
         net_deposit_krw=net_deposit,
         gain_krw=gain.quantize(_MONEY, rounding=ROUND_HALF_UP) if gain is not None else None,
+        bridge=ReturnBridgeOut(
+            price_pnl_krw=bridge.price_pnl_krw,
+            asset_change_krw=bridge.asset_change_krw,
+            fx_effect_krw=bridge.fx_effect_krw,
+            twr=bridge.twr,
+            twr_days=bridge.twr_days,
+            unmeasured_days=bridge.unmeasured_days,
+            missing_pnl_days=bridge.missing_pnl_days,
+        ),
     )
 
 

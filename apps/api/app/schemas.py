@@ -379,6 +379,23 @@ class DailyPerformanceOut(BaseModel):
     withdrawal_krw: Decimal | None
 
 
+class ReturnBridgeOut(BaseModel):
+    """주가 손익 → 원화 증감 사이의 다리. `app.core.return_bridge` 참고.
+
+    ⚠️`fx_effect_krw` 는 **잔차**다. 환율이 대부분인 것은 실측으로 확인했지만
+      (USD/KRW −9.49% 구간에서 차이 ₩3,192,205 ÷ 9.49% ≈ 평균 주식평가액),
+      배당·수수료·원장 잡음도 여기로 들어온다. 화면에도 '환율 등'이라 적는다.
+    """
+
+    price_pnl_krw: Decimal | None
+    asset_change_krw: Decimal | None
+    fx_effect_krw: Decimal | None
+    twr: Decimal | None
+    twr_days: int
+    unmeasured_days: int
+    missing_pnl_days: int
+
+
 class PerformanceSeriesOut(BaseModel):
     items: list[DailyPerformanceOut]
     first_date: date | None
@@ -387,8 +404,10 @@ class PerformanceSeriesOut(BaseModel):
     start_assets_krw: Decimal | None
     end_assets_krw: Decimal | None
     net_deposit_krw: Decimal | None
-    # (끝 - 시작 - 순입금). 입출금 영향을 뺀 순수 증감이다.
+    # (끝 - 시작 - 순입금). 입출금 영향을 뺀 순수 증감이다. **원화 기준**이라
+    # 환율이 빠지면 종목이 그대로여도 줄어든다 — bridge 가 그걸 갈라 준다.
     gain_krw: Decimal | None
+    bridge: ReturnBridgeOut
 
 
 # ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────

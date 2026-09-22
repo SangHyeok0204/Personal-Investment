@@ -2861,6 +2861,21 @@ export interface DailyPerformancePoint {
   withdrawal_krw: string | null;
 }
 
+/** 주가 손익 → 원화 증감 사이의 다리. 서버 `app/core/return_bridge.py` 참고. */
+export interface ReturnBridge {
+  /** 증권사 일별 손익의 합. **환율이 들어 있지 않다** — 주가 손익이다. */
+  price_pnl_krw: string | null;
+  /** (끝자산 − 시작자산 − 순입금). **원화 기준**이다. */
+  asset_change_krw: string | null;
+  /** 잔차 = 원화 증감 − 주가 손익. 대부분 환율이지만 '환율'이라 단정하지 않는다. */
+  fx_effect_krw: string | null;
+  /** 주가 기준 시간가중수익률(연쇄). 환율은 빠져 있다. */
+  twr: string | null;
+  twr_days: number;
+  unmeasured_days: number;
+  missing_pnl_days: number;
+}
+
 export interface PerformanceSeries {
   items: DailyPerformancePoint[];
   first_date: string | null;
@@ -2868,8 +2883,9 @@ export interface PerformanceSeries {
   start_assets_krw: string | null;
   end_assets_krw: string | null;
   net_deposit_krw: string | null;
-  // (끝 - 시작 - 순입금). 입출금 영향을 뺀 실제 증감.
+  // (끝 - 시작 - 순입금). 입출금 영향을 뺀 실제 증감. **원화 기준**이다.
   gain_krw: string | null;
+  bridge: ReturnBridge;
 }
 
 export interface RealizedPnlItem {
