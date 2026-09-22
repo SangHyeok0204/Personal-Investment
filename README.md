@@ -197,7 +197,15 @@ cd apps/web && npm run build:check
 
 # 화면 간 숫자 정합성 대조 (서버가 떠 있어야 한다)
 .venv/bin/python scripts/audit_consistency.py
+
+# 시드가 증권사가 준 사실과 어긋나지 않는지 (ETF 를 새로 사면 먼저 돌릴 것)
+.venv/bin/python scripts/audit_seeds.py
 ```
+
+⚠️`audit_seeds.py` 는 **근거가 없는 항목을 '맞다'로 세지 않는다.** 증권사
+종목명·SEC 법인명 둘 다 없으면 '확인 불가'다. 실제로 `TSL` 을 손으로 2배라고
+적어 두었다가(증권사 이름은 1.25배) 나중에 발견했고, 그래서 검사를 스크립트로
+만들었다 — 눈으로 한 번 훑는 것은 다음 종목에서 또 틀린다.
 
 ## 10. n8n 접속 주소
 
