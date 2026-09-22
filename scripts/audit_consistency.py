@@ -596,6 +596,13 @@ class Audit:
         #   이름을 내보내는 곳을 하나라도 빼면 거기서 다시 갈린다.
         collect("배당 이력", dividends["items"], name_key="asset_name")
         collect("배당 종목별", dividends["by_ticker"], name_key="asset_name")
+        # ⚠️체결·주문도 넣는다. 체결·실현손익 화면은 왼쪽에 청산, 오른쪽에 체결을
+        #   나란히 두는데 이름이 갈려 **같은 화면에서 같은 종목이 다르게** 보였다
+        #   (왼쪽 "미국 배당주 슈왑 ETF" vs 오른쪽 "미국배당주슈왑E...").
+        #   감사에 안 넣어 둔 화면에서 번번이 되살아난다.
+        collect("체결 내역", trades["items"], name_key="asset_name")
+        collect("실현손익 체결", realized["trades"], name_key="asset_name")
+        collect("주문", orders_payload["items"], name_key="asset_name")
 
         mismatched = {
             ticker: names for ticker, names in seen.items() if len(set(names.values())) > 1

@@ -756,6 +756,8 @@ def list_trades(
         select(func.min(Trade.trade_date), func.max(Trade.trade_date)).where(*conditions)
     ).one()
 
+    trade_names = naming.display_names(db, {trade.ticker for trade, _, _ in rows})
+
     return TradeListOut(
         items=[
             TradeOut(
@@ -766,7 +768,11 @@ def list_trades(
                 trade_no=trade.trade_no,
                 side=trade.side,
                 ticker=trade.ticker,
-                asset_name=trade.asset_name,
+                # ⚠️체결 원장의 이름은 증권사 날것이라 띄어쓰기가 없다
+                #   (SCHD: "미국배당주슈왑ETF"). 체결·실현손익 화면에서 왼쪽
+                #   청산 목록과 오른쪽 체결 목록이 **같은 종목을 다르게** 적고
+                #   있었다. `app.core.naming` 이 어느 이름을 쓸지 정한다.
+                asset_name=trade_names.get(trade.ticker) or trade.asset_name,
                 sector=sector,
                 currency=trade.currency,
                 quantity=trade.quantity,
@@ -950,12 +956,13 @@ def list_realized_pnl(
         .order_by(RealizedPnl.sell_date.desc(), RealizedPnl.ticker)
     ).all()
 
+    realized_names = naming.display_names(db, {row.ticker for row, _ in rows})
     items = [
         RealizedPnlOut(
             id=row.id,
             sell_date=row.sell_date,
             ticker=row.ticker,
-            asset_name=row.asset_name,
+            asset_name=realized_names.get(row.ticker) or row.asset_name,
             sector=sector,
             currency=row.currency,
             quantity=row.quantity,
@@ -986,11 +993,16 @@ def list_realized_pnl(
         .where(Trade.account_id.in_(account_ids), Trade.trade_date >= since)
         .order_by(Trade.trade_date.desc(), Trade.ticker)
     ).scalars().all()
+    # ⚠️이 화면은 왼쪽에 청산, 오른쪽에 체결을 나란히 둔다. 이름이 갈리면
+    #   **같은 화면에서 같은 종목이 다르게** 보인다(실측: 왼쪽 "미국 배당주
+    #   슈왑 ETF" vs 오른쪽 "미국배당주슈왑E...").
+    trade_names = naming.display_names(db, {t.ticker for t in trade_rows})
     trades_out = [
         TradeOut(
             id=t.id, account_id=t.account_id, account_name=None,
             trade_date=t.trade_date, trade_no=t.trade_no, side=t.side,
-            ticker=t.ticker, asset_name=t.asset_name, sector=None,
+            ticker=t.ticker,
+            asset_name=trade_names.get(t.ticker) or t.asset_name, sector=None,
             currency=t.currency, quantity=t.quantity, price=t.price,
             amount_local=t.amount_local,
             settlement_amount_local=t.settlement_amount_local,
@@ -1766,11 +1778,12 @@ def list_orders(
             improvements.append(gain)
 
     wanted = status.upper() if status else None
+    order_names = naming.display_names(db, {o.ticker for o in rows})
     items = [
         OrderOut(
             id=order.id,
             ticker=order.ticker,
-            asset_name=order.asset_name,
+            asset_name=order_names.get(order.ticker) or order.asset_name,
             order_date=order.order_date,
             order_time=order.order_time,
             order_no=order.order_no,
