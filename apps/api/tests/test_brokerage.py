@@ -201,3 +201,71 @@ def test_freshness_without_any_sync_is_stale(client):
     body = client.get("/api/v1/brokerage/freshness").json()
     assert body["last_history_sync_at"] is None
     assert body["stale"] is True
+
+
+def test_finished_job_keeps_its_result(db):
+    """작업을 끝낼 때 **결과도 남긴다.**
+
+    ⚠️예전에는 상태와 에러만 적어서 `jobs.result` 가 전 행 NULL 이었다. 그래서
+      "배당 3종목을 건너뛰었다" 같은 경고가 동기화 직후 한 번 뜨고 사라졌고,
+      수집 상태 화면의 '최근 작업'은 그걸 알 길이 없었다. 경고를 만들어 놓고
+      보여 주지 않으면 안 만든 것과 같다.
+
+    ⚠️경고를 `error_message` 에 쑤셔 넣지 않는다 — 그 칸은 **실패 사유**이고
+      화면이 그렇게 읽는다(빨간 글씨). 자리를 나눈다.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    from app.api.brokerage import _finish_job
+
+    job_id = _uuid.uuid4()
+    db.execute(
+        text(
+            "INSERT INTO jobs (id, job_type, status, started_at) "
+            "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'RUNNING', now())"
+        ),
+        {"i": job_id},
+    )
+    db.commit()
+
+    note = "배당 조회에서 3종목을 건너뛰었습니다(거래소를 못 찾음): AVGO, MNST, QCOM."
+    _finish_job(db, job_id, "SUCCESS", None, result={"history_notes": [note], "trades": 4})
+
+    row = db.execute(
+        text("SELECT status, error_message, result FROM jobs WHERE id = :i"),
+        {"i": job_id},
+    ).one()
+    assert row.status == "SUCCESS"
+    # 경고는 실패 사유가 아니다 — 빨간 칸은 비어 있어야 한다.
+    assert row.error_message is None
+    assert row.result["history_notes"] == [note]
+    assert row.result["trades"] == 4
+
+
+def test_finished_job_without_result_stores_null(db):
+    """결과가 없으면 `{}` 가 아니라 **NULL** 이다 — 화면이 '알림 0건'과 구분한다."""
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    from app.api.brokerage import _finish_job
+
+    job_id = _uuid.uuid4()
+    db.execute(
+        text(
+            "INSERT INTO jobs (id, job_type, status, started_at) "
+            "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'RUNNING', now())"
+        ),
+        {"i": job_id},
+    )
+    db.commit()
+
+    _finish_job(db, job_id, "FAILED", "토큰 발급 실패")
+
+    row = db.execute(
+        text("SELECT error_message, result FROM jobs WHERE id = :i"), {"i": job_id}
+    ).one()
+    assert row.error_message == "토큰 발급 실패"
+    assert row.result is None

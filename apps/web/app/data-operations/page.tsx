@@ -79,6 +79,10 @@ export default function DataOperationsPage() {
   });
 
   const f = freshness.data;
+  // 목록이 길면 줄 하나는 못 보고 지나친다 — 카드 제목에서 먼저 알린다.
+  const warnedJobs = (jobs.data?.items ?? []).filter(
+    (j) => jobNotes(j).length > 0,
+  ).length;
   const manual = (f?.ledgers ?? []).filter((l) => !l.auto);
   const sourceDown = !freshness.isLoading && freshness.isError;
 
@@ -232,7 +236,11 @@ export default function DataOperationsPage() {
 
           <StubCard
             title="최근 작업"
-            subtitle={`${jobs.data?.items.length ?? 0}건 · 최근순`}
+            subtitle={
+              warnedJobs > 0
+                ? `${jobs.data?.items.length ?? 0}건 · 알림 ${warnedJobs}건`
+                : `${jobs.data?.items.length ?? 0}건 · 최근순`
+            }
             className="min-h-0"
             scrollBody
           >
@@ -270,7 +278,17 @@ export default function DataOperationsPage() {
   );
 }
 
+/** 성공했지만 **알려야 하는 것**. 실패 사유(error_message)와 자리를 나눈다. */
+function jobNotes(job: Job): string[] {
+  const raw = (job.result as { history_notes?: unknown } | null)?.history_notes;
+  return Array.isArray(raw) ? raw.filter((n): n is string => typeof n === "string") : [];
+}
+
 function JobRow({ job }: { job: Job }) {
+  // ⚠️경고를 만들어 놓고 보여 주지 않으면 안 만든 것과 같다. 예전에는 동기화
+  //   직후 한 번 뜨고 사라져서, '최근 작업'은 "배당 3종목을 건너뛰었다" 같은
+  //   경고를 알 길이 없었다(jobs.result 가 전 행 NULL 이었다).
+  const notes = jobNotes(job);
   const took =
     job.started_at && job.finished_at
       ? `${Math.round(
@@ -296,6 +314,16 @@ function JobRow({ job }: { job: Job }) {
             {job.error_message}
           </span>
         )}
+        {/* 실패는 아니지만 알아야 하는 것 — 색을 달리해 사유와 구분한다. */}
+        {notes.map((note) => (
+          <span
+            key={note}
+            className="block max-w-[140px] truncate text-[10px] text-amber-700"
+            title={note}
+          >
+            {note}
+          </span>
+        ))}
       </Cell>
       <Cell left>
         <span

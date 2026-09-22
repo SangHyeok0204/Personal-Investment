@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -264,7 +265,7 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
     # ⚠️새 상태값("PARTIAL")을 만들지 않는다 — 프런트 JobStatus 는 PENDING/RUNNING/
     #   SUCCESS/FAILED 뿐이라, 모르는 값을 넣으면 화면이 조용히 깨진다.
     #   잔고는 실제로 저장됐으므로 SUCCESS 로 두고 **사유를 error 에 남긴다**.
-    _finish_job(db, job_id, "SUCCESS", history_error)
+    _finish_job(db, job_id, "SUCCESS", history_error, result=result)
     return SyncResultOut(
         ok=True,
         accounts_synced=result.get("accounts_synced", 0),
@@ -328,13 +329,34 @@ def _create_job(db: Session) -> uuid.UUID:
     return job_id
 
 
-def _finish_job(db: Session, job_id: uuid.UUID, status: str, error: str | None) -> None:
+def _finish_job(
+    db: Session,
+    job_id: uuid.UUID,
+    status: str,
+    error: str | None,
+    result: dict | None = None,
+) -> None:
+    """작업을 끝내며 **결과도 남긴다.**
+
+    ⚠️예전에는 상태와 에러만 적었다. 그래서 `jobs.result` 가 전 행 NULL 이었고,
+      "배당 3종목을 건너뛰었다" 같은 경고가 **동기화 직후 한 번 뜨고 사라졌다**
+      — 수집 상태 화면의 '최근 작업'은 그걸 알 길이 없었다. 경고를 만들어 놓고
+      보여 주지 않으면 안 만든 것과 같다.
+
+    ⚠️`error_message` 에 경고를 쑤셔 넣지 않는다. 그 칸은 **실패 사유**이고,
+      화면이 그렇게 읽는다. 경고는 result 에 둔다.
+    """
     db.execute(
         text(
-            "UPDATE jobs SET status = :s, error_message = :e, finished_at = now(), "
-            "updated_at = now() WHERE id = :i"
+            "UPDATE jobs SET status = :s, error_message = :e, result = CAST(:r AS JSONB), "
+            "finished_at = now(), updated_at = now() WHERE id = :i"
         ),
-        {"s": status, "e": error, "i": job_id},
+        {
+            "s": status,
+            "e": error,
+            "r": json.dumps(result, ensure_ascii=False, default=str) if result else None,
+            "i": job_id,
+        },
     )
     db.commit()
 
