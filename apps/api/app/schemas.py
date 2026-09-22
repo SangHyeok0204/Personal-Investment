@@ -1480,7 +1480,10 @@ class ReportOut(BaseModel):
       6건뿐이다. 만들면 그럴듯해 보이지만 근거가 없다 — 대신 **실현손익**
       (증권사 실측)만 종목별로 낸다.
 
-    ⚠️`unexplained_krw` 를 환차손익이라고 부르지 않는다(월별 현금흐름과 같은 이유).
+    ⚠️`unexplained_krw` 를 환차손익이라고 **부르지 않는다.** 방향은 매달 환율과
+      같지만 크기가 안 맞는 달이 있다 — 실측(시작자산 대비 잔차 vs 환율):
+      7월 −6.44% vs −8.27%, 8월 −4.68% vs −3.80%, 9월 +0.52% vs +1.33%.
+      대신 `fx_change_ratio` 를 나란히 내보내 사용자가 직접 견주게 한다.
     """
 
     periods: list[ReportPeriodOut]
@@ -1494,6 +1497,9 @@ class ReportOut(BaseModel):
     #: 기간 TWR. 구간이 짧아 계산할 수 없으면 None(0 이 아니다).
     twr: Decimal | None
     benchmarks: list[ReportBenchmarkOut]
+    #: 같은 창의 USD/KRW 변동. `unexplained_krw` 를 사용자가 스스로 판단하도록
+    #  나란히 낸다 — 단정하지 않고 견줄 거리를 준다.
+    fx_change_ratio: Decimal | None
     #: 그 기간의 매매
     buy_count: int
     sell_count: int

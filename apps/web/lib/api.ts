@@ -4062,6 +4062,8 @@ export interface Report {
   /** 구간이 짧아 계산할 수 없으면 null(0 이 아니다). */
   twr: string | null;
   benchmarks: ReportBenchmark[];
+  /** 같은 창의 USD/KRW 변동. '그 외'를 견줘 보라고 나란히 준다. */
+  fx_change_ratio: string | null;
   buy_count: number;
   sell_count: number;
   turnover_krw: string;

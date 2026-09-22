@@ -222,7 +222,20 @@ function Summary({ data, onExplain }: { data: Report; onExplain: () => void }) {
         <Line label="시작 자산" value={data.opening_assets_krw} />
         <Line label="순납입" value={data.net_flow_krw} signed />
         <Line label="손익 (증권사)" value={data.pnl_krw} signed />
-        <Line label="그 외" value={data.unexplained_krw} signed muted />
+        {/* ⚠️'그 외'를 환차손익이라 부르지 않는다. 대신 **그 기간 환율 변동**을
+            옆에 적어 사용자가 직접 견주게 한다 — 방향은 매달 같지만 크기가
+            안 맞는 달이 있다(실측 8월: 잔차 −4.68% vs 환율 −3.80%). */}
+        <Line
+          label="그 외"
+          value={data.unexplained_krw}
+          signed
+          muted
+          note={
+            data.fx_change_ratio == null
+              ? undefined
+              : `이 기간 환율 ${pp(data.fx_change_ratio).replace("%p", "%")}`
+          }
+        />
         <div className="mt-1 border-t border-ink pt-1">
           <Line label="끝 자산" value={data.closing_assets_krw} strong />
         </div>
@@ -386,12 +399,14 @@ function Line({
   signed,
   strong,
   muted,
+  note,
 }: {
   label: string;
   value: string | null;
   signed?: boolean;
   strong?: boolean;
   muted?: boolean;
+  note?: string;
 }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
@@ -402,6 +417,11 @@ function Line({
         )}
       >
         {label}
+        {note && (
+          <span className="ml-1.5 text-[10px] font-semibold text-ink-faint">
+            {note}
+          </span>
+        )}
       </span>
       <span
         className={cn(

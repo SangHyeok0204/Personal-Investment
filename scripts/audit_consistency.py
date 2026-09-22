@@ -130,6 +130,11 @@ class Audit:
         tax_years = self.get("/portfolio/tax")["years"]
         rebalance = self.get("/portfolio/rebalance")
         benchmark = self.get("/portfolio/benchmark?days=1095")
+        report_year = self.get("/portfolio/report?period=2026")
+        report_months = [
+            self.get(f"/portfolio/report?period={m}")
+            for m in ("2026-06", "2026-07", "2026-08", "2026-09")
+        ]
         allocation = self.get("/portfolio/allocation")
         taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
@@ -235,6 +240,31 @@ class Audit:
                 f"{ana_label} 수익률 (벤치마크 vs 성과분석)",
                 b["portfolio"], a["return_ratio"],
                 "benchmark", "analytics",
+            )
+
+        # ⚠️기간 리포트도 같은 계좌의 같은 수익률을 낸다. 세 화면이 다 맞아야
+        #   한다 — 여기에 같은 기준일 실수가 있어 2026-09 가 +11.33% 로 나왔다
+        #   (같은 화면의 자산 변화는 순납입 0 에 +9.02% 였다).
+        self.same(
+            "전체 수익률 (기간 리포트 2026 vs 성과분석)",
+            report_year["twr"], ana_by_label["전체"]["return_ratio"],
+            "report", "analytics",
+        )
+
+        # ★순납입이 0 인 달은 TWR 이 (끝−시작)÷시작 과 **정확히 같아야 한다.**
+        #   흐름이 없으면 연쇄가 단순 비율로 무너지기 때문이다. 이 검사 하나면
+        #   기준일이 하루 어긋나도 바로 걸린다.
+        for r in report_months:
+            if dec(r["net_flow_krw"]) != 0 or r["opening_assets_krw"] is None:
+                continue
+            opening = dec(r["opening_assets_krw"])
+            if opening == 0:
+                continue
+            simple = (dec(r["closing_assets_krw"]) - opening) / opening
+            self.same(
+                f'{r["period"]["label"]} TWR (순납입 0 → 단순 비율과 같아야)',
+                r["twr"], simple.quantize(Decimal("0.000001")),
+                "report.twr", "report.assets",
             )
 
         print("\n[실현손익·배당]")

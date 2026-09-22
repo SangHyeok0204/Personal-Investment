@@ -2789,8 +2789,15 @@ _REPORT_NOTES = [
     " 추가 매수만 한 종목은 신규가 아닙니다.",
     "**거래대금은 원화입니다**(일별성과 원천). 수수료/세금 화면의 달러 금액과"
     " 출처가 달라 이어 붙이지 마세요.",
-    "'그 외'를 환차손익이라고 적지 않았습니다 — 일별성과의 환율 칸이 비어 있어"
-    " 실측할 수 없습니다(월별 현금흐름 화면과 같은 이유).",
+    "**'그 외'를 환차손익이라고 적지 않았습니다.** 일별성과의 환율 칸이 비어 있어"
+    " 종목별로 실측할 수 없습니다(월별 현금흐름 화면과 같은 이유). 대신 그 기간의"
+    " 환율 변동을 옆에 적어 두었으니 직접 견주시면 됩니다 — 방향은 매달 같지만"
+    " 크기가 안 맞는 달이 있습니다(시작자산 대비 잔차 vs 환율: 7월 -6.44% vs"
+    " -8.27%, 8월 -4.68% vs -3.80%, 9월 +0.52% vs +1.33%).",
+    "**기간 수익률(TWR)의 기준일은 구간 첫 수익률 직전 날입니다.** 첫 수익률일을"
+    " 기준으로 삼으면 그날치가 통째로 빠집니다 — 실제로 그 상태였고 2026년 9월이"
+    " +11.33% 로 나왔습니다(같은 화면의 자산 변화는 순납입 0 에 +9.02%)."
+    " 지금은 순납입이 0 인 달마다 두 값이 같은지 검사합니다.",
 ]
 
 
@@ -2838,18 +2845,35 @@ def _report_periods(first: date, last: date) -> list[ReportPeriodOut]:
 
 def _report_benchmarks(
     points: list[pa.DailyPoint], start: date, end: date
-) -> tuple[Decimal | None, list[ReportBenchmarkOut]]:
-    """기간 TWR 과 벤치마크 대비.
+) -> tuple[Decimal | None, list[ReportBenchmarkOut], Decimal | None]:
+    """기간 TWR · 벤치마크 대비 · 그 기간의 환율 변동.
+
+    ★환율 변동을 같이 내보내는 이유: 화면의 **'그 외'** 칸을 사용자가 스스로
+      판단할 수 있게 하려는 것이다. 그 칸은 잔차라 무엇이라고 단정하지 않는데,
+      옆에 환율 변동이 있으면 "이게 환율이구나"를 눈으로 확인할 수 있다.
+      실측(시작자산 대비 잔차 vs 환율): 7월 −6.44% vs −8.27%, 8월 −4.68% vs
+      −3.80%, 9월 +0.52% vs +1.33%. 방향은 매달 같지만 **크기는 안 맞는 달도
+      있다**(8월). 그래서 여전히 '환차손익'이라 부르지 않는다.
 
     ⚠️구간 시작으로 **다시 기준을 잡는다**(rebase). 전체 구간 지수를 그대로
       잘라 쓰면 1개월 수익률이 누적값 차이로 나온다.
     ⚠️양쪽에 다 있는 날짜만 쓴다. 한쪽을 앞으로 채우면 없는 날의 움직임이 생긴다.
+
+    ⚠️기준일은 **구간 첫 수익률 직전 날**이다. 첫 수익률일의 지수를 기준으로
+      삼으면 그날 수익률이 통째로 빠진다 — 실측(2026-09): 자산이 순납입 0 으로
+      34,904,085 → 38,052,092(+9.02%) 였는데 이 칸은 +11.33% 를 적고 있었다.
+      같은 화면의 '자산 변화' 칸과 어긋나는데도 둘 다 그럴듯해 보였다.
+      벤치마크 화면에서 같은 실수를 고쳤고(`base_index`), 여기도 같은 실수였다.
     """
-    returns = [r for r in pa.daily_returns(points) if start <= r.base_date <= end]
+    all_returns = pa.daily_returns(points)
+    returns = [r for r in all_returns if start <= r.base_date <= end]
     if len(returns) < 2:
-        return None, []
+        return None, [], None
 
     mine = {r.base_date: r.index for r in returns}
+    prior = [p.base_date for p in points if p.base_date < returns[0].base_date]
+    if prior:
+        mine[prior[-1]] = pa.base_index(returns)
     history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
     fx = history.get(_FX_SYMBOL)
 
@@ -2862,17 +2886,22 @@ def _report_benchmarks(
         )
         and (fx is None or fx.close_on_or_before(d) is not None)
     )
-    first_day = returns[0].base_date
-    last_day = returns[-1].base_date
-    twr = (
-        (mine[last_day] / mine[first_day] - Decimal("1")).quantize(
-            _RATIO, rounding=ROUND_HALF_UP
-        )
-        if mine.get(first_day) and mine.get(last_day)
-        else None
-    )
+    cum = pa.cumulative_return(returns)
+    twr = cum.quantize(_RATIO, rounding=ROUND_HALF_UP) if cum is not None else None
+
+    # 환율 변동은 **TWR 과 같은 창**에서 잰다 — 기준일부터 마지막 날까지.
+    fx_base_day = min(mine)
+    fx_change: Decimal | None = None
+    if fx is not None:
+        a = fx.close_on_or_before(returns[-1].base_date)
+        b = fx.close_on_or_before(fx_base_day)
+        if a is not None and b is not None and b != 0:
+            fx_change = (a / b - Decimal("1")).quantize(
+                _RATIO, rounding=ROUND_HALF_UP
+            )
+
     if len(usable) < 2:
-        return twr, []
+        return twr, [], fx_change
 
     def level(symbol: str, when: date) -> Decimal | None:
         series = history.get(symbol)
@@ -2910,7 +2939,7 @@ def _report_benchmarks(
                 ),
             )
         )
-    return twr, out
+    return twr, out, fx_change
 
 
 @router.get("/report", response_model=ReportOut)
@@ -2932,7 +2961,8 @@ def get_report(
     empty = ReportOut(
         periods=[], period=None, opening_assets_krw=None, closing_assets_krw=None,
         net_flow_krw=Decimal("0"), pnl_krw=Decimal("0"), unexplained_krw=None,
-        twr=None, benchmarks=[], buy_count=0, sell_count=0,
+        twr=None, benchmarks=[], fx_change_ratio=None,
+        buy_count=0, sell_count=0,
         turnover_krw=Decimal("0"), cost_krw=Decimal("0"), dividend_krw=Decimal("0"),
         realized=[], realized_total_krw=Decimal("0"), changes=[],
         best_day=None, best_day_krw=None, worst_day=None, worst_day_krw=None,
@@ -3007,7 +3037,9 @@ def get_report(
             for d, a, dep, wd, *_ in daily
         ]
     )
-    twr, benchmarks = _report_benchmarks(points, chosen.start_date, chosen.end_date)
+    twr, benchmarks, fx_change = _report_benchmarks(
+        points, chosen.start_date, chosen.end_date
+    )
 
     # ── 실현손익 (종목별, 증권사 실측) ──────────────────────────────────────
     realized_rows = db.execute(
@@ -3105,6 +3137,7 @@ def get_report(
         ),
         twr=twr,
         benchmarks=benchmarks,
+        fx_change_ratio=fx_change,
         buy_count=buy_count,
         sell_count=sell_count,
         turnover_krw=buy + sell,
