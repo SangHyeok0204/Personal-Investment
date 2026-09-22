@@ -136,6 +136,8 @@ class Audit:
             for m in ("2026-06", "2026-07", "2026-08", "2026-09")
         ]
         allocation = self.get("/portfolio/allocation")
+        fx = self.get("/portfolio/fx-exposure")
+        allocation_currency = self.get("/portfolio/allocation?dimension=currency")
         taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
         print("\n[평가금액·손익]")
@@ -452,6 +454,34 @@ class Audit:
                 dec(by_ticker[top["ticker"]]["current_weight"]),
                 "holdings÷allocation", "rebalance",
             )
+
+        # ── 환노출 ─────────────────────────────────────────────────────
+        # ⚠️환노출의 분모는 배분 화면의 통화 축과 **같은 총자산**이어야 한다.
+        #   예전에는 환노출만 주식으로 세서 외화 예수금이 빠졌다(실측
+        #   ₩1,320,356). 지금은 주식이 전부 USD 라 양쪽 다 100% 로 보여 차이가
+        #   안 드러나지만, 원화 종목을 하나라도 사면 두 화면이 갈린다.
+        print("\n[환노출]")
+        self.same(
+            "분모 (환노출 vs 총자산)",
+            (
+                dec(fx["exposed_value_krw"]) / dec(fx["exposure_ratio"])
+                if fx.get("exposure_ratio") and dec(fx["exposure_ratio"]) != 0
+                else Decimal("0")
+            ).quantize(Decimal("0.01")),
+            dec(summary["total_assets_krw"]).quantize(Decimal("0.01")),
+            "fx", "summary",
+        )
+        # 외화 노출액은 통화 축에서 KRW 아닌 조각의 합과 같아야 한다.
+        non_krw = sum(
+            (dec(i["market_value_krw"]) for i in allocation_currency["items"]
+             if i["key"] != "KRW"),
+            Decimal("0"),
+        )
+        self.same(
+            "외화 노출액 (환노출 vs 배분 통화축)",
+            fx["exposed_value_krw"], non_krw,
+            "fx", "allocation(currency)",
+        )
 
         # ── 원장 신선도 ────────────────────────────────────────────────
         print("\n[원장 신선도]")

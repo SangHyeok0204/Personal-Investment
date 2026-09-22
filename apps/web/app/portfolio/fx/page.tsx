@@ -21,6 +21,13 @@ import { cn } from "@/lib/utils";
 //   있고 일별성과의 환율 칸도 530행 전부 비어 있다. 그래서 보유 종목의
 //   "얼마에 샀나"는 매수 체결일의 일별 종가 환율로 **추정**한다.
 //   추정과 실측을 화면에서 **섞지 않는다** — 평가 환차는 추정, 실현 환차는 실측이다.
+//
+// ★2026-09-23: **외화 예수금도 노출에 넣는다.** 달러로 남아 있는 돈은 환율이
+//   움직이면 그대로 원화 가치가 바뀐다. 예전에는 주식만 세서 민감도 표가 그만큼
+//   작게 나왔다(실측 $982.92 = ₩1,320,356 이 빠져 있었다). 분모도 총자산으로
+//   맞췄다 — 배분 화면의 통화 축과 같은 기준이다.
+//   ⚠️다만 예수금에는 '얼마에 샀나'가 없다. 그래서 **평가 환차손익 추정에는
+//     넣지 않는다** — 없는 매입 환율을 지어내지 않는다.
 
 function rate(value: string | null): string {
   if (value == null) return "—";
@@ -67,8 +74,11 @@ export default function FxExposurePage() {
             value={data?.exposure_ratio ? pct(data.exposure_ratio, 0).replace("+", "") : null}
             hint={
               data?.exposed_value_krw
-                ? `${formatKrwString(data.exposed_value_krw)} 가 ${data.exposed_currency} 자산`
-                : "전체 평가액 중 외화"
+                ? `${formatKrwString(data.exposed_value_krw)} 가 ${data.exposed_currency} 자산` +
+                  (data.foreign_cash_krw
+                    ? ` (예수금 ${formatKrwString(data.foreign_cash_krw)} 포함)`
+                    : "")
+                : "총자산 중 외화 (예수금 포함)"
             }
             loading={fx.isLoading}
           />
@@ -111,7 +121,7 @@ export default function FxExposurePage() {
         >
           <StubCard
             title="종목별 환노출"
-            subtitle={`${positions.length}종목 · 매입 환율은 추정`}
+            subtitle={`${positions.length}종목 + 예수금 · 매입 환율은 추정`}
             scrollBody
             action={
               <button
@@ -134,6 +144,25 @@ export default function FxExposurePage() {
                     : "계좌를 연동하면 환노출이 표시됩니다"
               }
             >
+              {/* ⚠️예수금 줄이 없으면 **줄의 합이 위 '환노출 비중' 과 안 맞는다.**
+                  분모에만 더하고 줄에서 빼는 것은 이 프로젝트에서 이미 한 번
+                  버그로 겪은 모양이다. 매입 환율은 비워 둔다 — 예수금에는
+                  '얼마에 샀나'가 없고, 0 으로 두면 '환차 없음'으로 읽힌다. */}
+              {data?.foreign_cash_krw && (
+                <tr className="border-b border-hairline bg-canvas-soft/40">
+                  <Cell left strong>
+                    <span className="flex items-center gap-1.5">
+                      <span>예수금</span>
+                      <span className="shrink-0 text-[10px] font-bold text-ink-faint">
+                        {data.exposed_currency}
+                      </span>
+                    </span>
+                  </Cell>
+                  <Cell>{formatKrwString(data.foreign_cash_krw)}</Cell>
+                  <Cell tone="muted">—</Cell>
+                  <Cell tone="muted">—</Cell>
+                </tr>
+              )}
               {positions.map((p) => (
                 <tr key={p.ticker} className="border-b border-hairline">
                   <Cell left strong>
@@ -207,6 +236,13 @@ export default function FxExposurePage() {
             때문에 얼마를 잃거나 벌었나&quot;입니다 — 평가액 × (1 − 매입환율 ÷
             현재환율). 매입 환율을 모르는 종목은 비워 둡니다(0 으로 두면 &quot;환차
             없음&quot;으로 읽힙니다).
+          </li>
+          <li>
+            <strong>외화 예수금도 노출에 넣었습니다.</strong> 달러로 남아 있는
+            돈은 환율이 움직이면 그대로 원화 가치가 바뀝니다. 다만 예수금에는
+            &quot;얼마에 샀나&quot;가 없어 <strong>평가 환차손익 추정에는 넣지
+            않았습니다</strong> — 없는 매입 환율을 지어내지 않습니다. 아래 민감도
+            표에는 들어갑니다.
           </li>
           <li>
             <strong>실현 환차손익</strong>은 추정이 아닙니다. 이미 판 종목은

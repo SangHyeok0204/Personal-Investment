@@ -3634,6 +3634,8 @@ export interface FxExposure {
   exposed_currency: string;
   current_rate: string | null;
   exposed_value_krw: string | null;
+  /** 그중 외화 예수금. 노출에는 넣고, 평가 환차손익 추정에는 넣지 않는다. */
+  foreign_cash_krw: string | null;
   exposure_ratio: string | null;
   positions: FxPosition[];
   estimated_entry_rate: string | null;

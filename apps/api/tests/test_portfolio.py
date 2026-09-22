@@ -278,6 +278,45 @@ def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
     assert body["items"][0]["label"] == "미국"
 
 
+def test_fx_exposure_counts_foreign_cash(client, db, kiwoom, monkeypatch):
+    """**외화 예수금도 환노출이다.** 그리고 분모는 총자산이다.
+
+    ⚠️예전에는 주식만 세서, 달러로 남아 있는 돈이 민감도 표에서 통째로 빠졌다
+      (실계좌 실측 $982.92 = ₩1,320,356). 분모도 주식만이라 배분 화면의 통화
+      축과 갈렸다.
+
+    ⚠️예수금에는 '얼마에 샀나'가 없다. 그래서 노출·민감도에는 넣되 **평가
+      환차손익 추정에는 넣지 않는다** — 없는 매입 환율을 지어내지 않는다.
+    """
+    from app.models import AccountBalance
+
+    # 이 엔드포인트는 환율 시계열을 받아오는데, 시험에서 바깥을 부르지 않는다.
+    monkeypatch.setattr("app.api.portfolio.fetch_history", lambda *a, **k: {})
+
+    body = client.get("/api/v1/portfolio/fx-exposure").json()
+    # 외화 주식 1,680,000 ÷ 총자산 2,980,000(주식 2,480,000 + 원화 예수금 500,000)
+    assert Decimal(body["exposed_value_krw"]) == Decimal("1680000.00")
+    assert Decimal(body["exposure_ratio"]) == Decimal("0.563758")
+    assert body["foreign_cash_krw"] is None  # 아직 외화 예수금이 없다
+
+    db.add(AccountBalance(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, currency="USD",
+        cash_balance=Decimal("100"), exchange_rate=Decimal("1400"), as_of=NOW,
+    ))
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/fx-exposure").json()
+    assert Decimal(body["foreign_cash_krw"]) == Decimal("140000.00")
+    # 노출 1,680,000 + 140,000 = 1,820,000 ÷ 총자산 3,120,000
+    assert Decimal(body["exposed_value_krw"]) == Decimal("1820000.00")
+    assert Decimal(body["exposure_ratio"]) == Decimal("0.583333")
+    # 민감도도 예수금을 포함한 노출액에 붙는다.
+    shock = next(s for s in body["shocks"] if Decimal(s["move"]) == Decimal("0.10"))
+    assert Decimal(shock["delta_krw"]) == Decimal("182000.00")
+    # 평가 환차손익 추정에는 안 들어간다 — 환율 시계열이 없으니 아예 None 이다.
+    assert body["unrealized_fx_krw"] is None
+
+
 def test_allocation_by_currency_folds_cash_into_its_currency(client, db, kiwoom):
     """통화 축에서는 예수금을 **그 통화에 합친다.**
 

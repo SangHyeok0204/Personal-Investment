@@ -2155,8 +2155,32 @@ def get_fx_exposure(
 
     # 외화 종목만 환노출이다. 원화 종목은 환율이 움직여도 그대로다.
     foreign = [(p, a) for p, a in rows if (a.currency or "USD") != "KRW"]
+
+    # ★2026-09-23: **외화 예수금도 환노출이다.** 계좌에 달러로 남아 있는 돈은
+    #   환율이 움직이면 그대로 원화 가치가 바뀐다. 예전에는 주식만 세서
+    #   민감도 표가 그만큼 작게 나왔다(실측 $982.92 = ₩1,320,356 이 빠져 있었다).
+    #   분모도 총자산으로 맞춘다 — 배분 화면의 통화 축과 같은 기준이다.
+    #   ⚠️지금은 주식이 전부 USD 라 양쪽 다 100% 로 보여 차이가 안 드러난다.
+    #     원화 종목을 하나라도 사면 두 화면이 다른 말을 하게 되므로 지금 맞춘다.
+    foreign_cash = Decimal("0")
+    cash_total = Decimal("0")
+    if inv.CASH_IN_ASSETS:
+        for balance in db.execute(
+            select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
+        ).scalars():
+            value = _cash_krw(balance)
+            if value is None:
+                continue
+            cash_total += value
+            if balance.currency != "KRW":
+                foreign_cash += value
+
     exposed = _sum([p.market_value_krw for p, _ in foreign])
+    if exposed is not None and foreign_cash:
+        exposed = exposed + foreign_cash
     total = _sum([p.market_value_krw for p, _ in rows])
+    if total is not None and cash_total:
+        total = total + cash_total
     current_rate = next(
         (p.exchange_rate for p, _ in foreign if p.exchange_rate is not None), None
     )
@@ -2282,10 +2306,13 @@ def get_fx_exposure(
             for shock in _FX_SHOCKS
         ],
         rate_as_of=(fx.dates[-1] if fx and fx.dates else None),
+        foreign_cash_krw=foreign_cash or None,
         note=(
             "매입 환율은 증권사가 주지 않아 **매수 체결일의 일별 종가 환율로 추정**한 "
             "값입니다. 실제 체결 환율과는 다를 수 있습니다. 실현 환차손익은 증권사가 "
-            "매수·매도 환율을 함께 주므로 추정이 아닙니다."
+            "매수·매도 환율을 함께 주므로 추정이 아닙니다. 외화 예수금도 노출에 "
+            "넣지만, 예수금에는 '얼마에 샀나'가 없어 평가 환차손익에는 넣지 "
+            "않았습니다 — 민감도 표에는 들어갑니다."
         ),
     )
 

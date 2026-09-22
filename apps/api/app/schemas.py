@@ -1107,6 +1107,9 @@ class FxExposureOut(BaseModel):
     exposed_currency: str
     current_rate: Decimal | None
     exposed_value_krw: Decimal | None
+    #: 그중 외화 **예수금**. 환율이 움직이면 그대로 원화 가치가 바뀌므로 노출에
+    #  넣는다. 다만 '얼마에 샀나'가 없어 평가 환차손익 추정에는 넣지 않는다.
+    foreign_cash_krw: Decimal | None = None
     # 전체 평가금액 중 외화 비중. 1.0 이면 전부 환율에 노출돼 있다.
     exposure_ratio: Decimal | None
     positions: list[FxPositionOut]
