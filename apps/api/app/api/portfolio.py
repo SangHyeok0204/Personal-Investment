@@ -2628,6 +2628,9 @@ _TAX_RATE = Decimal("0.22")
 # 금융소득종합과세 기준. 이자+배당이 이 선을 넘으면 분리과세로 끝나지 않는다.
 _COMPREHENSIVE_THRESHOLD = Decimal("20000000")
 
+# ⚠️**숫자를 문구에 박아 두지 말 것.** 예전에 "현재 실현 내역 17건은 전부
+#   해외주식입니다"라고 적어 두었는데, 한 번 더 팔면 그 순간 화면이 거짓말을
+#   한다. 세는 것은 `_tax_notes()` 가 그때그때 한다.
 _TAX_NOTES = [
     "이 화면은 **신고 자료가 아닙니다.** 세액이 맞는지는 증권사 양도소득 원장과"
     " 세무 전문가를 통해 확인하세요.",
@@ -2638,13 +2641,40 @@ _TAX_NOTES = [
     " 과세 대상 그 자체입니다.",
     "증권사가 준 값(주가손익 + 환차손익)과 체결일 환율로 계산한 값이 조금 다릅니다."
     " 둘 다 적어 두었으니 차이를 보고 판단하세요.",
-    "배당이 **세전인지 세후인지 확인할 수 없습니다.** 키움은 배당 전용 TR 없이"
-    " 일별 수익률 응답에 금액만 섞어 주고, 원천징수액을 따로 주지 않습니다."
-    " 미국 배당은 통상 15%가 현지에서 원천징수됩니다.",
+    "배당이 **세전인지 세후인지 확인할 수 없습니다.** 키움에는 배당 전용 TR 이"
+    " 없어 일별 **종목**수익률(usa21730)의 배당금액만 골라 쓰는데, 원천징수액은"
+    " 그 응답에 없습니다. 미국 배당은 통상 15%가 현지에서 원천징수됩니다.",
     "손실은 **같은 해 안에서만** 통산되고 다음 해로 이월되지 않습니다.",
-    "국내주식은 대주주가 아니면 양도세 대상이 아니라 여기에 넣지 않았습니다"
-    " (현재 실현 내역 17건은 전부 해외주식입니다).",
 ]
+
+
+def _tax_notes(db: Session) -> list[str]:
+    """한계 설명. **세는 것은 그때그때 센다.**
+
+    ⚠️국내주식 문구에 건수를 박아 두었다가 다음 매도에 거짓이 될 뻔했다.
+      실현 내역의 통화를 실제로 세서 적는다 — 원화 종목을 팔면 문구가 바뀐다.
+    """
+    rows = db.execute(
+        select(RealizedPnl.currency, func.count())
+        .group_by(RealizedPnl.currency)
+    ).all()
+    total = sum(count for _, count in rows)
+    domestic = sum(count for currency, count in rows if currency == "KRW")
+
+    if total == 0:
+        tail = "(아직 실현 내역이 없습니다)."
+    elif domestic == 0:
+        tail = f"(현재 실현 내역 {total}건은 전부 해외주식입니다)."
+    else:
+        tail = (
+            f"(실현 내역 {total}건 중 {domestic}건이 원화 종목이라 이 화면의"
+            f" 합계에서 빠져 있습니다)."
+        )
+    return [
+        *_TAX_NOTES,
+        "국내주식은 대주주가 아니면 양도세 대상이 아니라 여기에 넣지 않았습니다 "
+        + tail,
+    ]
 
 
 @router.get("/tax", response_model=TaxOut)
@@ -2670,7 +2700,7 @@ def get_tax(
     """
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
-        return TaxOut(years=[], current=None, notes=_TAX_NOTES)
+        return TaxOut(years=[], current=None, notes=_tax_notes(db))
 
     rows = db.execute(
         select(RealizedPnl).where(RealizedPnl.account_id.in_(account_ids))
@@ -2684,7 +2714,7 @@ def get_tax(
         reverse=True,
     )
     if not years:
-        return TaxOut(years=[], current=None, notes=_TAX_NOTES)
+        return TaxOut(years=[], current=None, notes=_tax_notes(db))
 
     target = year if year in years else years[0]
     zero = Decimal("0")
@@ -2760,7 +2790,7 @@ def get_tax(
             # 손실이 큰 건이 위로 — 통산에 무엇이 들어갔는지가 먼저 궁금하다.
             sales=sorted(sales, key=lambda s: s.gain_krw),
         ),
-        notes=_TAX_NOTES,
+        notes=_tax_notes(db),
     )
 
 

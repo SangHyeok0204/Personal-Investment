@@ -415,6 +415,43 @@ class Audit:
                 sum(Decimal(t["gain_krw"]) for t in taxes),
                 "계산", "gain_krw",
             )
+            # ⚠️**건별 합이 머리 숫자와 같아야 한다.** 화면은 위에 양도차익을
+            #   적고 아래에 13건을 늘어놓는다 — 더해 보는 사람이 있다.
+            for t in taxes:
+                self.same(
+                    f'{t["year"]} 건별 합 = 양도차익',
+                    sum(Decimal(row["gain_krw"]) for row in t["sales"]),
+                    t["gain_krw"],
+                    "sales", "gain_krw",
+                )
+                self.checked += 1
+                if len(t["sales"]) != t["sale_count"]:
+                    print(
+                        f'  X  {t["year"]} 건수: 목록 {len(t["sales"])} / '
+                        f'머리 {t["sale_count"]}'
+                    )
+                    self.failures.append(f'{t["year"]} 세금 건수')
+                else:
+                    print(f'  OK {t["year"]} 건수: {t["sale_count"]}건')
+
+            # ★두 방식(체결일 환율 직접 계산 vs 증권사 주가손익+환차)의 차이가
+            #   **세액을 바꿀 만큼 커졌는지**. 지금은 기본공제 여유가 훨씬 커서
+            #   차이가 세액에 닿지 않는다 — 그 관계가 뒤집히면 알려야 한다.
+            for t in taxes:
+                diff = abs(dec(t["method_diff_krw"]))
+                room = abs(dec(t["headroom_krw"]))
+                self.checked += 1
+                if diff <= room:
+                    print(
+                        f'  OK {t["year"]} 두 방식 차이 {money(diff)} '
+                        f'< 기본공제 여유 {money(room)} — 세액이 바뀌지 않는다'
+                    )
+                else:
+                    print(
+                        f'  !  {t["year"]} 두 방식 차이 {money(diff)} 가 '
+                        f'기본공제 여유 {money(room)} 를 넘는다 — 증권사 원장으로 확인할 것'
+                    )
+                    self.warnings.append(f'{t["year"]} 세금 방식 차이')
         else:
             print("  ·  세금: 실현 내역이 없어 건너뜀")
 

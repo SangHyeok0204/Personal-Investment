@@ -6,7 +6,7 @@
      (0 으로 세면 수익률이 부풀려진다.)
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -276,6 +276,40 @@ def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
     ) == Decimal("1.0000")
     # 큰 것부터
     assert body["items"][0]["label"] == "미국"
+
+
+def test_tax_note_counts_itself(client, db, kiwoom):
+    """한계 문구의 건수를 **박아 두지 않는다.**
+
+    ⚠️예전에는 "현재 실현 내역 17건은 전부 해외주식입니다"가 문자열로 박혀
+      있었다. 한 번 더 팔면 그 순간 화면이 거짓말을 한다.
+    """
+    from app.models import RealizedPnl
+
+    def domestic_note() -> str:
+        return next(
+            n for n in client.get("/api/v1/portfolio/tax").json()["notes"]
+            if "국내주식" in n
+        )
+
+    assert "아직 실현 내역이 없습니다" in domestic_note()
+
+    db.add(RealizedPnl(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, ticker="AAPL",
+        asset_name="Apple", sell_date=date(2026, 8, 1), currency="USD",
+        quantity=Decimal("1"), pnl_krw=Decimal("1000"),
+    ))
+    db.commit()
+    assert "1건은 전부 해외주식" in domestic_note()
+
+    # 원화 종목을 팔면 문구가 **바뀌어야** 한다 — 그 건은 이 화면에서 빠진다.
+    db.add(RealizedPnl(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, ticker="005930",
+        asset_name="삼성전자", sell_date=date(2026, 8, 2), currency="KRW",
+        quantity=Decimal("1"), pnl_krw=Decimal("500"),
+    ))
+    db.commit()
+    assert "2건 중 1건이 원화 종목" in domestic_note()
 
 
 def test_untracked_holdings_carry_name_and_weight(client, kiwoom):
