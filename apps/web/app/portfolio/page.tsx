@@ -490,14 +490,17 @@ function HoldingRow({
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })}`}
-            {/* ⚠️데이마켓 체결가를 정규장 가격인 척 두지 않는다. 값은 버리지
-                않는다 — 한국 투자자가 실제로 체결할 수 있는 가격이다. */}
+            {/* ⚠️데이마켓 체결가를 정규장 종가인 척 두지 않는다. 값은 버리지
+                않는다 — 한국 투자자가 실제로 체결할 수 있는 가격이고, 실측상
+                미국 개장 전 방향을 먼저 반영한다(2026-09-22 09:32: 8종목 전부
+                같은 방향, 같은 시각 나스닥100 선물 +0.32%). '틀린 값'이 아니라
+                '다른 세션의 값'이라 그렇게 적는다. */}
             {live.thin_session && (
               <span
                 title={
-                  `한국 데이마켓 체결가입니다 (미국 정규장 마감 중).` +
+                  `한국 데이마켓 가격입니다 — 미국 정규장은 마감 중이라 이 값은 개장 전 방향을 먼저 반영합니다.` +
                   (live.volume
-                    ? ` 이 봉의 거래량 ${Number(live.volume).toLocaleString("en-US")}주 — 정규장보다 훨씬 얇습니다.`
+                    ? ` 이 봉의 거래량 ${Number(live.volume).toLocaleString("en-US")}주로 정규장보다 훨씬 적으니 정규장 종가와는 다를 수 있습니다.`
                     : "")
                 }
                 className="shrink-0 cursor-help rounded bg-ge-point/12 px-1 py-0.5 text-[9px] font-extrabold text-ge-point"
