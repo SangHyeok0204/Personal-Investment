@@ -4050,6 +4050,19 @@ export interface ReportBenchmark {
   excess: string | null;
 }
 
+/** '그 외'의 분해. 넷을 더하면 total_krw 가 된다. */
+export interface ResidualBreakdown {
+  total_krw: string | null;
+  /** **추정**이다 — 전일 주식평가액 × 환율 변동률. 나머지는 실측. */
+  fx_estimate_krw: string | null;
+  dividend_krw: string;
+  cost_krw: string;
+  /** 넷으로 설명되지 않고 남는 것. 0 으로 맞추지 않는다. */
+  leftover_krw: string | null;
+  fx_days: number;
+  fx_missing_days: number;
+}
+
 export interface Report {
   periods: ReportPeriod[];
   period: ReportPeriod | null;
@@ -4064,6 +4077,7 @@ export interface Report {
   benchmarks: ReportBenchmark[];
   /** 같은 창의 USD/KRW 변동. '그 외'를 견줘 보라고 나란히 준다. */
   fx_change_ratio: string | null;
+  residual: ResidualBreakdown;
   buy_count: number;
   sell_count: number;
   turnover_krw: string;

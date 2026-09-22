@@ -1472,6 +1472,27 @@ class ReportBenchmarkOut(BaseModel):
     excess: Decimal | None
 
 
+class ResidualBreakdownOut(BaseModel):
+    """'그 외'의 분해. `app.core.residual` 참고.
+
+    ⚠️`fx_estimate_krw` 만 **추정**이다(전일 주식평가액 × 환율 변동률). 증권사가
+      준 일별 환율 칸이 532행 전부 비어 있어 달리 방법이 없다. 배당·수수료는
+      실측이다. 화면에서 둘을 구분해 적는다.
+
+    ⚠️`leftover_krw` 를 0 으로 맞추지 않는다. 월 단위로는 ±30만원씩 흔들리는데
+      (종가 환율과 증권사 환산 시점이 달라 월 경계에서 밀리는 것으로 보인다)
+      전체 구간으로는 −71,490(잔차의 2.3%)까지 닫힌다.
+    """
+
+    total_krw: Decimal | None
+    fx_estimate_krw: Decimal | None
+    dividend_krw: Decimal
+    cost_krw: Decimal
+    leftover_krw: Decimal | None
+    fx_days: int
+    fx_missing_days: int
+
+
 class ReportOut(BaseModel):
     """한 기간에 무슨 일이 있었나.
 
@@ -1500,6 +1521,8 @@ class ReportOut(BaseModel):
     #: 같은 창의 USD/KRW 변동. `unexplained_krw` 를 사용자가 스스로 판단하도록
     #  나란히 낸다 — 단정하지 않고 견줄 거리를 준다.
     fx_change_ratio: Decimal | None
+    #: `unexplained_krw` 를 환율·배당·수수료·남는 것으로 쪼갠 것.
+    residual: ResidualBreakdownOut
     #: 그 기간의 매매
     buy_count: int
     sell_count: int

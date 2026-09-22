@@ -32,6 +32,7 @@ from app.core import quote_cache
 from app.core import investing as inv
 from app.core import portfolio_character as pc
 from app.core import rebalance as rb
+from app.core import residual as rsd
 from app.core import return_bridge
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
@@ -97,6 +98,7 @@ from app.schemas import (
     ReportBenchmarkOut,
     ReportOut,
     ReportPeriodOut,
+    ResidualBreakdownOut,
     ReportPositionChangeOut,
     ReportRealizedOut,
     MonthlyCashflowOut,
@@ -2844,7 +2846,10 @@ def _report_periods(first: date, last: date) -> list[ReportPeriodOut]:
 
 
 def _report_benchmarks(
-    points: list[pa.DailyPoint], start: date, end: date
+    points: list[pa.DailyPoint],
+    start: date,
+    end: date,
+    history: dict[str, object],
 ) -> tuple[Decimal | None, list[ReportBenchmarkOut], Decimal | None]:
     """기간 TWR · 벤치마크 대비 · 그 기간의 환율 변동.
 
@@ -2874,7 +2879,6 @@ def _report_benchmarks(
     prior = [p.base_date for p in points if p.base_date < returns[0].base_date]
     if prior:
         mine[prior[-1]] = pa.base_index(returns)
-    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
     fx = history.get(_FX_SYMBOL)
 
     usable = sorted(
@@ -2962,6 +2966,10 @@ def get_report(
         periods=[], period=None, opening_assets_krw=None, closing_assets_krw=None,
         net_flow_krw=Decimal("0"), pnl_krw=Decimal("0"), unexplained_krw=None,
         twr=None, benchmarks=[], fx_change_ratio=None,
+        residual=ResidualBreakdownOut(
+            total_krw=None, fx_estimate_krw=None, dividend_krw=Decimal('0'),
+            cost_krw=Decimal('0'), leftover_krw=None, fx_days=0, fx_missing_days=0,
+        ),
         buy_count=0, sell_count=0,
         turnover_krw=Decimal("0"), cost_krw=Decimal("0"), dividend_krw=Decimal("0"),
         realized=[], realized_total_krw=Decimal("0"), changes=[],
@@ -2983,6 +2991,8 @@ def get_report(
             func.sum(AccountDailyPerformance.commission_tax_krw),
             func.sum(AccountDailyPerformance.buy_amount_krw),
             func.sum(AccountDailyPerformance.sell_amount_krw),
+            # '그 외' 분해용. 환율 영향의 모형이 **전일 주식평가액** × 환율 변동률이다.
+            func.sum(AccountDailyPerformance.stock_value_krw),
         )
         .where(
             AccountDailyPerformance.account_id.in_(account_ids),
@@ -3009,7 +3019,7 @@ def get_report(
     trading_days = 0
 
     for row in daily:
-        d, assets, dep, wd, day_pnl, div, day_cost, day_buy, day_sell = row
+        d, assets, dep, wd, day_pnl, div, day_cost, day_buy, day_sell, _stock = row
         if d < chosen.start_date:
             # 기간 시작 **직전** 자산이 월초 잔액이다. 0 으로 두면 "무에서
             # 시작했다"는 거짓이 된다.
@@ -3017,6 +3027,15 @@ def get_report(
             continue
         if d > chosen.end_date:
             break
+        if opening is None:
+            # ⚠️기간 앞에 아무 날도 없을 때(첫 달·연도) **첫날을 기준선으로 쓴다.**
+            #   예전에는 opening 을 None 으로 둬서 자산 분해가 통째로 비었다 —
+            #   '그 외'가 안 보이는데 분해 팝업에는 숫자가 있는 모양이었다.
+            #   0 으로 두는 것도 거짓이다(2026-06-04 마감 자산은 36,899,965 인데
+            #   그날 입금은 7,840,153 뿐이라 "무에서 시작"이 성립하지 않는다).
+            #   투자 시작일 규칙과도 같다 — 첫날 입금은 시작 잔고에 포함한다.
+            opening = assets
+            continue
         trading_days += 1
         closing = assets if assets is not None else closing
         net_flow += (dep or zero) - (wd or zero)
@@ -3037,8 +3056,37 @@ def get_report(
             for d, a, dep, wd, *_ in daily
         ]
     )
+    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
     twr, benchmarks, fx_change = _report_benchmarks(
-        points, chosen.start_date, chosen.end_date
+        points, chosen.start_date, chosen.end_date, history
+    )
+
+    # ── '그 외' 분해 ────────────────────────────────────────────────────────
+    # ★잔차를 그냥 '그 외'로 두면 사용자가 판단할 근거가 없다. 환율(추정)·
+    #   배당(실측)·수수료(실측)로 쪼개고 남는 것까지 그대로 내놓는다.
+    #   실측 전체 구간: 잔차 -3,121,093 = 환율 -3,043,025 + 배당 121,611
+    #   - 수수료 128,189 + 남는 것 -71,490(잔차의 2.3%).
+    fx_series = history.get(_FX_SYMBOL)
+
+    def _rate_on(when: date) -> Decimal | None:
+        value = fx_series.close_on_or_before(when) if fx_series else None
+        return None if value is None else Decimal(str(value))
+
+    # 기간 **직전** 하루를 기준선으로 함께 넣는다 — 첫날 변동을 놓치지 않으려고.
+    before = [r for r in daily if r[0] < chosen.start_date]
+    window = ([before[-1]] if before else []) + [
+        r for r in daily if chosen.start_date <= r[0] <= chosen.end_date
+    ]
+    breakdown = rsd.decompose(
+        [
+            rsd.Day(
+                base_date=r[0], assets_krw=r[1], stock_value_krw=r[9], pnl_krw=r[4],
+                deposit_krw=r[2], withdrawal_krw=r[3],
+                dividend_krw=r[5], commission_tax_krw=r[6],
+            )
+            for r in window
+        ],
+        _rate_on,
     )
 
     # ── 실현손익 (종목별, 증권사 실측) ──────────────────────────────────────
@@ -3138,6 +3186,15 @@ def get_report(
         twr=twr,
         benchmarks=benchmarks,
         fx_change_ratio=fx_change,
+        residual=ResidualBreakdownOut(
+            total_krw=breakdown.total_krw,
+            fx_estimate_krw=breakdown.fx_estimate_krw,
+            dividend_krw=breakdown.dividend_krw,
+            cost_krw=breakdown.cost_krw,
+            leftover_krw=breakdown.leftover_krw,
+            fx_days=breakdown.fx_days,
+            fx_missing_days=breakdown.fx_missing_days,
+        ),
         buy_count=buy_count,
         sell_count=sell_count,
         turnover_krw=buy + sell,

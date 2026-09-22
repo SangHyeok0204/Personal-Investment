@@ -267,6 +267,34 @@ class Audit:
                 "report.twr", "report.assets",
             )
 
+        # ★수익률 추이의 '다리'와 기간 리포트(2026)의 '자산 분해'는 **같은 값**을
+        #   다르게 보여 주는 것이다. 어긋나면 둘 중 하나가 기준을 벗어난 것이다.
+        bridge = performance["bridge"]
+        self.same(
+            "주가 손익 (수익률 추이 vs 기간 리포트 2026)",
+            bridge["price_pnl_krw"], report_year["pnl_krw"],
+            "performance.bridge", "report",
+        )
+        self.same(
+            "환율 등 (수익률 추이 vs 기간 리포트 2026)",
+            bridge["fx_effect_krw"], report_year["unexplained_krw"],
+            "performance.bridge", "report",
+        )
+
+        # ⚠️'그 외' 분해는 넷을 더하면 합이 되어야 한다. 남는 것을 0 으로
+        #   맞추지 않으므로, 이 검사는 **모형이 맞는지가 아니라 산수가 맞는지**를 본다.
+        res = report_year["residual"]
+        if res["fx_estimate_krw"] is not None:
+            self.same(
+                "'그 외' 분해 (환율+배당-수수료+남는것 = 합)",
+                dec(res["fx_estimate_krw"]) + dec(res["dividend_krw"])
+                - dec(res["cost_krw"]) + dec(res["leftover_krw"]),
+                dec(res["total_krw"]),
+                "residual", "residual",
+            )
+            share = abs(dec(res["leftover_krw"])) / abs(dec(res["total_krw"])) * 100
+            print(f"  ·  설명 안 되는 몫 {share:.1f}% — 모형(환율 추정)의 한계다")
+
         print("\n[실현손익·배당]")
         self.same(
             "실현손익", realized["pnl_krw"], analytics["realized_pnl_krw"],

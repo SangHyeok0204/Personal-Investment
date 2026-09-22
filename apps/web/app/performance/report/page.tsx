@@ -54,6 +54,7 @@ export default function ReportPage() {
   const { accountId, connected } = useAccount();
   const [period, setPeriod] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [residualOpen, setResidualOpen] = useState(false);
 
   const report = useQuery({
     queryKey: ["report", accountId, period],
@@ -172,7 +173,7 @@ export default function ReportPage() {
             ) : data == null || p == null ? (
               <Empty text="표시할 기간이 없습니다" />
             ) : (
-              <Summary data={data} onExplain={() => setNotesOpen(true)} />
+              <Summary data={data} onExplain={() => setResidualOpen(true)} />
             )}
           </StubCard>
 
@@ -191,6 +192,15 @@ export default function ReportPage() {
           </StubCard>
         </div>
       </PageContainer>
+
+      <Modal
+        open={residualOpen}
+        onClose={() => setResidualOpen(false)}
+        title="'그 외'가 무엇인가"
+        subtitle="환율(추정) · 배당(실측) · 수수료(실측) · 남는 것"
+      >
+        {data && <ResidualDetail data={data} />}
+      </Modal>
 
       <Modal
         open={notesOpen}
@@ -389,6 +399,81 @@ function ChangeList({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── '그 외' 분해 ────────────────────────────────────────────────────────────
+//
+// ★잔차를 '그 외'로만 두면 사용자가 판단할 근거가 없다. 쪼개 보니 대부분
+//   환율이었다 — 전체 구간 실측: 잔차 -3,203,574 = 환율 -3,091,778
+//   + 배당 121,611 - 수수료 120,399 + 남는 것 -113,008(잔차의 3.5%).
+//
+// ⚠️환율만 **추정**이다(전일 주식평가액 × 환율 변동률). 증권사가 준 일별 환율
+//   칸이 532행 전부 비어 있다. 배당·수수료는 실측이다. 화면에서 구분해 적는다.
+//
+// ⚠️**월 단위로는 어긋난다.** 남는 것이 월별로 +25만 / +26만 / -37만 / -26만
+//   으로 흔들리는데 합치면 -11만이다. 부호가 번갈아 나며 상쇄되는 모양이라
+//   환산 시점 차이로 월 경계에서 밀리는 것으로 보인다. 월별 숫자를 "이만큼이
+//   환율이다"라고 읽으면 안 된다고 화면에 적는다.
+
+function ResidualDetail({ data }: { data: Report }) {
+  const r = data.residual;
+  const unknown = r.fx_estimate_krw == null;
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-hairline bg-canvas-soft/60 p-3">
+        <Line
+          label="환율"
+          value={r.fx_estimate_krw}
+          signed
+          note={`추정 · ${r.fx_days}일`}
+        />
+        <Line label="배당" value={r.dividend_krw} signed note="실측" />
+        <Line
+          label="수수료·세금"
+          value={r.cost_krw === "0" ? "0" : `-${r.cost_krw}`}
+          signed
+          note="실측"
+        />
+        <Line label="남는 것" value={r.leftover_krw} signed muted note="설명 안 됨" />
+        <div className="mt-1 border-t border-ink pt-1">
+          <Line label="그 외 (합)" value={r.total_krw} signed strong />
+        </div>
+      </div>
+
+      <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
+        <li>
+          <strong>환율만 추정입니다.</strong> 전일 주식평가액 × 그날 환율
+          변동률로 만든 값입니다 — 증권사가 주는 일별 환율 칸이 532행 전부 비어
+          있어 달리 방법이 없습니다. 배당과 수수료는 증권사 실측입니다.
+          {r.fx_missing_days > 0 && (
+            <> 환율을 못 읽은 날이 {r.fx_missing_days}일 있습니다(0 으로 치지 않았습니다).</>
+          )}
+        </li>
+        <li>
+          <strong>외화 예수금은 빼고 셌습니다.</strong> 예수금 중 얼마가 달러인지
+          따로 주지 않아 전액 원화로 보았습니다 — 그만큼 환율 영향이 실제보다
+          작게 잡힙니다.
+        </li>
+        <li>
+          <strong>월 단위 숫자를 &apos;이만큼이 환율&apos;로 읽지 마세요.</strong>{" "}
+          남는 것이 월별로 +25만 / +26만 / -37만 / -26만 으로 흔들리는데 전체를
+          합치면 -11만입니다. 부호가 번갈아 나며 상쇄되는 모양이라, 우리가 쓰는
+          종가 환율과 증권사의 환산 시점이 달라 월 경계에서 하루씩 밀리는 것으로
+          보입니다. <strong>전체 구간에서는 잔차의 3.5% 까지 닫힙니다.</strong>
+        </li>
+        <li>
+          <strong>남는 것을 0 으로 맞추지 않았습니다.</strong> 맞춰 놓으면 모형이
+          틀렸을 때 알 길이 없습니다.
+        </li>
+        {unknown && (
+          <li>
+            이 기간은 환율을 읽지 못해 분해하지 못했습니다 — 남는 것도 낼 수
+            없습니다.
+          </li>
+        )}
+      </ul>
     </div>
   );
 }
