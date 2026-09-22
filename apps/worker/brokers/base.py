@@ -256,9 +256,12 @@ class BrokerAdapter:
         tickers: list[tuple[str, str | None]],
         start: date,
         end: date,
-    ) -> list[DividendRow]:
-        """배당 수령 이력.
+    ) -> tuple[list[DividendRow], list[str]]:
+        """배당 수령 이력과 **못 물어본 종목**.
 
         tickers: (종목코드, 증권사 거래소코드 or None). 코드를 모르면 구현체가 찾는다.
+
+        ⚠️돌려주는 것은 `(배당 행, 건너뛴 티커)` 다. 건너뛴 것을 따로 내놓지
+          않으면 화면에서 **'배당 0원'과 '안 물어봤다'가 똑같이 보인다.**
         """
         raise NotImplementedError

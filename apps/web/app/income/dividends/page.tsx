@@ -155,7 +155,17 @@ export default function DividendsPage() {
 
   return (
     <>
-      <Topbar title="배당 이력" subtitle="수령한 배당 (원화)" />
+      {/* ⚠️기간을 부제에 적는다. 세금 화면은 **역년** 기준이라 같은 2026년인데
+          합계가 다르다(여기 투자 기간 ₩121,611 vs 세금 역년 ₩256,999).
+          기준을 안 적으면 둘 중 하나가 틀린 것처럼 보인다. */}
+      <Topbar
+        title="배당 이력"
+        subtitle={
+          data?.first_pay_date
+            ? `수령한 배당 (원화) · ${data.first_pay_date} ~ ${data.last_pay_date}`
+            : "수령한 배당 (원화) · 투자 기간 기준"
+        }
+      />
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="키움 배당 조회" />}
 

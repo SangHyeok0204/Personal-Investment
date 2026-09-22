@@ -1086,12 +1086,18 @@ def list_dividends(
         .order_by(Dividend.pay_date.desc(), Dividend.ticker)
     ).all()
 
+    # ⚠️배당 원장의 종목명은 usa21730 의 `stk_nm` 이라 **영문 법인명**이다
+    #   ("MICROSOFT CORP", "ISHARES 0-3 MONTH TREASURY BOND ETF"). 다른 화면은
+    #   한글 이름을 쓰므로 그대로 두면 같은 종목이 다르게 보인다.
+    #   `app.core.naming` 이 어느 이름을 쓸지 정한다.
+    dividend_names = naming.display_names(db, {row.ticker for row, _ in rows})
+
     items = [
         DividendOut(
             id=row.id,
             pay_date=row.pay_date,
             ticker=row.ticker,
-            asset_name=row.asset_name,
+            asset_name=dividend_names.get(row.ticker) or row.asset_name,
             sector=sector,
             amount_krw=row.amount_krw,
             currency=row.currency,
@@ -1133,7 +1139,10 @@ def list_dividends(
         ],
         by_ticker=[
             DividendByTickerOut(
-                ticker=t, asset_name=name, amount_krw=amount, count=count
+                ticker=t,
+                asset_name=dividend_names.get(t) or name,
+                amount_krw=amount,
+                count=count,
             )
             for t, name, amount, count in ticker_rows
         ],

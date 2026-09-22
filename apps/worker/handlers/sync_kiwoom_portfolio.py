@@ -498,7 +498,7 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         dividend_targets = history_repo.tickers_for_dividends(
                             conn, account_id
                         )
-                    dividends = adapter.fetch_dividends(
+                    dividends, dividend_skipped = adapter.fetch_dividends(
                         account_ref, dividend_targets, history_start, now.date()
                     )
                     with engine.begin() as conn:
@@ -507,6 +507,16 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         )
                         # 찾아낸 거래소 코드를 남겨 다음 동기화의 탐색을 줄인다.
                         history_repo.remember_exchange_codes(conn, dividends)
+                    # ⚠️**못 물어본 종목을 조용히 넘기지 않는다.** 배당 조회는
+                    #   종목마다 거래소 코드가 있어야 하는데, 못 찾으면 그 종목은
+                    #   조회 자체를 못 한다. 그걸 안 알리면 화면에서 '배당 0원'과
+                    #   '안 물어봤다'가 똑같이 보인다.
+                    if dividend_skipped:
+                        history_notes.append(
+                            f"배당 조회에서 {len(dividend_skipped)}종목을 건너뛰었습니다"
+                            f"(거래소를 못 찾음): {', '.join(dividend_skipped)}."
+                            " 이 종목들은 '배당 0원'이 아니라 **확인 못 한 것**입니다."
+                        )
             # 체결은 들어왔는데 일별성과·배당이 0이면 조회 자체가 빈 응답이었다는 뜻이다.
             if history_counts["trades"] > 0:
                 if history_counts["daily_performance"] == 0:

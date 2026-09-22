@@ -8,6 +8,7 @@ round-1 tests); `pytest --collect-only` works without a DB.
 import json
 import os
 import uuid
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -792,6 +793,54 @@ def test_client_paging_follows_header_cont_yn():
     assert tr_calls[1][2] == "KEY1"  # ... carrying the next-key from page 1
     merged = domestic.parse_balance(pages)
     assert len(merged.acnt_evlt_remn_indv_tot) == 2
+
+
+def test_dividend_fetch_reports_tickers_it_could_not_ask_about():
+    """⚠️**못 물어본 종목을 조용히 넘기지 않는다.**
+
+    배당 조회(usa21730)는 종목마다 거래소 코드(ND/NY/NA)가 있어야 한다. 못
+    찾으면 그 종목은 조회 자체를 못 한 것인데, 예전에는 그냥 건너뛰었다.
+    그러면 화면에서 **'배당 0원'과 '안 물어봤다'가 똑같이 보인다** — 배당을
+    주는 종목이 빠져 있어도 알 길이 없다.
+    """
+    from brokers.base import AccountRef
+    from brokers.credentials import BrokerCredentials
+    from brokers.kiwoom.broker import KiwoomAdapter
+
+    def usa21730(headers, body):
+        # GHOST 는 증권사가 "모르는 종목"(1903)이라고 답한다 — 조회를 못 한 것이다.
+        if body.get("stk_cd") == "GHOST":
+            return FakeResponse(
+                {"return_code": 1, "return_msg": "1903 종목코드가 올바르지 않습니다"}
+            )
+        if body.get("stk_cd") == "GOOD" and body.get("stex_tp") == "ND":
+            return FakeResponse({
+                "result_list": [
+                    {"last_base_dt": "20260910", "dvid_amt": "5178", "stk_nm": "좋은종목"}
+                ],
+                "return_code": 0,
+            })
+        return FakeResponse({"result_list": [], "return_code": 0})
+
+    adapter = KiwoomAdapter(
+        BrokerCredentials(
+            broker_code="KIWOOM", app_key="k", secret_key="s",
+            base_url="https://mockapi.kiwoom.com",
+        ),
+        http_client=FakeHttpClient({"usa21730": usa21730}),
+        sleep=lambda _s: None,
+        markets=("US",),
+    )
+    rows, skipped = adapter.fetch_dividends(
+        AccountRef(external_account_id="1"),
+        [("GOOD", None), ("GHOST", None)],
+        date(2026, 1, 1),
+        date(2026, 9, 23),
+    )
+
+    assert [r.ticker for r in rows] == ["GOOD"]
+    # GHOST 는 '배당 0원'이 아니라 **확인 못 한 것**이다.
+    assert skipped == ["GHOST"]
 
 
 def test_normalize_ticker_strips_kiwoom_prefix():

@@ -550,6 +550,11 @@ class Audit:
         collect("편입비 이벤트", inclusion["events"], name_key="asset_name")
         collect("실현손익", realized["items"], name_key="asset_name")
         collect("기여도", analytics["contributions"])
+        # ⚠️배당 원장의 이름은 usa21730 의 stk_nm 이라 **영문 법인명**이다
+        #   ("MICROSOFT CORP"). 이 화면을 감사에 안 넣었다가 놓쳤다 —
+        #   이름을 내보내는 곳을 하나라도 빼면 거기서 다시 갈린다.
+        collect("배당 이력", dividends["items"], name_key="asset_name")
+        collect("배당 종목별", dividends["by_ticker"], name_key="asset_name")
 
         mismatched = {
             ticker: names for ticker, names in seen.items() if len(set(names.values())) > 1

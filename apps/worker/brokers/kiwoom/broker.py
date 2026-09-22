@@ -349,17 +349,28 @@ class KiwoomAdapter(BrokerAdapter):
         ⚠️종목마다 거래소 코드를 알아야 하는데 잔고 응답이 알려주지 않는다. 이미
           아는 코드가 있으면 그것만 쓰고, 없으면 ND→NY→NA 로 찾는다. 찾은 코드는
           결과에 실어 보내 호출부가 저장하게 한다(다음부터 헛호출이 줄어든다).
+
+        ⚠️**못 물어본 종목을 조용히 넘기지 않는다.** 거래소를 못 찾거나 증권사가
+          모르는 종목이라고 답하면 그 종목은 조회 자체를 못 한 것인데, 예전에는
+          그냥 `continue` 했다. 그러면 화면에서 **'배당 0원'과 '안 물어봤다'가
+          똑같이 보인다** — 배당을 주는 종목인데 빠져 있어도 알 길이 없다.
+          건너뛴 티커를 두 번째 값으로 함께 돌려준다.
+
+        돌려주는 것: `(배당 행 목록, 건너뛴 티커 목록)`
         """
         if "US" not in self._markets:
-            return []
+            return [], []
 
         out: list[DividendRow] = []
+        skipped: list[str] = []
         for ticker, known_code in tickers:
             if not ticker:
                 continue
             code = known_code or self._resolve_exchange_code(ticker, end)
             if code is None:
-                continue  # 세 거래소 어디에도 없다 — 조회 대상이 아니다.
+                # 세 거래소 어디에도 없다 — **조회를 못 한 것**이지 배당이 0 인 게 아니다.
+                skipped.append(ticker)
+                continue
             try:
                 pages = self._client.request_tr(
                     API_US_STOCK_DAILY,
@@ -373,6 +384,7 @@ class KiwoomAdapter(BrokerAdapter):
                 )
             except KiwoomApiError as exc:
                 if _is_unknown_symbol(exc):
+                    skipped.append(ticker)
                     continue
                 raise
             for page in pages:
@@ -397,7 +409,7 @@ class KiwoomAdapter(BrokerAdapter):
                     )
 
         out.sort(key=lambda d: (d.pay_date, d.ticker))
-        return out
+        return out, sorted(set(skipped))
 
     def _resolve_exchange_code(self, ticker: str, end: date) -> str | None:
         """종목이 어느 거래소인지 찾는다(ND/NY/NA).
@@ -405,6 +417,19 @@ class KiwoomAdapter(BrokerAdapter):
         ⚠️탐색에 **짧은 구간**을 쓴다. 전체 구간(1년)으로 찾으면 응답이 360행이라
           한 종목에 최대 3번 무거운 조회가 나가고, 실제로 read timeout 이 났다.
           맞는 거래소인지만 보면 되므로 며칠이면 충분하다.
+
+        ⚠️**알려진 약점(2026-09-23).** 여기는 "에러가 안 나면 맞는 거래소"로
+          친다 — 빈 응답도 통과한다. 그래서 **최근 5일 안에 아무 행이 없는
+          종목**(이미 판 종목이 특히 그렇다)은 첫 코드인 ND 가 그대로 붙는다.
+          그 종목이 사실 NYSE 면 배당 조회가 조용히 빈 값을 돌려준다 —
+          건너뛴 것으로도 안 잡힌다.
+
+          고치려면 "행이 온 코드만 인정"으로 바꿔야 하는데, 그러면 판 종목은
+          매번 건너뛴 것으로 보고된다. 제대로 된 답은 **찾은 코드를 티커별로
+          기억하는 것**이다. 지금은 `assets.broker_exchange_code` 에만 적는데
+          assets 에는 보유 종목만 있어서 판 종목은 못 남긴다(실측: SGOV 는
+          배당이 14건이나 들어왔는데 코드가 안 남아 매번 다시 더듬는다).
+          `dividends` 테이블에 코드 칸이 없어 마이그레이션이 필요하다.
         """
         probe_start = end - timedelta(days=_EXCHANGE_PROBE_DAYS)
         for code in _US_EXCHANGE_CODES:
