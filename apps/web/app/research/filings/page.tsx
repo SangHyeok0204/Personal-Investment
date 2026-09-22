@@ -121,7 +121,7 @@ export default function FilingsPage() {
             value={data ? `${data.insider_total}건` : null}
             hint={
               data
-                ? `최근 ${data.insider_window_days}일 · 나열하지 않음`
+                ? `최근 ${data.insider_window_days}일 · 그중 30일 내 ${data.insider_recent_total}건`
                 : "3 · 4 · 5 · 144"
             }
             actionHint="눌러서 왜 안 보여주는지"
@@ -259,6 +259,20 @@ export default function FilingsPage() {
             보여 줍니다{data ? ` (최근 ${data.insider_window_days}일 ${data.insider_total}건)` : ""}.
           </li>
           <li>
+            <strong>대신 &quot;몰렸나&quot;는 봅니다.</strong> 고르게 났다면 최근
+            1/3 구간(30일)에 33% 쯤 들어옵니다 — 그보다 한참 높으면 무슨 일이
+            있었다는 뜻입니다(락업 해제·베스팅·정기 매도 계획 개시 등).
+            종목별 표의 <strong>최근 30일</strong> 칸이 그 몫이고, 60% 를 넘으면
+            진하게 적습니다.
+          </li>
+          <li>
+            <strong>다만 방향은 모릅니다.</strong> 서식 4 는 매수·매도·부여를 모두
+            담는데 SEC <strong>제출 목록에는 그 구분도, 누가 냈는지도 없습니다</strong>
+            — 그건 서식 원문을 건마다 받아야 나옵니다. 그래서 이 화면은 &quot;내부자가
+            팔고 있다&quot;고 말하지 않습니다. 궁금하면 그 종목의 SEC 페이지를 직접
+            여세요.
+          </li>
+          <li>
             <strong>ETF 는 &quot;공시 없음&quot;이 아닙니다.</strong> 개별 기업 공시
             대상이 아니라 신탁 단위로 냅니다. 다만 전부 그런 건 아니라{" "}
             <strong>ETF 라고 하드코딩하지 않고</strong> SEC 에 CIK 가 있는지로만
@@ -312,7 +326,7 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
       )}
 
       <DataTable
-        columns={["종목", "공시", "내부자"]}
+        columns={["종목", "공시", "내부자", "최근 30일"]}
         align={["left", "right", "right"]}
         empty="표시할 종목이 없습니다"
       >
@@ -331,6 +345,28 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
               {t.truncated && <span className="ml-0.5 text-ask">+</span>}
             </Cell>
             <Cell tone="muted">{t.insider_count}</Cell>
+            {/* ⚠️**몰림만 보여 준다.** 고르게 났다면 최근 1/3 구간에 33% 쯤
+                들어온다 — 그보다 한참 높으면 무슨 일이 있었다는 뜻이다(락업
+                해제·베스팅 등). 방향은 모른다: 서식 4 는 매수·매도·부여를
+                모두 담고, SEC 제출 목록에는 그 구분이 없다. */}
+            <Cell
+              tone={
+                t.insider_count >= 10 &&
+                t.insider_recent_count / t.insider_count >= 0.6
+                  ? undefined
+                  : "muted"
+              }
+              strong={
+                t.insider_count >= 10 &&
+                t.insider_recent_count / t.insider_count >= 0.6
+              }
+            >
+              {t.insider_count
+                ? `${t.insider_recent_count} (${Math.round(
+                    (t.insider_recent_count / t.insider_count) * 100,
+                  )}%)`
+                : "—"}
+            </Cell>
           </tr>
         ))}
       </DataTable>

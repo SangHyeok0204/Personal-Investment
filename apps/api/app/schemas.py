@@ -1481,6 +1481,9 @@ class FilingTickerOut(BaseModel):
     reason: str | None
     filing_count: int
     insider_count: int
+    #: 그중 최근 1/3 구간(기본 30일)에 몰린 건수. ⚠️**방향은 모른다** —
+    #  서식 4 는 매수·매도·부여를 모두 담고, 제출 목록에는 그 구분이 없다.
+    insider_recent_count: int = 0
     #: 상한에 걸려 잘렸는지. 잘렸으면 화면이 그 사실을 말해야 한다.
     truncated: bool
 
@@ -1499,6 +1502,9 @@ class FilingsOut(BaseModel):
     #: 내부자 서식(3/4/5/144)은 개별로 싣지 않고 센다. 실측 NVDA 최근 1001건 중
     #: 803건이 임원 서류라, 나열하면 나머지가 안 보인다.
     insider_total: int
+    #: 그중 최근 1/3 구간에 몰린 건수. 갑자기 몰리는 것 자체가 신호다
+    #  (락업 해제·베스팅 등). ⚠️방향은 모른다.
+    insider_recent_total: int = 0
     covered_count: int
     not_covered_count: int
     source_ok: bool

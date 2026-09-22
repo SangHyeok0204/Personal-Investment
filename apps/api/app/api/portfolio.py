@@ -2895,6 +2895,7 @@ def _build_filings(tickers: list[str], names: dict[str, str]) -> FilingsOut:
                 reason=r.reason,
                 filing_count=len(r.filings),
                 insider_count=r.insider_count,
+                insider_recent_count=r.insider_recent_count,
                 truncated=r.truncated,
             )
         )
@@ -2919,6 +2920,7 @@ def _build_filings(tickers: list[str], names: dict[str, str]) -> FilingsOut:
         window_days=FILINGS_WINDOW_DAYS,
         insider_window_days=FILINGS_INSIDER_WINDOW_DAYS,
         insider_total=sum(t.insider_count for t in summary),
+        insider_recent_total=sum(t.insider_recent_count for t in summary),
         covered_count=len(covered),
         not_covered_count=len(not_covered),
         # CIK 를 하나도 못 받았으면 SEC 자체가 안 된 것이다 — "공시 없음"이 아니다.

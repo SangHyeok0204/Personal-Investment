@@ -181,8 +181,15 @@ class TickerFilings:
     ok: bool
     reason: str | None
     filings: list[Filing] = field(default_factory=list)
-    #: 최근 구간의 내부자 서식(3/4/5/144) 건수. 개별 나열은 하지 않는다.
+    #: 최근 구간(기본 90일)의 내부자 서식(3/4/5/144) 건수. 개별 나열은 하지 않는다.
+    #: ⚠️나열해 봐야 쓸모가 없다 — SEC 제출 목록에는 **누가 냈는지가 없어서**
+    #:   "4 · 내부자 보고 · 09-22" 505줄이 될 뿐이다. 이름과 매수/매도는 서식
+    #:   원문을 건마다 받아야 나온다.
     insider_count: int = 0
+    #: 그중 **최근 1/3 구간**(기본 30일)에 몰린 건수. 갑자기 몰리는 것 자체가
+    #: 신호다(락업 해제·베스팅 등). ⚠️방향은 모른다 — 서식 4 는 매수·매도·부여를
+    #: 모두 담는다. 화면에서도 "팔고 있다"고 쓰지 않는다.
+    insider_recent_count: int = 0
     #: 상한에 걸려 잘렸는지. ⚠️조용히 자르면 합쳐 보는 피드에 **구멍**이 생긴다
     #: (실측: 상한 25 에서 GOOGL 59건 중 34건이 사라졌다). 잘렸으면 말한다.
     truncated: bool = False
@@ -234,6 +241,7 @@ def _one(
     company: str,
     since: date,
     insider_since: date,
+    insider_recent_since: date,
     limit: int,
 ) -> TickerFilings:
     try:
@@ -259,6 +267,7 @@ def _one(
 
     filings: list[Filing] = []
     insider = 0
+    insider_recent = 0
     truncated = False
     numeric_cik = str(int(cik))
 
@@ -269,8 +278,11 @@ def _one(
         category = form_category(form)
         if category == CATEGORY_INSIDER:
             # 개별로 싣지 않고 센다 — 556건을 나열하면 나머지가 안 보인다.
+            # (그리고 제출 목록에는 누가 냈는지가 없어 나열해도 읽을 것이 없다.)
             if filed_date >= insider_since:
                 insider += 1
+                if filed_date >= insider_recent_since:
+                    insider_recent += 1
             continue
         if filed_date < since:
             continue
@@ -306,7 +318,8 @@ def _one(
 
     return TickerFilings(
         ticker=ticker, cik=cik, company=company, ok=True, reason=None,
-        filings=filings, insider_count=insider, truncated=truncated,
+        filings=filings, insider_count=insider,
+        insider_recent_count=insider_recent, truncated=truncated,
     )
 
 
@@ -340,6 +353,8 @@ def fetch_filings(
     today = date.today()
     since = today - timedelta(days=days)
     insider_since = today - timedelta(days=insider_days)
+    # 최근 1/3 구간. 90일이면 30일이다 — 같은 창을 셋으로 나눠 "몰렸나"를 본다.
+    insider_recent_since = today - timedelta(days=max(insider_days // 3, 1))
 
     known = [(t, *cik_map[t]) for t in wanted if t in cik_map]
     unknown = [
@@ -360,7 +375,8 @@ def fetch_filings(
                     pool.map(
                         lambda args: _one(
                             client, args[0], args[1], args[2],
-                            since, insider_since, limit_per_ticker,
+                            since, insider_since, insider_recent_since,
+                            limit_per_ticker,
                         ),
                         known,
                     )

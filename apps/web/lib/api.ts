@@ -4165,6 +4165,8 @@ export interface FilingTicker {
   reason: string | null;
   filing_count: number;
   insider_count: number;
+  /** 그중 최근 1/3 구간(기본 30일). ⚠️방향은 모른다 — 매수·매도·부여가 섞여 있다. */
+  insider_recent_count: number;
   truncated: boolean;
 }
 
@@ -4175,6 +4177,7 @@ export interface Filings {
   window_days: number;
   insider_window_days: number;
   insider_total: number;
+  insider_recent_total: number;
   covered_count: number;
   not_covered_count: number;
   /** false 면 화면이 "공시가 없습니다"라고 말하면 안 된다. */
