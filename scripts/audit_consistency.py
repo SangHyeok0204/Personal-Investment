@@ -137,6 +137,7 @@ class Audit:
         ]
         allocation = self.get("/portfolio/allocation")
         fx = self.get("/portfolio/fx-exposure")
+        costs = self.get("/portfolio/costs")
         allocation_currency = self.get("/portfolio/allocation?dimension=currency")
         taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
@@ -312,6 +313,16 @@ class Audit:
         # 제비용이 정말 제비용인지 — 모형(0.25% × (매입+평가))과 견준다.
         # ★검사가 아니라 **관찰**이다. 모형이 어긋나기 시작하면 수수료율이
         #   바뀌었거나 증권사 정의가 바뀐 것이다.
+        # ★제비용 모형이 쓰는 0.25% 가 **실제로 낸 수수료율**과 같은지.
+        #   수수료/세금 화면은 실제 지불액 ÷ 거래대금을 잰다 — 완전히 다른
+        #   경로로 같은 값이 나와야 한다. 증권사가 요율을 바꾸면 여기서 갈린다.
+        self.same(
+            "수수료율 (실제 지불 vs 제비용 모형이 쓰는 0.25%)",
+            costs["cost_ratio"], Decimal("0.0025"),
+            "costs", "rebalance.MEASURED_COST_RATE",
+            tol=Decimal("0.0001"),
+        )
+
         gap = abs(dec(summary["fee_reserve_krw"]) - dec(summary["fee_reserve_modelled_krw"]))
         share = gap / abs(dec(summary["fee_reserve_krw"])) * 100
         print(
@@ -484,26 +495,37 @@ class Audit:
                     tol=broker * Decimal("0.01"),
                 )
         # ⚠️같은 종목이 화면마다 다른 이름으로 보이면 사용자는 다른 종목으로
-        #   읽는다. 체결 원장의 이름은 증권사 날것이라 띄어쓰기가 없다
-        #   (GLD: "SPDRGOLDSHARESHKD" vs "금 SPDR ETF").
-        holding_names = {
-            h["ticker"]: h.get("name") for h in holdings["items"] if h.get("name")
+        #   읽는다. 증권사 TR 마다 이름 형식이 다르다 — 체결 TR 은 띄어쓰기가
+        #   없다(GLD: "SPDRGOLDSHARESHKD" vs 잔고 TR "금 SPDR ETF").
+        #   **이름을 내보내는 화면을 전부 맞댄다** — 한 군데만 보면 다음에 만드는
+        #   화면에서 또 틀린다.
+        seen: dict[str, dict[str, str]] = {}
+
+        def collect(screen: str, rows, ticker_key="ticker", name_key="name"):
+            for row in rows:
+                ticker, name = row.get(ticker_key), row.get(name_key)
+                if ticker and name:
+                    seen.setdefault(ticker, {})[screen] = name
+
+        collect("보유 종목", holdings["items"])
+        collect("수수료/세금", costs["by_ticker"])
+        collect("편입비", inclusion["holdings"], name_key="asset_name")
+        collect("편입비 이벤트", inclusion["events"], name_key="asset_name")
+        collect("실현손익", realized["items"], name_key="asset_name")
+        collect("기여도", analytics["contributions"])
+
+        mismatched = {
+            ticker: names for ticker, names in seen.items() if len(set(names.values())) > 1
         }
-        mismatched = [
-            f'{h["ticker"]}: {h["asset_name"]} vs {holding_names[h["ticker"]]}'
-            for h in inclusion["holdings"]
-            if h["ticker"] in holding_names
-            and h.get("asset_name")
-            and h["asset_name"] != holding_names[h["ticker"]]
-        ]
         self.checked += 1
         if mismatched:
-            print(f"  X  종목명 (편입비 vs 보유 종목): {len(mismatched)}건 다름")
-            for line in mismatched[:5]:
-                print(f"       {line}")
-            self.failures.append("종목명 (편입비 vs 보유 종목)")
+            print(f"  X  종목명: {len(mismatched)}종목이 화면마다 다르다")
+            for ticker, names in list(mismatched.items())[:5]:
+                for screen, name in names.items():
+                    print(f"       {ticker:6s} {screen:12s} {name}")
+            self.failures.append("종목명 (화면 간)")
         else:
-            print(f"  OK 종목명 (편입비 vs 보유 종목): {len(holding_names)}종목 일치")
+            print(f"  OK 종목명: {len(seen)}종목이 모든 화면에서 같다")
 
         # '보유 원가'가 누적 매수와 헷갈리지 않게, 둘을 나란히 찍는다.
         if inclusion.get("total_buy"):

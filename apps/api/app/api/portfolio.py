@@ -30,6 +30,7 @@ from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
 from app.core import investing as inv
+from app.core import naming
 from app.core import portfolio_character as pc
 from app.core import rebalance as rb
 from app.core import fee_reserve as fr
@@ -1492,11 +1493,7 @@ def get_inclusion(
     #   **자산 표의 이름을 먼저 쓰고**, 없을 때만 체결 원장 이름으로 떨어진다
     #   (이미 판 종목은 자산 표에 없을 수 있다).
     names = {t.ticker: t.asset_name for t in trades if t.asset_name}
-    for ticker, name in db.execute(
-        select(Asset.ticker, Asset.name).where(Asset.ticker.in_(names.keys()))
-    ).all():
-        if name:
-            names[ticker] = name
+    names.update(naming.display_names(db, {t.ticker for t in trades}))
     today = date.today()
     holdings = []
     for ticker, (entry, exited) in sorted(periods.items()):
@@ -2403,6 +2400,7 @@ def get_trading_costs(
 
     months: dict[str, list] = {}
     tickers: dict[str, list] = {}
+    display_names = naming.display_names(db, {t.ticker for t in rows})
     for trade in rows:
         key = f"{trade.trade_date.year:04d}-{trade.trade_date.month:02d}"
         month = months.setdefault(key, [0, zero, zero])
@@ -2410,8 +2408,10 @@ def get_trading_costs(
         month[1] += trade.amount_local or zero
         month[2] += cost_of(trade)
 
-        row = tickers.setdefault(trade.ticker, [trade.asset_name, 0, zero, zero])
-        row[0] = row[0] or trade.asset_name
+        row = tickers.setdefault(trade.ticker, [None, 0, zero, zero])
+        # ⚠️자산 표 이름이 먼저다. 체결 원장 이름은 증권사 날것이라 띄어쓰기가
+        #   없다(SOXL: "미국반도체3배디렉시온ETF"). `app.core.naming` 참고.
+        row[0] = display_names.get(trade.ticker) or row[0] or trade.asset_name
         row[1] += 1
         row[2] += trade.amount_local or zero
         row[3] += cost_of(trade)
