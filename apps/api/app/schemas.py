@@ -736,7 +736,8 @@ class PlanOutcomeOut(BaseModel):
     unfilled_quantity: Decimal
     cancelled_quantity: Decimal
     no_order: bool
-    #: 두 원장이 갈리나. 실측으로 실제 있는 일이다(SKHY 2026-09-18).
+    #: 두 원장이 갈리나. ⚠️근거로 들었던 SKHY 사례는 원장 불일치가 아니라
+    #: 동기화 지연 + 좁은 창이었다(2026-09-22 정정). 장치는 남긴다.
     sources_disagree: bool
 
 

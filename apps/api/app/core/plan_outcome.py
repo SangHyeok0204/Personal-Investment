@@ -9,9 +9,22 @@
   둘 중 하나만 보면 틀린다. 계획 11주 중 0주가 체결됐을 때, 주문을 안 낸 것과
   주문은 냈는데 안 걸린 것은 **완전히 다른 복기**다.
 
-⚠️두 원장이 **서로 다른 말을 할 때가 있다.** 실측(SKHY 2026-09-18): 주문 원장은
-  2주 체결이라는데 체결 원장에는 매도 행이 아예 없다(증권사 피드 누락). 한쪽만
-  보고 숫자를 내면 화면이 거짓말을 한다 — 둘 다 싣고 갈리면 그 사실을 알린다.
+⚠️두 원장이 서로 다른 말을 할 수 있으므로 **둘 다 싣는다**(`sources_disagree`).
+  한쪽만 보고 숫자를 내면 화면이 거짓말을 할 수 있다.
+
+  ★2026-09-22 정정 — 이 장치의 근거로 SKHY 사례("주문 원장은 2주 체결인데 체결
+    원장에는 매도 행이 없다")를 적어 뒀는데 **그 해석이 틀렸다.** 원인은 원장
+    불일치가 아니라 둘이었다: ① 체결 동기화가 2일 밀려 있었고 ② 창이 좁았다
+    (결제일 T+2). 동기화하고 창을 고치니 양쪽 다 2주로 **일치한다.**
+    장치는 남긴다 — 부분체결·취소가 원장마다 다르게 적히는 일은 여전히 가능하고,
+    그때 조용히 한쪽을 고르는 것보다 낫다. 다만 **근거로 이 사례를 들지 말 것.**
+
+★**체결 원장의 날짜는 체결일이 아니라 결제일(T+2)이다.** 실측(2026-09-22,
+  주문과 짝지어진 85건): 0일 2건 · **2일 55건** · **4일 25건**(주말 낀 경우) ·
+  5일 3건. `trades` 에는 체결일이 아예 없다(`processed_at` 은 시각뿐).
+  그래서 창을 **비대칭**으로 잡는다 — 체결은 판단보다 앞설 수 없지만
+  며칠 뒤처질 수는 있다. 대칭 ±3일로 두면 **85건 중 28건(33%)을 놓친다**
+  (실제로 SKHY 가 "체결 0주"로 나온 이유가 이것이었다).
 
 ⚠️슬리피지의 부호는 **방향에 따라 뒤집힌다.** 매수는 싸게 사야 이득이고 매도는
   비싸게 팔아야 이득이다. 같은 부호로 두면 매도 복기가 통째로 반대가 된다.
@@ -79,7 +92,9 @@ def evaluate(
     entry_date: date,
     fills: list[Fill],
     orders: list[OrderAttempt],
-    window_days: int = 3,
+    # ⚠️대칭이 아니다. 결제일이 뒤로 밀리므로 뒤쪽을 넉넉히 둔다(위 주석 참고).
+    window_before: int = 1,
+    window_after: int = 7,
     fx_rate: Decimal | None = None,
 ) -> Outcome:
     """계획 하나를 그 주변 체결·주문과 대조한다.
@@ -89,7 +104,8 @@ def evaluate(
       나란히 놓고 "1,300% 불리"라고 말하게 된다.
     """
     side = (planned_side or "").upper()
-    lo, hi = entry_date - timedelta(days=window_days), entry_date + timedelta(days=window_days)
+    lo = entry_date - timedelta(days=window_before)
+    hi = entry_date + timedelta(days=window_after)
 
     near_fills = [
         f for f in fills if f.side.upper() == side and lo <= f.trade_date <= hi
@@ -140,8 +156,7 @@ def evaluate(
         cancelled_quantity=cancelled,
         # ⚠️주문이 없는 것과 주문이 안 걸린 것은 다른 복기다.
         no_order=not near_orders,
-        # ⚠️두 원장이 갈리는 일이 실제로 있다. 실측(SKHY 2026-09-18): 주문
-        #   원장은 2주 체결이라는데 체결 원장에는 매도 행이 **아예 없다**.
-        #   체결만 보고 "0주"라고 적으면 화면이 거짓말을 한다.
+        # ⚠️갈리면 화면이 말하게 한다. (근거로 삼았던 SKHY 사례는 원장 불일치가
+        #   아니라 동기화 지연 + 좁은 창이었다 — 위 정정 주석 참고.)
         sources_disagree=filled != order_filled,
     )

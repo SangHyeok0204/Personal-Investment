@@ -2,7 +2,7 @@
 
 ★일반 메모장과 다른 점은 **결과를 붙여 준다**는 것이다. "왜 샀는지" 옆에
   "그래서 어떻게 됐는지"가 없으면 복기가 안 된다. 각 메모마다:
-    · 그 날 전후의 실제 체결(±3일)
+    · 그 날 이후 7일 안의 실제 체결(결제일 기준 — 아래 주석 참고)
     · 지금 보유 중이면 현재 평가손익
     · 이미 청산했으면 실현손익
   을 찾아 함께 내보낸다.
@@ -42,9 +42,14 @@ router = APIRouter(prefix="/api/v1/journal", tags=["journal"])
 
 VALID_KINDS = ("ENTRY", "EXIT", "REVIEW", "IDEA")
 
-# 메모 날짜 전후로 체결을 찾는 범위. 판단한 날과 실제 체결일이 며칠 어긋나는 건
-# 흔하다(주문을 걸어 두고 나중에 체결되는 경우).
-_TRADE_WINDOW_DAYS = 3
+# 메모 날짜 전후로 체결을 찾는 범위.
+#
+# ★**대칭이 아니다.** 체결 원장의 날짜는 체결일이 아니라 **결제일(T+2)** 이다
+#   (실측 2026-09-22, 주문과 짝지어진 85건: 0일 2 · 2일 55 · 4일 25 · 5일 3).
+#   대칭 ±3일로 두면 **28건(33%)을 놓친다** — 실제로 그래서 계획 메모가
+#   "체결 0주"라고 말했다. 체결은 판단보다 앞설 수 없으므로 앞은 좁게 둔다.
+_TRADE_WINDOW_BEFORE = 1
+_TRADE_WINDOW_AFTER = 7
 
 
 def _normalize(ticker: str | None) -> str | None:
@@ -112,7 +117,8 @@ def _plan_outcome(entry, trades_by_ticker, orders_by_ticker, fx_rate):
         entry_date=entry.entry_date,
         fills=fills,
         orders=attempts,
-        window_days=_TRADE_WINDOW_DAYS,
+        window_before=_TRADE_WINDOW_BEFORE,
+        window_after=_TRADE_WINDOW_AFTER,
         fx_rate=fx_rate,
     )
     return PlanOutcomeOut(
@@ -136,7 +142,7 @@ def _build(entries: list[JournalEntry], db: Session) -> JournalListOut:
     tickers = {e.ticker for e in entries if e.ticker}
     held, realized = _outcomes(db, tickers)
 
-    # 메모 날짜 ±3일 안의 체결을 한 번에 가져와 파이썬에서 짝짓는다.
+    # 메모 날짜 주변의 체결을 한 번에 가져와 파이썬에서 짝짓는다.
     # 메모마다 쿼리를 돌리면 N+1 이 된다.
     trades_by_ticker: dict[str, list[Trade]] = {}
     orders_by_ticker: dict[str, list[Order]] = {}
@@ -164,9 +170,9 @@ def _build(entries: list[JournalEntry], db: Session) -> JournalListOut:
     for entry in entries:
         near: list[JournalTradeOut] = []
         if entry.ticker:
-            window = timedelta(days=_TRADE_WINDOW_DAYS)
             for trade in trades_by_ticker.get(entry.ticker, []):
-                if abs((trade.trade_date - entry.entry_date).days) <= window.days:
+                gap = (trade.trade_date - entry.entry_date).days
+                if -_TRADE_WINDOW_BEFORE <= gap <= _TRADE_WINDOW_AFTER:
                     near.append(
                         JournalTradeOut(
                             trade_date=trade.trade_date,

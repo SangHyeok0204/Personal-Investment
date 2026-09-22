@@ -60,9 +60,23 @@ def test_only_the_same_side_counts():
     assert out.filled_quantity == D("0")
 
 
-def test_window_excludes_far_away_fills():
-    out = _ev(fills=[Fill(date(2026, 9, 30), "SELL", D("11"), D("140"))])
-    assert out.filled_quantity == D("0")
+def test_window_is_asymmetric_because_trade_date_is_the_settlement_date():
+    """★체결 원장의 날짜는 체결일이 아니라 **결제일(T+2)** 이다.
+
+    실측(주문과 짝지어진 85건): 0일 2 · 2일 55 · **4일 25**(주말 낀 경우) · 5일 3.
+    대칭 ±3일로 두면 28건(33%)을 놓친다 — 실제로 그래서 "체결 0주"가 나왔다.
+    """
+    # 4일 뒤(주말 낀 T+2)도 잡혀야 한다.
+    late = _ev(fills=[Fill(date(2026, 9, 22), "SELL", D("11"), D("140"))])
+    assert late.filled_quantity == D("11")
+
+    # 너무 먼 것은 여전히 아니다.
+    far = _ev(fills=[Fill(date(2026, 9, 30), "SELL", D("11"), D("140"))])
+    assert far.filled_quantity == D("0")
+
+    # ⚠️체결은 판단보다 **앞설 수 없다** — 앞쪽은 좁게 둔다.
+    early = _ev(fills=[Fill(date(2026, 9, 14), "SELL", D("11"), D("140"))])
+    assert early.filled_quantity == D("0")
 
 
 def test_partial_fill_reports_a_rate():
@@ -91,9 +105,13 @@ def test_average_price_ignores_fills_without_a_price():
 
 
 def test_the_two_ledgers_can_disagree_and_we_say_so():
-    """⚠️실측(SKHY 2026-09-18): 주문 원장은 2주 체결이라는데 체결 원장에는
-    매도 행이 **아예 없다**(증권사 피드 누락). 체결만 보고 "0주"라고 적으면
-    화면이 거짓말을 한다."""
+    """두 원장이 갈리면 한쪽을 조용히 고르지 않는다.
+
+    ⚠️근거로 SKHY 사례를 들었었는데 **그 해석은 틀렸다**(2026-09-22 정정) —
+      원장 불일치가 아니라 동기화 지연 + 좁은 창이었고, 고치니 양쪽 다 2주로
+      일치했다. 장치는 남긴다: 부분체결·취소가 원장마다 다르게 적히는 일은
+      여전히 가능하고, 그때 조용히 한쪽을 고르는 것보다 낫다.
+    """
     out = _ev(
         planned_quantity=D("8"),
         fills=[],  # 체결 원장이 비어 있다
