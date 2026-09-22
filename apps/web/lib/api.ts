@@ -3215,6 +3215,26 @@ export interface JournalTrade {
   currency: string;
 }
 
+export interface PlanOutcome {
+  planned_side: "BUY" | "SELL";
+  planned_quantity: string;
+  planned_price_krw: string | null;
+  /** 체결 원장 기준. ⚠️주문 원장과 다를 수 있다. */
+  filled_quantity: string;
+  fill_rate: string | null;
+  avg_fill_price: string | null;
+  /** ⚠️**양수면 손해**다(매수는 비싸게, 매도는 싸게). 환율을 모르면 null. */
+  slippage_rate: string | null;
+  ordered_quantity: string;
+  order_filled_quantity: string;
+  unfilled_quantity: string;
+  cancelled_quantity: string;
+  /** 주문 자체가 없었나 — 미체결과 다른 복기다. */
+  no_order: boolean;
+  /** 두 원장이 서로 다른 말을 하나. 실측으로 실제 있는 일이다. */
+  sources_disagree: boolean;
+}
+
 export interface JournalEntry {
   id: string;
   ticker: string | null;
@@ -3233,6 +3253,8 @@ export interface JournalEntry {
   unrealized_pnl_krw: string | null;
   unrealized_return: string | null;
   realized_pnl_krw: string | null;
+  /** 계획을 적어 둔 메모에만 붙는다. 없으면 null. */
+  plan: PlanOutcome | null;
 }
 
 export interface JournalList {
@@ -3256,6 +3278,10 @@ export function addJournal(body: {
   title: string;
   body?: string | null;
   conviction?: number | null;
+  // ⚠️방향과 수량이 **둘 다** 있어야 계획으로 인정된다.
+  planned_side?: "BUY" | "SELL" | null;
+  planned_quantity?: string | null;
+  planned_price_krw?: string | null;
 }): Promise<JournalList> {
   return request<JournalList>("/api/v1/journal", {
     method: "POST",

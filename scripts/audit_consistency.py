@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from decimal import Decimal
 
 import httpx
@@ -50,6 +51,7 @@ class Audit:
         self.base = base.rstrip("/")
         self.client = httpx.Client(timeout=TIMEOUT)
         self.failures: list[str] = []
+        self.warnings: list[str] = []
         self.checked = 0
 
     def get(self, path: str):
@@ -69,6 +71,29 @@ class Audit:
         else:
             print(f"  X  {name}: {la}={money(a)}  {lb}={money(b)}  차이 {money(diff)}")
             self.failures.append(f"{name} ({la}={money(a)} vs {lb}={money(b)})")
+
+    def not_stale(self, name: str, subject: str, ref: str, days: int = 1) -> None:
+        """원장끼리 **최신일이 벌어졌는지**. 실패가 아니라 경고로 낸다 —
+        증권사 피드 상태이지 우리 계산의 불일치가 아니다.
+
+        ⚠️이게 왜 필요한가: 체결 원장이 2일 뒤처져 있는데 아무도 말해 주지
+          않으면, 수수료/세금·편입비·매매일지가 **조용히 옛날 것**을 보여 준다.
+          실측(2026-09-22): trades 최신 09-16, orders·realized 최신 09-18 —
+          9/18 체결 4건이 체결 원장에 통째로 없었다.
+        """
+        self.checked += 1
+        if not subject or not ref:
+            print(f"  ?  {name}: 한쪽이 비어 있다")
+            return
+        gap = (date.fromisoformat(ref) - date.fromisoformat(subject)).days
+        if gap <= days:
+            print(f"  OK {name}: {subject} (기준 {ref})")
+            return
+        print(
+            f"  !  {name}: {subject} — 기준 {ref} 보다 {gap}일 뒤처짐."
+            f" 이 원장을 쓰는 화면은 그만큼 옛 것을 보여 준다"
+        )
+        self.warnings.append(f"{name} ({subject} vs {ref}, {gap}일)")
 
     def same_set(self, name: str, left: set[str], right: set[str], la: str, lb: str) -> None:
         self.checked += 1
@@ -96,6 +121,12 @@ class Audit:
         realized = self.get("/portfolio/realized?days=1095")
         dividends = self.get("/portfolio/dividends?days=1095")
         monthly = self.get("/portfolio/monthly-cashflow?days=1095")
+        trades = self.get("/portfolio/trades?days=1095")
+        orders_payload = self.get("/portfolio/orders?days=365")
+        orders_last = max(
+            (o["order_date"] for o in orders_payload.get("items", [])),
+            default=None,
+        )
         tax_years = self.get("/portfolio/tax")["years"]
         rebalance = self.get("/portfolio/rebalance")
         allocation = self.get("/portfolio/allocation")
@@ -226,6 +257,17 @@ class Audit:
             "holdings", "rebalance",
         )
 
+        # ── 원장 신선도 ────────────────────────────────────────────────
+        print("\n[원장 신선도]")
+        self.not_stale(
+            "체결 원장",
+            trades.get("last_trade_date"),
+            max(
+                filter(None, [realized.get("last_sell_date"), orders_last]),
+                default=None,
+            ),
+        )
+
         print(f"\n{'=' * 56}")
         if self.failures:
             print(f"불일치 {len(self.failures)}건 / 검사 {self.checked}건")
@@ -233,6 +275,10 @@ class Audit:
                 print(f"  X {item}")
             return 1
         print(f"전부 일치 — 검사 {self.checked}건")
+        if self.warnings:
+            print(f"\n경고 {len(self.warnings)}건 (불일치는 아니지만 알아야 할 것):")
+            for item in self.warnings:
+                print(f"  !  {item}")
         return 0
 
 

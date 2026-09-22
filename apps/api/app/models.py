@@ -724,6 +724,12 @@ class JournalEntry(Base):
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 확신도 1~5. nullable 이다 — 강제하면 아무 숫자나 찍힌다.
     conviction: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ── 계획 (alembic 0016) ─────────────────────────────────────────────
+    # ⚠️전부 nullable 이다. 계획 없이 적는 메모가 대부분이고, 0 을 채우면
+    #   "0주 계획"이라는 없는 사실이 생긴다.
+    planned_side: Mapped[str | None] = mapped_column(String, nullable=True)
+    planned_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    planned_price_krw: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

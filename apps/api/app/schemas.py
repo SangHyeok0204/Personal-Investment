@@ -696,6 +696,11 @@ class JournalCreateIn(BaseModel):
     title: str
     body: str | None = None
     conviction: int | None = None
+    # ── 계획 (선택) ── 리밸런싱에서 넘어올 때만 채워진다.
+    # ⚠️0 으로 채우지 않는다 — "0주 계획"이라는 없는 사실이 생긴다.
+    planned_side: str | None = None
+    planned_quantity: Decimal | None = None
+    planned_price_krw: Decimal | None = None
 
 
 class JournalUpdateIn(BaseModel):
@@ -705,6 +710,34 @@ class JournalUpdateIn(BaseModel):
     title: str | None = None
     body: str | None = None
     conviction: int | None = None
+
+
+class PlanOutcomeOut(BaseModel):
+    """적어 둔 계획이 실제로 어떻게 됐나.
+
+    ⚠️`sources_disagree` 가 True 면 체결 원장과 주문 원장이 **서로 다른 말을
+      한다.** 한쪽만 보여 주면 화면이 거짓말을 한다.
+    ⚠️`no_order` 가 True 면 **주문 자체가 없었다.** 주문은 냈는데 안 걸린 것과
+      완전히 다른 복기다 — 같은 "0주 체결"로 적으면 구분이 사라진다.
+    ⚠️`slippage_rate` 는 **양수면 손해**다(매수는 비싸게, 매도는 싸게). 환율을
+      모르면 None — 0 으로 두면 "정확히 계획대로"가 된다.
+    """
+
+    planned_side: str
+    planned_quantity: Decimal
+    planned_price_krw: Decimal | None
+    filled_quantity: Decimal
+    fill_rate: Decimal | None
+    avg_fill_price: Decimal | None
+    slippage_rate: Decimal | None
+    ordered_quantity: Decimal
+    #: 주문 원장이 말하는 체결 수량. 체결 원장(`filled_quantity`)과 다를 수 있다.
+    order_filled_quantity: Decimal
+    unfilled_quantity: Decimal
+    cancelled_quantity: Decimal
+    no_order: bool
+    #: 두 원장이 갈리나. 실측으로 실제 있는 일이다(SKHY 2026-09-18).
+    sources_disagree: bool
 
 
 class JournalEntryOut(BaseModel):
@@ -726,6 +759,8 @@ class JournalEntryOut(BaseModel):
     unrealized_pnl_krw: Decimal | None
     unrealized_return: Decimal | None
     realized_pnl_krw: Decimal | None
+    #: 계획을 적어 둔 메모에만 붙는다. 없으면 None(계획 없는 메모가 대부분이다).
+    plan: PlanOutcomeOut | None
 
 
 class JournalListOut(BaseModel):

@@ -14,6 +14,7 @@ import {
   StubCard,
 } from "@/components/stub";
 import {
+  addJournal,
   getRebalance,
   putRebalanceTargets,
   type Rebalance,
@@ -74,6 +75,7 @@ export default function RebalancePage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [logged, setLogged] = useState<Record<string, boolean>>({});
 
   const plan = useQuery({
     queryKey: ["rebalance", accountId, band],
@@ -142,6 +144,28 @@ export default function RebalancePage() {
     },
     onError: (e: unknown) =>
       setSaveError(e instanceof Error ? e.message : "저장하지 못했습니다."),
+  });
+
+  // ★계획을 세웠으면 **왜 이 비중인가**가 기록으로 남아야 나중에 복기가 된다.
+  //   ⚠️제목 문자열로만 남기면 "계획 11주 중 몇 주가 체결됐나"를 물을 수 없다 —
+  //     방향·수량·계획가를 **구조로** 함께 보낸다.
+  const log = useMutation({
+    mutationFn: (line: RebalanceLine) =>
+      addJournal({
+        ticker: line.ticker,
+        entry_date: new Date().toISOString().slice(0, 10),
+        kind: line.action === "SELL" ? "EXIT" : "ENTRY",
+        title:
+          `리밸런싱 ${line.action === "SELL" ? "매도" : "매수"} 계획 ` +
+          `${line.ticker} ${Math.abs(line.delta_shares ?? 0)}주`,
+        body:
+          `${pct(line.current_weight)} → ${pct(line.target_weight)} ` +
+          `(${pp(line.drift)})` + (line.memo ? `\n${line.memo}` : ""),
+        planned_side: line.action === "SELL" ? "SELL" : "BUY",
+        planned_quantity: String(Math.abs(line.delta_shares ?? 0)),
+        planned_price_krw: line.price_krw,
+      }),
+    onSuccess: (_r, line) => setLogged((p) => ({ ...p, [line.ticker]: true })),
   });
 
   const draftSum = useMemo(
@@ -272,8 +296,8 @@ export default function RebalancePage() {
             }
           >
             <DataTable
-              columns={["종목", "현재 → 목표", "차이", "주수", "금액"]}
-              align={["left", "left", "right", "right", "right"]}
+              columns={["종목", "현재 → 목표", "차이", "주수", "금액", ""]}
+              align={["left", "left", "right", "right", "right", "right"]}
               empty={
                 plan.isLoading
                   ? "불러오는 중…"
@@ -283,7 +307,13 @@ export default function RebalancePage() {
               }
             >
               {(data?.lines ?? []).map((l) => (
-                <PlanRow key={l.ticker} line={l} />
+                <PlanRow
+                  key={l.ticker}
+                  line={l}
+                  logged={!!logged[l.ticker]}
+                  busy={log.isPending}
+                  onLog={() => log.mutate(l)}
+                />
               ))}
             </DataTable>
 
@@ -487,7 +517,17 @@ export default function RebalancePage() {
   );
 }
 
-function PlanRow({ line }: { line: RebalanceLine }) {
+function PlanRow({
+  line,
+  logged,
+  busy,
+  onLog,
+}: {
+  line: RebalanceLine;
+  logged: boolean;
+  busy: boolean;
+  onLog: () => void;
+}) {
   return (
     <tr className={cn("border-b border-hairline", line.within_band && "opacity-60")}>
       <Cell left strong>
@@ -546,6 +586,24 @@ function PlanRow({ line }: { line: RebalanceLine }) {
               ? `잔여 ${formatKrwSigned(line.delta_value_krw)}`
               : "—"}
         </span>
+      </Cell>
+      <Cell>
+        {/* 거래할 게 있을 때만 남길 수 있다 — 유지에 일지를 남길 이유가 없다. */}
+        {line.delta_shares ? (
+          <button
+            type="button"
+            onClick={onLog}
+            disabled={busy || logged}
+            className={cn(
+              "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+              logged
+                ? "text-ink-faint"
+                : "text-ge-point hover:bg-ge-blue-bg disabled:opacity-40",
+            )}
+          >
+            {logged ? "기록됨" : "일지"}
+          </button>
+        ) : null}
       </Cell>
     </tr>
   );

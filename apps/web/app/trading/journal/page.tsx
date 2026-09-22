@@ -13,8 +13,9 @@ import {
   removeJournal,
   type JournalEntry,
   type JournalKind,
+  type PlanOutcome,
 } from "@/lib/api";
-import { formatKrwSigned } from "@/lib/format";
+import { formatKrwSigned, formatKrwString } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // 매매일지.
@@ -484,6 +485,9 @@ function EntryDetail({
         />
       </dl>
 
+      {/* ★계획을 적어 둔 메모에만 붙는다 — 계획이 실제로 어떻게 됐나. */}
+      {e.plan && <PlanOutcomeBlock plan={e.plan} />}
+
       {e.nearby_trades.length > 0 ? (
         <div>
           <p className="mb-1.5 text-[11px] font-bold text-ink-muted">
@@ -557,6 +561,121 @@ function EntryDetail({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 계획 대비 결과.
+ *
+ * ⚠️**안 한 것과 못 한 것을 구분한다.** 계획 8주 중 0주 체결일 때, 주문을 안
+ *   낸 것과 주문은 냈는데 안 걸린 것은 완전히 다른 복기다.
+ *
+ * ⚠️**두 원장이 갈릴 때 한쪽만 보여 주지 않는다.** 실측(SKHY 2026-09-18):
+ *   주문 원장은 2주 체결이라는데 체결 원장에는 매도 행이 아예 없다.
+ *
+ * ⚠️슬리피지는 **양수면 손해**다(매수는 비싸게, 매도는 싸게). 환율을 모르면
+ *   비우고, 0 으로 두지 않는다 — 0 은 "정확히 계획대로"라는 뜻이 된다.
+ */
+function PlanOutcomeBlock({ plan }: { plan: PlanOutcome }) {
+  const planned = Number(plan.planned_quantity);
+  const filled = Number(plan.filled_quantity);
+  const orderFilled = Number(plan.order_filled_quantity);
+  const rate = plan.fill_rate == null ? null : Number(plan.fill_rate);
+  const slip = plan.slippage_rate == null ? null : Number(plan.slippage_rate);
+
+  return (
+    <div className="rounded-xl border border-ge-point/25 bg-ge-point/5 px-3.5 py-3">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-extrabold text-ge-point">계획 대비</span>
+        <span className="text-[11px] font-bold text-ink-secondary">
+          {plan.planned_side === "SELL" ? "매도" : "매수"} {planned}주
+          {plan.planned_price_krw && (
+            <span className="ml-1.5 font-semibold text-ink-faint">
+              @ {formatKrwString(plan.planned_price_krw)}
+            </span>
+          )}
+        </span>
+      </div>
+
+      {/* ⚠️두 원장이 갈리면 숫자를 하나로 합치지 않는다. */}
+      {plan.sources_disagree && (
+        <p className="mb-2 rounded-lg bg-ask-soft px-2.5 py-2 text-[11px] font-semibold leading-snug text-ask">
+          체결 내역은 {filled}주, 주문 내역은 {orderFilled}주라고 합니다 — 증권사
+          두 원장이 다른 말을 합니다. 어느 쪽도 임의로 고르지 않았습니다.
+        </p>
+      )}
+
+      <dl className="grid grid-cols-2 gap-x-5 gap-y-0">
+        <Row
+          label="체결 (체결 원장)"
+          value={`${filled}주${rate != null ? ` · ${(rate * 100).toFixed(0)}%` : ""}`}
+          tone={rate != null && rate >= 0.999 ? "up" : undefined}
+        />
+        <Row label="체결 (주문 원장)" value={`${orderFilled}주`} />
+        <Row
+          label="주문"
+          value={
+            plan.no_order
+              ? "주문 없음"
+              : `${Number(plan.ordered_quantity)}주`
+          }
+          tone={plan.no_order ? "down" : undefined}
+        />
+        <Row
+          label="미체결"
+          value={
+            plan.no_order
+              ? "—"
+              : `${Number(plan.unfilled_quantity)}주${
+                  Number(plan.cancelled_quantity) > 0
+                    ? ` (취소 ${Number(plan.cancelled_quantity)}주)`
+                    : ""
+                }`
+          }
+        />
+        <Row
+          label="평균 체결가"
+          value={
+            plan.avg_fill_price == null
+              ? "—"
+              : `$${Number(plan.avg_fill_price).toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`
+          }
+        />
+        <Row
+          label="슬리피지"
+          value={
+            // ⚠️못 잰 이유가 둘이다 — 체결이 없어서와 환율을 몰라서.
+            //   하나로 뭉뚱그리면 틀린 이유를 대게 된다(실제로 "환율 없음"이라고
+            //   적었는데 사실은 체결이 없던 것이었다).
+            slip != null
+              ? `${slip > 0 ? "+" : ""}${(slip * 100).toFixed(2)}%`
+              : plan.avg_fill_price == null
+                ? "— (체결 없음)"
+                : plan.planned_price_krw == null
+                  ? "— (계획가 없음)"
+                  : "— (환율 없음)"
+          }
+          tone={slip == null ? undefined : slip > 0 ? "down" : "up"}
+        />
+      </dl>
+
+      <p className="mt-2 text-[11px] leading-snug text-ink-muted">
+        {plan.no_order ? (
+          <>
+            <strong>주문을 내지 않았습니다.</strong> 계획을 세우고 실행하지 않은
+            것이라, 안 걸린 것과는 다른 복기입니다.
+          </>
+        ) : (
+          <>
+            슬리피지는 <strong>양수면 손해</strong>입니다 — 매수는 비싸게 샀을
+            때, 매도는 싸게 팔았을 때입니다.
+          </>
+        )}
+      </p>
     </div>
   );
 }

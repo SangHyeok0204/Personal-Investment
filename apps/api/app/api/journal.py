@@ -18,15 +18,24 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import plan_outcome as po
 from app.core.errors import AppError
 from app.db.session import get_db
-from app.models import Asset, CurrentPosition, JournalEntry, RealizedPnl, Trade
+from app.models import (
+    Asset,
+    CurrentPosition,
+    JournalEntry,
+    Order,
+    RealizedPnl,
+    Trade,
+)
 from app.schemas import (
     JournalCreateIn,
     JournalEntryOut,
     JournalListOut,
     JournalTradeOut,
     JournalUpdateIn,
+    PlanOutcomeOut,
 )
 
 router = APIRouter(prefix="/api/v1/journal", tags=["journal"])
@@ -73,6 +82,56 @@ def _outcomes(db: Session, tickers: set[str]) -> tuple[dict, dict]:
     return held, realized
 
 
+def _plan_outcome(entry, trades_by_ticker, orders_by_ticker, fx_rate):
+    """계획을 적어 둔 메모에만 붙는다.
+
+    ⚠️계획이 없으면 None 이다. 0 으로 채우면 모든 메모가 "0주 계획을 못 지켰다"로
+      읽힌다 — 생각·복기 메모가 대부분인데 그건 틀린 말이다.
+    """
+    if not entry.ticker or not entry.planned_side or not entry.planned_quantity:
+        return None
+
+    fills = [
+        po.Fill(
+            trade_date=t.trade_date, side=t.side, quantity=t.quantity, price=t.price
+        )
+        for t in trades_by_ticker.get(entry.ticker, [])
+    ]
+    attempts = [
+        po.OrderAttempt(
+            order_date=o.order_date, side=o.side,
+            order_quantity=o.order_quantity, filled_quantity=o.filled_quantity,
+            cancelled_quantity=o.cancelled_quantity,
+        )
+        for o in orders_by_ticker.get(entry.ticker, [])
+    ]
+    result = po.evaluate(
+        planned_side=entry.planned_side,
+        planned_quantity=entry.planned_quantity,
+        planned_price_krw=entry.planned_price_krw,
+        entry_date=entry.entry_date,
+        fills=fills,
+        orders=attempts,
+        window_days=_TRADE_WINDOW_DAYS,
+        fx_rate=fx_rate,
+    )
+    return PlanOutcomeOut(
+        planned_side=result.planned_side,
+        planned_quantity=result.planned_quantity,
+        planned_price_krw=entry.planned_price_krw,
+        filled_quantity=result.filled_quantity,
+        fill_rate=result.fill_rate,
+        avg_fill_price=result.avg_fill_price,
+        slippage_rate=result.slippage_rate,
+        ordered_quantity=result.ordered_quantity,
+        order_filled_quantity=result.order_filled_quantity,
+        unfilled_quantity=result.unfilled_quantity,
+        cancelled_quantity=result.cancelled_quantity,
+        no_order=result.no_order,
+        sources_disagree=result.sources_disagree,
+    )
+
+
 def _build(entries: list[JournalEntry], db: Session) -> JournalListOut:
     tickers = {e.ticker for e in entries if e.ticker}
     held, realized = _outcomes(db, tickers)
@@ -80,12 +139,26 @@ def _build(entries: list[JournalEntry], db: Session) -> JournalListOut:
     # 메모 날짜 ±3일 안의 체결을 한 번에 가져와 파이썬에서 짝짓는다.
     # 메모마다 쿼리를 돌리면 N+1 이 된다.
     trades_by_ticker: dict[str, list[Trade]] = {}
+    orders_by_ticker: dict[str, list[Order]] = {}
     if tickers:
         rows = db.execute(
             select(Trade).where(Trade.ticker.in_(tickers)).order_by(Trade.trade_date)
         ).scalars()
         for trade in rows:
             trades_by_ticker.setdefault(trade.ticker, []).append(trade)
+        # ⚠️주문도 같이 본다. 체결만 보면 "안 한 것"과 "못 한 것"을 구분할 수 없다.
+        for order in db.execute(
+            select(Order).where(Order.ticker.in_(tickers)).order_by(Order.order_date)
+        ).scalars():
+            orders_by_ticker.setdefault(order.ticker, []).append(order)
+
+    # 슬리피지는 원화 계획가와 현지통화 체결가를 비교해야 해서 환율이 필요하다.
+    # ⚠️없으면 **계산하지 않는다**(4자리 차이 나는 숫자를 나란히 놓게 된다).
+    fx_rate = db.execute(
+        select(func.max(CurrentPosition.exchange_rate)).where(
+            CurrentPosition.exchange_rate.is_not(None)
+        )
+    ).scalar()
 
     out: list[JournalEntryOut] = []
     for entry in entries:
@@ -124,6 +197,7 @@ def _build(entries: list[JournalEntry], db: Session) -> JournalListOut:
                 unrealized_pnl_krw=position[0] if position else None,
                 unrealized_return=position[1] if position else None,
                 realized_pnl_krw=realized.get(entry.ticker) if entry.ticker else None,
+                plan=_plan_outcome(entry, trades_by_ticker, orders_by_ticker, fx_rate),
             )
         )
 
@@ -187,6 +261,17 @@ def add_journal(payload: JournalCreateIn, db: Session = Depends(get_db)) -> Jour
             title=payload.title.strip(),
             body=payload.body,
             conviction=payload.conviction,
+            # ⚠️방향과 수량이 **둘 다** 있을 때만 계획으로 인정한다. 하나만
+            #   들어오면 "0주 계획" 같은 반쪽 사실이 남는다.
+            planned_side=(
+                (payload.planned_side or "").upper() or None
+                if payload.planned_quantity
+                else None
+            ),
+            planned_quantity=(
+                payload.planned_quantity if payload.planned_side else None
+            ),
+            planned_price_krw=payload.planned_price_krw,
         )
     )
     db.commit()
