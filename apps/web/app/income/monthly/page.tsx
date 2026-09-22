@@ -225,11 +225,15 @@ export default function MonthlyCashflowPage() {
           <div className="flex min-h-0 flex-col gap-3">
             {/* ⚠️'이번 달'을 shrink-0 으로 두면 아래 카드가 화면 밖으로 밀려
                  **닿을 수 없게** 된다(페이지 스크롤이 없는 레이아웃이라 더 그렇다).
-                 두 카드가 높이를 나눠 갖고 각자 안에서 스크롤한다. */}
+                 두 카드가 높이를 나눠 갖고 각자 안에서 스크롤한다.
+                 ⚠️다만 **반씩 나누면 위 카드가 모자란다.** 위는 세 묶음(계좌가
+                 만든 현금·외부 흐름·매매 회전)이라 14줄쯤 되고 아래는 8줄인데,
+                 1:1 로 두니 '매매 회전'이 카드 밖으로 잘려 렌더 오류처럼 보였다.
+                 내용 비율에 맞춰 1.6:1 로 나눈다. */}
             <StubCard
               title="이번 달"
               subtitle={latest ? latest.month : "최근 달"}
-              className="min-h-0 flex-1"
+              className="min-h-0 flex-[1.6]"
               scrollBody
             >
               {cashflow.isLoading ? (

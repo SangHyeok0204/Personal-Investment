@@ -105,15 +105,20 @@ export default function AlertsPage() {
     <>
       <Topbar title="알림" subtitle="조건을 세워 두고 지금 충족하는지 본다" showAccountContext={false} />
       <PageContainer fit>
-        {/* ⚠️맨 위에 둔다 — 이걸 모르면 "알림이 오는 줄" 알게 된다. */}
+        {/* ⚠️맨 위에 둔다 — 이걸 모르면 "알림이 오는 줄" 알게 된다.
+            ⚠️2026-09-23 정정: "이 화면에서만 판정한다"는 이제 **사실이 아니다.**
+              상단 바의 종이 어느 화면에서든 걸린 개수를 보여 준다. 화면이
+              스스로에 대해 틀린 말을 하고 있었다 — 기능을 만들면 그걸 설명하는
+              문구도 같이 고쳐야 한다. */}
         <div className="flex shrink-0 items-center gap-2 rounded-xl border border-ge-point/25 bg-ge-point/5 px-3 py-2">
           <span className="rounded bg-ge-point/15 px-1.5 py-0.5 text-[10px] font-extrabold text-ge-point">
-            판정만
+            앱 안에서만
           </span>
           <span className="text-[11px] font-semibold leading-snug text-ink-secondary">
-            아직 <strong>보내지 않습니다.</strong> 텔레그램 등 전달 경로가 연결돼야
-            실제로 알림이 갑니다 — 지금은 조건을 만족하는지 이 화면에서 판정하는
-            데까지 동작합니다.
+            <strong>밖으로는 아직 보내지 않습니다.</strong> 텔레그램 같은 전달
+            경로가 연결돼야 앱을 안 켜 놓은 동안에도 알림이 갑니다. 지금은 상단 바의{" "}
+            <strong>종</strong>이 유일한 전달 경로입니다 — 어느 화면에 있든 걸린
+            개수가 배지로 뜹니다.
           </span>
           <button
             type="button"
