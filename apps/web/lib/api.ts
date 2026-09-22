@@ -3669,6 +3669,78 @@ export function getMarketNews(lang: "ko" | "en" = "ko"): Promise<MarketNews> {
   return request<MarketNews>(`/api/v1/market/news?lang=${lang}`);
 }
 
+// ── 리밸런싱 ─────────────────────────────────────────────────────────────────
+// ★알림이 "SOXL 비중 21.32% > 20%" 를 잡아 준다. 여기는 그 다음 질문에 답한다 —
+//   **그래서 몇 주를 팔아야 하나.**
+// ⚠️`delta_shares` 가 null 이면 **주수를 계산할 수 없었다**(가격 미상). 0 과 다르다.
+
+export interface RebalanceLine {
+  ticker: string;
+  name: string | null;
+  quantity: string;
+  current_value_krw: string | null;
+  current_weight: string | null;
+  target_weight: string;
+  target_value_krw: string | null;
+  drift: string | null;
+  delta_value_krw: string | null;
+  price_krw: string | null;
+  delta_shares: number | null;
+  residual_krw: string | null;
+  action: "BUY" | "SELL" | "HOLD";
+  within_band: boolean;
+  est_cost_krw: string | null;
+  memo: string | null;
+}
+
+export interface Rebalance {
+  lines: RebalanceLine[];
+  /** 목표가 없는 보유 종목. **0% 로 치지 않는다.** */
+  untargeted: RebalanceLine[];
+  base_value_krw: string;
+  cash_krw: string | null;
+  target_sum: string;
+  target_gap: string;
+  /** 목표합 + 이 값이 100% 를 넘으면 그 계획은 실행할 수 없다. */
+  untargeted_weight: string;
+  net_buy_krw: string;
+  /** 예수금으로 모자라는 금액. 0 이면 실행 가능. */
+  shortfall_krw: string | null;
+  band: string;
+  buy_krw: string;
+  sell_krw: string;
+  est_cost_krw: string;
+  cost_rate: string;
+  trade_count: number;
+  notes: string[];
+}
+
+export function getRebalance(
+  accountId?: string | null,
+  band = 0.01,
+): Promise<Rebalance> {
+  const q = accountQuery(accountId);
+  return request<Rebalance>(
+    `/api/v1/portfolio/rebalance${q ? `${q}&` : "?"}band=${band}`,
+  );
+}
+
+export function putRebalanceTargets(
+  targets: { ticker: string; target_weight: string; memo?: string | null }[],
+  accountId?: string | null,
+  band = 0.01,
+): Promise<Rebalance> {
+  const q = accountQuery(accountId);
+  return request<Rebalance>(
+    `/api/v1/portfolio/rebalance/targets${q ? `${q}&` : "?"}band=${band}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(targets),
+    },
+  );
+}
+
 // ── 알림 ─────────────────────────────────────────────────────────────────────
 // ★**아직 보내지 않는다.** 전달 경로(텔레그램 등)가 붙기 전까지 `delivery_configured`
 //   는 항상 false 다 — 화면이 "보냈다"고 말하면 안 된다.

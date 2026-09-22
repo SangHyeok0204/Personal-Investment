@@ -21,7 +21,7 @@ from pathlib import Path
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, literal_column, select
+from sqlalchemy import case, delete, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from app.core import performance_analytics as pa
@@ -29,6 +29,7 @@ from app.core import position_timeline as pt
 from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
+from app.core import rebalance as rb
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
@@ -39,6 +40,7 @@ from prices import news as news_source  # noqa: E402
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
+    RebalanceTarget,
     Account,
     AccountBalance,
     Asset,
@@ -81,6 +83,9 @@ from app.schemas import (
     FilingTickerOut,
     FilingsOut,
     NewsArticleOut,
+    RebalanceLineOut,
+    RebalanceOut,
+    RebalanceTargetIn,
     NewsOut,
     NewsTickerOut,
     ReportBenchmarkOut,
@@ -3083,3 +3088,167 @@ def get_news(
     with _news_lock:
         _news_cache[key] = (time.monotonic(), built)
     return built
+
+
+# ── 리밸런싱 ─────────────────────────────────────────────────────────────────
+
+_REBALANCE_NOTES = [
+    "**비중의 분모는 주식 평가액입니다**(예수금 제외). 섹터/자산 배분 화면과 같은"
+    " 분모를 써야 두 화면의 비중이 같은 말을 합니다.",
+    "**주수는 0 방향으로 내립니다.** 반올림하면 목표를 넘겨 사거나 넘겨 팝니다."
+    " 주수로 못 맞춘 나머지는 '잔여'로 적어 둡니다.",
+    "**밴드 안의 차이는 거래하지 않습니다.** 실측 거래비용이 거래대금의 0.250%"
+    " 라, 작은 어긋남을 맞추려다 비용이 교정 효과보다 커집니다. 밴드는 화면에서"
+    " 바꿀 수 있습니다.",
+    "**목표가 없는 보유 종목을 0% 로 치지 않습니다.** 그렇게 하면 '아직 목표를"
+    " 안 적은 종목을 전부 팔아라'가 되는데, 그건 시키신 적 없는 말입니다."
+    " 따로 모아 보여 주기만 합니다.",
+    "**목표 합이 100% 가 아니어도 고치지 않습니다.** 조용히 정규화하면 적으신"
+    " 목표와 화면이 쓰는 목표가 달라집니다 — 차이만 알려 드립니다.",
+    "목표를 적지 않은 보유가 자리를 차지하고 있으면 **살 돈이 안 나옵니다.**"
+    " 목표합과 '목표 없음' 비중을 더해 100% 를 넘으면 그만큼 팔 것을 먼저"
+    " 정해야 합니다 — 화면이 부족액을 알려 드립니다.",
+    "여기는 **계획**만 냅니다. 주문을 내지 않습니다.",
+]
+
+
+def _to_line(line: rb.Line) -> RebalanceLineOut:
+    return RebalanceLineOut(
+        ticker=line.ticker, name=line.name, quantity=line.quantity,
+        current_value_krw=line.current_value_krw, current_weight=line.current_weight,
+        target_weight=line.target_weight, target_value_krw=line.target_value_krw,
+        drift=line.drift, delta_value_krw=line.delta_value_krw,
+        price_krw=line.price_krw, delta_shares=line.delta_shares,
+        residual_krw=line.residual_krw, action=line.action,
+        within_band=line.within_band, est_cost_krw=line.est_cost_krw, memo=line.memo,
+    )
+
+
+def _rebalance_plan(
+    db: Session, account_ids: list[uuid.UUID], band: Decimal
+) -> RebalanceOut:
+    rows = db.execute(
+        select(Asset.ticker, Asset.name, CurrentPosition.quantity,
+               CurrentPosition.market_value_krw)
+        .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+    ).all() if account_ids else []
+    positions = [
+        rb.Position(ticker=t, name=n, quantity=q, market_value_krw=v)
+        for t, n, q, v in rows
+    ]
+    targets = [
+        rb.Target(
+            ticker=r.ticker, name=r.asset_name, weight=r.target_weight, memo=r.memo
+        )
+        for r in db.execute(
+            select(RebalanceTarget).order_by(
+                RebalanceTarget.target_weight.desc(), RebalanceTarget.ticker
+            )
+        ).scalars().all()
+    ]
+    plan = rb.build_plan(positions, targets, band=band)
+
+    cash = None
+    if account_ids:
+        balances = db.execute(
+            select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
+        ).scalars().all()
+        cash = _sum([_cash_krw(b) for b in balances])
+
+    # ⚠️목표합만 보면 안 된다. 목표를 적지 않은 보유가 자리를 차지하고 있으면
+    #   "팔 것을 정하지 않은 채 사라"는 계획이 나온다(실측: 목표 80% + 목표없음
+    #   51% = 131% → 매수 860만인데 예수금 133만).
+    untargeted_weight = sum(
+        (line.current_weight for line in plan.untargeted if line.current_weight),
+        Decimal("0"),
+    )
+    net_buy = plan.buy_krw - plan.sell_krw
+    shortfall = (
+        max(net_buy - cash, Decimal("0")) if cash is not None else None
+    )
+
+    return RebalanceOut(
+        lines=[_to_line(line) for line in plan.lines],
+        untargeted=[_to_line(line) for line in plan.untargeted],
+        base_value_krw=plan.base_value_krw,
+        # 예수금은 분모에 넣지 않지만, 매수 여력을 보려면 알아야 한다.
+        cash_krw=cash,
+        target_sum=plan.target_sum, target_gap=plan.target_gap, band=plan.band,
+        untargeted_weight=untargeted_weight.quantize(_RATIO, rounding=ROUND_HALF_UP),
+        net_buy_krw=net_buy,
+        shortfall_krw=shortfall,
+        buy_krw=plan.buy_krw, sell_krw=plan.sell_krw, est_cost_krw=plan.est_cost_krw,
+        cost_rate=rb.MEASURED_COST_RATE, trade_count=plan.trade_count,
+        notes=_REBALANCE_NOTES,
+    )
+
+
+@router.get("/rebalance", response_model=RebalanceOut)
+def get_rebalance(
+    account_id: uuid.UUID | None = Query(default=None),
+    band: Decimal = Query(default=Decimal("0.01"), ge=0, le=1),
+    db: Session = Depends(get_db),
+) -> RebalanceOut:
+    """리밸런싱 — 목표 비중과 지금 보유의 차이를 **주수**로 바꾼다.
+
+    ★알림이 "SOXL 비중 21.32% > 20%" 를 잡아 준다. 여기는 그 다음 질문에
+      답한다 — **그래서 몇 주를 팔아야 하나.**
+
+    ⚠️분모는 주식 평가액이다(예수금 제외) — 섹터/자산 배분 화면과 같은 분모여야
+      두 화면의 비중이 같은 말을 한다.
+    """
+    return _rebalance_plan(db, _active_account_ids(db, account_id), band)
+
+
+@router.put("/rebalance/targets", response_model=RebalanceOut)
+def put_rebalance_targets(
+    payload: list[RebalanceTargetIn],
+    account_id: uuid.UUID | None = Query(default=None),
+    band: Decimal = Query(default=Decimal("0.01"), ge=0, le=1),
+    db: Session = Depends(get_db),
+) -> RebalanceOut:
+    """목표 비중을 **통째로** 갈아끼운다.
+
+    ★한 건씩 고치지 않고 전체를 바꾼다 — 비중은 서로 묶여 있어서, 한 줄만
+      바꾸는 중간 상태가 저장되면 합이 이상한 채로 남는다.
+
+    ⚠️합이 100% 가 아니어도 **거부하지 않는다.** 목표를 옮기는 중간 단계를
+      저장할 수 없게 되기 때문이다. 대신 화면이 차이를 말한다.
+    """
+    seen: set[str] = set()
+    cleaned: list[tuple[str, Decimal, str | None]] = []
+    for item in payload:
+        ticker = (item.ticker or "").strip().upper()
+        if not ticker:
+            continue
+        if ticker in seen:
+            raise AppError(
+                status_code=400, code="duplicate_ticker",
+                message=f"{ticker} 가 두 번 들어 있습니다.",
+            )
+        if item.target_weight < 0 or item.target_weight > 1:
+            raise AppError(
+                status_code=400, code="weight_out_of_range",
+                message=f"{ticker} 의 비중이 0~100% 를 벗어났습니다.",
+            )
+        seen.add(ticker)
+        cleaned.append((ticker, item.target_weight, (item.memo or "").strip() or None))
+
+    names = {
+        t: n
+        for t, n in db.execute(
+            select(Asset.ticker, Asset.name).where(Asset.ticker.in_(list(seen)))
+        ).all()
+    } if seen else {}
+
+    db.execute(delete(RebalanceTarget))
+    for order, (ticker, weight, memo) in enumerate(cleaned):
+        db.add(
+            RebalanceTarget(
+                id=uuid.uuid4(), ticker=ticker, asset_name=names.get(ticker),
+                target_weight=weight, memo=memo, sort_order=order,
+            )
+        )
+    db.commit()
+    return _rebalance_plan(db, _active_account_ids(db, account_id), band)

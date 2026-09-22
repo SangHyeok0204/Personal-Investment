@@ -97,6 +97,8 @@ class Audit:
         dividends = self.get("/portfolio/dividends?days=1095")
         monthly = self.get("/portfolio/monthly-cashflow?days=1095")
         tax_years = self.get("/portfolio/tax")["years"]
+        rebalance = self.get("/portfolio/rebalance")
+        allocation = self.get("/portfolio/allocation")
         taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
         print("\n[평가금액·손익]")
@@ -205,6 +207,24 @@ class Audit:
             )
         else:
             print("  ·  세금: 실현 내역이 없어 건너뜀")
+
+        # ── 리밸런싱 ───────────────────────────────────────────────────
+        # ⚠️비중의 **분모가 같아야** 두 화면이 같은 말을 한다. 리밸런싱이
+        #   예수금을 넣거나 배분이 빼면, 같은 종목이 화면마다 다른 비중으로
+        #   보인다 — 사용자는 그걸 버그로 읽는다.
+        print("\n[리밸런싱]")
+        self.same(
+            "비중 분모 (주식 평가액)",
+            allocation["total_market_value_krw"],
+            rebalance["base_value_krw"],
+            "allocation", "rebalance",
+        )
+        self.same(
+            "보유 종목 수",
+            Decimal(len(holdings["items"])),
+            Decimal(len(rebalance["lines"]) + len(rebalance["untargeted"])),
+            "holdings", "rebalance",
+        )
 
         print(f"\n{'=' * 56}")
         if self.failures:

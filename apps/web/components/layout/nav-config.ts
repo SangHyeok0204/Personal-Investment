@@ -88,6 +88,14 @@ export const navItems: NavItem[] = [
         hint: "섹터 · 자산군 · 통화 비중",
       },
       {
+        // ★알림이 "비중 초과"를 잡아 주는데 **그래서 몇 주를 팔아야 하나**에
+        //   답하는 자리가 없었다. 그 자리를 만든다.
+        label: "리밸런싱",
+        href: "/portfolio/rebalance",
+        status: "live",
+        hint: "목표 비중 대비 — 몇 주를 사고팔아야 하나",
+      },
+      {
         label: "환노출",
         href: "/portfolio/fx",
         status: "live",

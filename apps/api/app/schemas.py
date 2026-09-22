@@ -1567,3 +1567,68 @@ class MarketNewsOut(BaseModel):
     holdings_hit_count: int
     source_ok: bool
     notes: list[str]
+
+
+# ── 리밸런싱 ─────────────────────────────────────────────────────────────────
+
+class RebalanceTargetIn(BaseModel):
+    ticker: str
+    #: 소수(0.20 = 20%). 화면에서만 퍼센트로 받는다.
+    target_weight: Decimal
+    memo: str | None = None
+
+
+class RebalanceLineOut(BaseModel):
+    """한 종목의 계획.
+
+    ⚠️`delta_shares` 가 None 이면 **주수를 계산할 수 없었다**(가격 미상).
+      0 과 다르다 — 0 은 "움직이지 않는다"이고 None 은 "모른다"이다.
+    """
+
+    ticker: str
+    name: str | None
+    quantity: Decimal
+    current_value_krw: Decimal | None
+    current_weight: Decimal | None
+    target_weight: Decimal
+    target_value_krw: Decimal | None
+    drift: Decimal | None
+    delta_value_krw: Decimal | None
+    price_krw: Decimal | None
+    delta_shares: int | None
+    residual_krw: Decimal | None
+    action: str
+    within_band: bool
+    est_cost_krw: Decimal | None
+    memo: str | None
+
+
+class RebalanceOut(BaseModel):
+    """리밸런싱 계획.
+
+    ⚠️`target_gap` 이 0 이 아니면 목표 합이 100% 가 아니라는 뜻이다. 서버는
+      **정규화하지 않는다** — 조용히 고치면 사용자가 적은 목표와 화면이 쓰는
+      목표가 달라진다.
+    """
+
+    lines: list[RebalanceLineOut]
+    #: 목표가 없는 보유 종목. **0% 로 치지 않는다.**
+    untargeted: list[RebalanceLineOut]
+    base_value_krw: Decimal
+    cash_krw: Decimal | None
+    target_sum: Decimal
+    target_gap: Decimal
+    #: 목표를 적지 않은 보유 종목이 차지한 비중. 목표합 + 이 값이 100% 를 넘으면
+    #: 그 계획은 **실행할 수 없다** — 팔 것을 정하지 않은 채 사라는 말이 된다.
+    untargeted_weight: Decimal
+    #: 매수 − 매도. 양수면 그만큼 현금이 더 필요하다.
+    net_buy_krw: Decimal
+    #: 예수금으로 모자라는 금액. 0 이면 실행 가능하다.
+    shortfall_krw: Decimal | None
+    band: Decimal
+    buy_krw: Decimal
+    sell_krw: Decimal
+    est_cost_krw: Decimal
+    cost_rate: Decimal
+    trade_count: int
+    notes: list[str]

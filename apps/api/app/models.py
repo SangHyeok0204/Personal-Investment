@@ -603,6 +603,32 @@ class Dividend(Base):
     )
 
 
+class RebalanceTarget(Base):
+    """리밸런싱 목표 비중 (alembic 0015).
+
+    ⚠️`assets` FK 를 걸지 않는다 — 아직 사지 않은 종목에도 목표를 둘 수 있어야 한다.
+    ⚠️`target_weight` 는 소수다(0.20 = 20%). 합이 1을 넘어도 **막지 않는다** —
+      막으면 목표를 옮기는 중간 상태를 저장할 수 없다. 대신 화면이 말한다.
+    """
+
+    __tablename__ = "rebalance_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    target_weight: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class AlertRule(Base):
     """알림 규칙 (alembic 0014).
 
