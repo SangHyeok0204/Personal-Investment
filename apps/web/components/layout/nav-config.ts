@@ -30,6 +30,13 @@ import type { LucideIcon } from "lucide-react";
 //                     placeholder 로 남아 있었다. 메뉴가 양쪽으로 거짓말을 했다.
 //   - "placeholder" 화면 골격만 있고 데이터는 더미/미연결
 //   - "planned"     화면 자체가 아직 없음(href 없음)
+//
+// ★2026-09-22 메뉴에서 **뺀 것** (라우트는 남겨 둔다):
+//   · 종토방(/stock-discussion) · AI token usage(/ai-token-usage)
+//   둘 다 원본 GE 팀의 **LAN 장비**(192.168.199.120:8002, collector:8100)를
+//   본다. 이 환경에서 실측하면 연결 자체가 안 된다(curl 000). 켜질 수 없는
+//   메뉴를 남겨 두면 계속 "언젠가 되겠지"로 읽히고, 그 사이 메뉴가 거짓말을
+//   한다. 장비가 생기면 이 두 줄을 되살리면 된다 — 화면 코드는 그대로 있다.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type NavStatus = "live" | "placeholder" | "planned";
@@ -237,15 +244,6 @@ export const navItems: NavItem[] = [
         hint: "collector 필요 — 현재 미가동",
       },
       {
-        label: "종토방",
-        href: "/stock-discussion",
-        // ⚠️2026-09-22 전체 점검에서 정정: `live` 라고 적혀 있었지만 **수집
-        //   서버가 없다**("수집 서버 미접속", 집계 전부 0). 원본 GE 의 LAN
-        //   수집기에 의존하는 화면이다.
-        status: "placeholder",
-        hint: "collector 필요 — 현재 미가동",
-      },
-      {
         // ★"기사"를 **시장 뉴스**로 바꿨다. 그대로 만들면 보유종목 뉴스와
         //   소스가 같아 거의 같은 화면이 하나 더 생긴다. 주제별로 보면
         //   "내가 아직 안 산 쪽"을 보게 되어 질문이 달라진다.
@@ -311,15 +309,6 @@ export const navItems: NavItem[] = [
         href: "/data-operations",
         status: "live",
         hint: "배치 · 잡 모니터",
-      },
-      {
-        label: "AI token usage",
-        href: "/ai-token-usage",
-        // ⚠️2026-09-22 전체 점검에서 정정: 화면이 10초 기다린 뒤
-        //   "모니터에 연결할 수 없습니다 (http://192.168.199.120:8002) — timed out"
-        //   을 띄운다. 그 LAN 모니터는 이 환경에 없다.
-        status: "placeholder",
-        hint: "LAN 모니터(192.168.199.120) 필요 — 현재 미접속",
       },
       { label: "환경설정", href: "/settings", status: "live" },
       {

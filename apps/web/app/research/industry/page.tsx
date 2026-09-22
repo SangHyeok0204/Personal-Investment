@@ -43,8 +43,8 @@ export default function IndustryResearchPage() {
         subtitle="반도체 · AI 우선"
         showAccountContext={false}
       />
-      <PageContainer wide>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <PageContainer fit>
+        <div className="grid shrink-0 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
           {SECTORS.map((s) => (
             <div
               key={s.id}
@@ -92,8 +92,21 @@ export default function IndustryResearchPage() {
           ))}
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-          <StubCard title="산업 자료" subtitle="보고서 · 세미나 · 덱">
+        {/* ★2026-09-22 전체 점검: `wide` 로 남아 195px 넘쳤다. 세로 3단이던 것을
+            왼쪽 자료 / 오른쪽 연결·지표로 다시 짰다. */}
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 gap-3",
+            "grid-cols-1 auto-rows-[minmax(0,1fr)]",
+            "lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:auto-rows-auto",
+          )}
+        >
+          <StubCard
+            title="산업 자료"
+            subtitle="보고서 · 세미나 · 덱"
+            className="min-h-0"
+            scrollBody
+          >
             <DataTable
               columns={["제목", "산업", "출처", "날짜", "상태"]}
               align={["left", "left", "left", "right", "right"]}
@@ -103,7 +116,8 @@ export default function IndustryResearchPage() {
             </DataTable>
           </StubCard>
 
-          <StubCard title="내 포지션과의 연결">
+          <div className="flex min-h-0 flex-col gap-3">
+          <StubCard title="내 포지션과의 연결" className="min-h-0 flex-1" scrollBody>
             <PlannedList
               items={[
                 "보유 종목의 섹터를 산업에 매핑 — 내가 돈을 넣은 산업부터 공부",
@@ -113,9 +127,15 @@ export default function IndustryResearchPage() {
             />
           </StubCard>
 
-          <StubCard title="산업 지표" subtitle="사이클 판단용" className="xl:col-span-2">
-            <StubChart height={200} note="DRAM 고정가 · 설비투자 · 수출액 등 연동 예정" />
+          <StubCard
+            title="산업 지표"
+            subtitle="사이클 판단용"
+            className="min-h-0 flex-1"
+            scrollBody
+          >
+            <StubChart height={150} note="DRAM 고정가 · 설비투자 · 수출액 등 연동 예정" />
           </StubCard>
+          </div>
         </div>
       </PageContainer>
     </>

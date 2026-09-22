@@ -130,7 +130,8 @@ export default function ReturnsPage() {
           className={cn(
             "grid min-h-0 flex-1 gap-3",
             "grid-cols-1 auto-rows-[minmax(0,1fr)]",
-            "md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:auto-rows-auto",
+            // ⚠️lg(1024)에서 가르면 오른쪽 월별 표가 좁아 잘린다. xl 부터 가른다.
+            "md:grid-cols-2 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:auto-rows-auto",
           )}
         >
           <StubCard

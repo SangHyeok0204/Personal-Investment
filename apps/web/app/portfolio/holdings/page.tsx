@@ -69,6 +69,21 @@ export default function HoldingsPage() {
     });
   }, [holdings.data, sortKey, country]);
 
+  // ⚠️같은 값을 17줄 반복하는 칸은 폭만 먹는다(실측: 시장 전부 "US", 환율 전부
+  //   1,375.50 → 표가 1024px 에서 잘렸다). **값이 하나뿐일 때만** 접고 제목줄에
+  //   한 번 적는다. 달라지면 칸이 다시 나온다 — 국내 종목을 사면 시장이 갈린다.
+  const uniq = (values: (string | null | undefined)[]) => {
+    const set = new Set(values.filter((v) => v != null && v !== ""));
+    return set.size === 1 ? ([...set][0] as string) : null;
+  };
+  const oneMarket = rows.length > 1 ? uniq(rows.map((h) => h.market)) : null;
+  const oneRate =
+    rows.length > 1
+      ? uniq(rows.map((h) => (h.currency === "KRW" ? null : h.exchange_rate)))
+      : null;
+  const foldMarket = oneMarket != null;
+  const foldRate = oneRate != null && rows.every((h) => h.currency !== "KRW");
+
   const s = summary.data;
 
   return (
@@ -121,7 +136,13 @@ export default function HoldingsPage() {
               필터 칩이 같이 밀려 올라가 안 보인다. 칩은 고정하고 **표만** 스크롤한다. */}
         <StubCard
           title="보유 종목 전체"
-          subtitle="국내 · 해외 통합 (평가금액은 KRW 환산 기준)"
+          subtitle={[
+            "평가금액은 KRW 환산 기준",
+            foldMarket ? `전 종목 ${oneMarket}` : "국내 · 해외 통합",
+            foldRate ? `환율 ${formatPriceString(oneRate, "USD")}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
           className="min-h-0 flex-1"
         >
           <div className="flex h-full min-h-0 flex-col">
@@ -167,7 +188,7 @@ export default function HoldingsPage() {
           <DataTable
             columns={[
               "종목",
-              "시장",
+              ...(foldMarket ? [] : ["시장"]),
               "수량",
               "평단",
               "현재가",
@@ -175,11 +196,14 @@ export default function HoldingsPage() {
               "평가금액",
               "평가손익",
               "수익률",
-              "환율",
+              ...(foldRate ? [] : ["환율"]),
             ]}
             align={[
-              "left", "left", "right", "right", "right",
-              "right", "right", "right", "right", "right",
+              "left",
+              ...(foldMarket ? [] : ["left" as const]),
+              "right", "right", "right",
+              "right", "right", "right", "right",
+              ...(foldRate ? [] : ["right" as const]),
             ]}
             empty={
               holdings.isLoading
@@ -202,9 +226,11 @@ export default function HoldingsPage() {
                     </span>
                   </span>
                 </Cell>
-                <Cell left tone="muted">
-                  {h.market}
-                </Cell>
+                {!foldMarket && (
+                  <Cell left tone="muted">
+                    {h.market}
+                  </Cell>
+                )}
                 <Cell>{formatQuantityString(h.quantity)}</Cell>
                 <Cell>{formatPriceString(h.average_purchase_price, h.currency)}</Cell>
                 <Cell>{formatPriceString(h.current_price, h.currency)}</Cell>
@@ -219,11 +245,13 @@ export default function HoldingsPage() {
                   {formatPercentString(h.unrealized_return)}
                 </Cell>
                 {/* 환율은 수집 시점 값 — 화면이 다시 계산하지 않는다. */}
-                <Cell tone="muted">
-                  {h.currency === "KRW"
-                    ? "—"
-                    : formatPriceString(h.exchange_rate, "USD")}
-                </Cell>
+                {!foldRate && (
+                  <Cell tone="muted">
+                    {h.currency === "KRW"
+                      ? "—"
+                      : formatPriceString(h.exchange_rate, "USD")}
+                  </Cell>
+                )}
               </tr>
             ))}
           </DataTable>

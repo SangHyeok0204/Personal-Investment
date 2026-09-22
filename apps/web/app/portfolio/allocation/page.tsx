@@ -167,7 +167,9 @@ export default function AllocationPage() {
           className={cn(
             "grid min-h-0 flex-1 gap-3",
             "grid-cols-1 auto-rows-[minmax(0,1fr)]",
-            "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:auto-rows-auto",
+            // ⚠️lg(1024)에서 2열로 가르면 오른쪽 표가 377px 밖에 못 받아 잘린다.
+            //   xl(1280)부터 가른다 — 그 아래에서는 세로로 쌓아 표가 폭을 다 쓴다.
+            "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] xl:auto-rows-auto",
           )}
         >
           <div className="flex min-h-0 flex-col gap-3">
@@ -212,8 +214,11 @@ export default function AllocationPage() {
             scrollBody
           >
             <DataTable
-              columns={["종목", "국가", "섹터", "세부 산업", "평가금액", ""]}
-              align={["left", "left", "left", "left", "right", "right"]}
+              // ⚠️6칸이면 좁은 폭에서 표가 잘린다(실측 1160px: 표 518 vs 카드 449).
+              //   정보를 버리지 않고 **합친다** — 국가는 종목 옆 태그로,
+              //   세부 산업은 섹터 아래 줄로 내린다.
+              columns={["종목", "섹터 · 세부 산업", "평가금액", ""]}
+              align={["left", "left", "right", "right"]}
               empty={
                 holdings.isLoading ? "불러오는 중…" : "보유 종목이 없습니다"
               }
@@ -272,13 +277,21 @@ function SectorRow({
   return (
     <tr className="border-t border-hairline transition-colors hover:bg-canvas-soft/60">
       <Cell left strong>
-        <span className="flex items-center gap-2">
-          {name}
-          <span className="text-[10px] font-semibold text-ink-faint">{ticker}</span>
+        {/* ⚠️이름을 그대로 두면 칸이 251px 까지 벌어져 좁은 폭에서 표가 잘린다
+            (실측 1300px 에서 표 597px vs 카드 524px). 폭에 맞춰 줄인다. */}
+        <span className="flex items-center gap-1.5">
+          <span className="max-w-[120px] truncate xl:max-w-[170px]" title={name}>
+            {name}
+          </span>
+          <span className="shrink-0 text-[10px] font-semibold text-ink-faint">
+            {ticker}
+          </span>
+          {country && (
+            <span className="shrink-0 rounded bg-canvas-soft px-1 py-0.5 text-[9px] font-bold text-ink-faint">
+              {country}
+            </span>
+          )}
         </span>
-      </Cell>
-      <Cell left tone="muted">
-        {country}
       </Cell>
       <Cell left>
         {editing ? (
@@ -297,8 +310,11 @@ function SectorRow({
             className="w-28 rounded-lg border border-ge-point bg-white px-2 py-1 text-[12px] font-semibold text-ge-navy outline-none"
           />
         ) : sector ? (
+          <span className="flex flex-col items-start">
           <span className="flex items-center gap-1.5">
-            <span className="text-[12px] font-bold text-ge-navy">{sector}</span>
+            <span className="max-w-[110px] truncate text-[12px] font-bold text-ge-navy">
+              {sector}
+            </span>
             {sectorSource === "MANUAL" && (
               <span
                 title="직접 지정한 값 — 자동 분류가 덮지 않습니다"
@@ -308,14 +324,20 @@ function SectorRow({
               </span>
             )}
           </span>
+          {industry && (
+            <span
+              className="block max-w-[130px] truncate text-[10px] font-medium text-ink-faint"
+              title={industry}
+            >
+              {industry}
+            </span>
+          )}
+          </span>
         ) : (
           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">
             미분류
           </span>
         )}
-      </Cell>
-      <Cell left tone="muted">
-        {industry ?? "—"}
       </Cell>
       <Cell strong>{formatKrwString(marketValueKrw)}</Cell>
       <Cell>
