@@ -402,16 +402,34 @@ class Audit:
             "배당 총계", dividends["total_amount_krw"], monthly["total_dividend_krw"],
             "dividends", "monthly-cashflow",
         )
-        # 순납입도 같은 원천(일별성과)이라 입출금 화면과 정확히 같아야 한다.
-        # ⚠️두 화면의 '순납입'은 **범위가 다르다.** 입출금 화면은 기간 첫날의
-        #   흐름을 시작 잔고에 넣어 빼고, 월별 현금흐름은 그 달의 흐름을 그대로
-        #   센다. 되더해 같은 범위로 맞춘 뒤 비교한다.
+        # ★2026-09-23: 월별 현금흐름도 **첫날을 기준선으로** 쓰도록 바꿨다.
+        #   예전에는 첫 달의 월초 잔액을 모른다고 두어 '그 외'가 빈 칸이었는데,
+        #   그 바람에 기간 리포트와 같은 달이 다른 말을 했다(리포트 617,854 vs
+        #   빈 칸). 이제 세 화면(입출금·월별 현금흐름·기간 리포트)이 같은 규칙을
+        #   쓴다 — 첫날 흐름은 시작 잔고에 포함하고 세지 않는다.
         self.same(
-            "순납입 (첫날 포함 기준)",
-            Decimal(cashflow["net_deposit_krw"] or 0)
-            + Decimal(cashflow["first_day_flow_krw"] or 0),
+            "순납입 (입출금 vs 월별 현금흐름)",
+            cashflow["net_deposit_krw"],
             Decimal(monthly["total_deposit_krw"]) - Decimal(monthly["total_withdrawal_krw"]),
             "cashflow", "monthly-cashflow",
+        )
+        # 첫날 흐름은 어디에도 안 세지만 **사라지지는 않는다** — 시작 잔고에 있다.
+        if cashflow.get("first_day_flow_krw"):
+            print(
+                f"  ·  첫날 흐름 {money(dec(cashflow['first_day_flow_krw']))} 는"
+                f" 세 화면 모두 **시작 잔고에 포함**하고 따로 세지 않는다"
+            )
+        # 월별 '그 외'의 합은 기간 리포트(2026)의 '그 외'와 같아야 한다 —
+        # 같은 잔차를 달별로 쪼갠 것뿐이다.
+        monthly_unexplained = sum(
+            (dec(r["unexplained_krw"]) for r in monthly["rows"]
+             if r.get("unexplained_krw") is not None),
+            Decimal("0"),
+        )
+        self.same(
+            "'그 외' 합 (월별 vs 기간 리포트 2026)",
+            monthly_unexplained, report_year["unexplained_krw"],
+            "monthly-cashflow", "report",
         )
 
         # ── 세금 ───────────────────────────────────────────────────────

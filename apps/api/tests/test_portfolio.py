@@ -801,11 +801,15 @@ def test_monthly_cashflow_empty_without_accounts(client):
 
 def test_monthly_cashflow_keeps_the_three_layers_apart(client, db, kiwoom):
     """입금과 배당을 **더하지 않는다** — 입금은 수익이 아니라 위치 이동이다."""
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date, timedelta as _td  # noqa: F401
 
     account_id = kiwoom["account"].id
     # ⚠️`.replace(day=15)` 는 오늘이 월초면 **미래 날짜**가 된다. 1일로 고정한다.
     today = _date.today().replace(day=1)
+    # ⚠️**첫 행은 기준선이라 세지 않는다.** 그 규칙이 생긴 뒤로는 재려는 달
+    #   앞에 하루를 깔아 줘야 한다 — 안 그러면 그 달이 통째로 기준선이 된다.
+    _add_daily(db, account_id, today - _td(days=1),
+               deposit_assets_krw=Decimal("8000000"))
     _add_daily(
         db, account_id, today,
         deposit_krw=Decimal("1000000"), withdrawal_krw=Decimal("200000"),
@@ -828,19 +832,39 @@ def test_monthly_cashflow_keeps_the_three_layers_apart(client, db, kiwoom):
     assert Decimal(body["net_cash_generated_krw"]) == Decimal("18000")
 
 
-def test_monthly_cashflow_first_month_has_no_opening_balance(client, db, kiwoom):
-    """첫 달 월초 잔액은 **null 이다.** 0 으로 두면 '무에서 시작했다'는 거짓이 된다."""
-    from datetime import date as _date
+def test_monthly_cashflow_uses_the_first_day_as_a_baseline(client, db, kiwoom):
+    """**첫날은 기준선이다.** 그날의 흐름·손익은 이미 첫날 마감 자산에 들어 있다.
+
+    ★2026-09-23 규칙 변경: 예전에는 첫 달의 월초 잔액을 **null** 로 두었다.
+      그러면 '그 외'도 못 내는데, 기간 리포트 화면은 같은 달에 617,854 를
+      적고 있었다 — **같은 달을 두 화면이 다르게 말했다.** 이제 세 화면
+      (입출금·월별 현금흐름·기간 리포트)이 같은 규칙을 쓴다.
+
+    ⚠️그래서 하루치만 있는 계좌는 **표시할 달이 없다.** 한 달의 흐름을 재려면
+      그 앞의 잔액이 필요하기 때문이다 — 0 으로 지어내지 않는다.
+    """
+    from datetime import date as _date, timedelta as _td
 
     account_id = kiwoom["account"].id
-    _add_daily(db, account_id, _date.today().replace(day=1),
+    first = _date.today().replace(day=1)
+
+    # 하루뿐이면 잴 것이 없다.
+    _add_daily(db, account_id, first,
                deposit_assets_krw=Decimal("5000000"), pnl_krw=Decimal("1000"))
+    db.commit()
+    assert client.get("/api/v1/portfolio/monthly-cashflow").json()["rows"] == []
+
+    # 하루를 더하면 그 앞날이 기준선이 되고, 그 달의 '그 외'가 계산된다.
+    _add_daily(db, account_id, first + _td(days=1),
+               deposit_assets_krw=Decimal("5002000"), pnl_krw=Decimal("1500"))
     db.commit()
 
     row = client.get("/api/v1/portfolio/monthly-cashflow").json()["rows"][0]
-    assert row["opening_assets_krw"] is None
-    # 월초을 모르면 '그 외'도 계산할 수 없다 — 0 이 아니라 null 이어야 한다.
-    assert row["unexplained_krw"] is None
+    assert Decimal(row["opening_assets_krw"]) == Decimal("5000000")
+    # 첫날 손익 1,000 은 세지 않는다 — 둘째 날 1,500 만.
+    assert Decimal(row["pnl_krw"]) == Decimal("1500")
+    # 5,002,000 − 5,000,000 − 0 − 1,500 = 500
+    assert Decimal(row["unexplained_krw"]) == Decimal("500")
 
 
 def test_monthly_cashflow_unexplained_is_the_actual_residual(client, db, kiwoom):
@@ -869,8 +893,14 @@ def test_monthly_cashflow_does_not_count_an_empty_month_as_covered(client, db, k
     """배당 0 · 비용 0 인 달은 '배당이 비용을 덮은 달'이 아니다."""
     from datetime import date as _date
 
+    from datetime import timedelta as _td
+
     account_id = kiwoom["account"].id
-    _add_daily(db, account_id, _date.today().replace(day=1),
+    first = _date.today().replace(day=1)
+    # 첫 행은 기준선이라 세지 않는다 — 재려는 날 앞에 하루를 깔아 준다.
+    _add_daily(db, account_id, first - _td(days=1),
+               deposit_assets_krw=Decimal("1000000"))
+    _add_daily(db, account_id, first,
                dividend_krw=Decimal("0"), commission_tax_krw=Decimal("0"),
                deposit_assets_krw=Decimal("1000000"))
     db.commit()

@@ -2495,12 +2495,21 @@ def get_trading_costs(
 
 # ── 월별 현금흐름 ────────────────────────────────────────────────────────────
 
+#: ⚠️예전 문구는 "17개월 중 15개월 일치, 절대합의 63%" 였는데, 그 통계는
+#:  **투자 기간 밖까지 포함한 옛 측정**이라 이 화면이 보여 주는 달들과 범위가
+#:  달랐다. 그 뒤에 `app.core.residual` 로 잔차를 환율·배당·수수료로 쪼개 보니
+#:  훨씬 촘촘하게 닫힌다(설명 안 되는 몫 3.5%). 문구를 그 측정으로 바꾼다.
 _FX_NOTE = (
     "월초 자산 + 순납입 + 손익으로 설명되지 않는 나머지를 '그 외'로 둡니다. "
     "환차손익이라고 적지 않은 이유는 키움 일별성과의 환율 칸이 530행 전부 비어 "
-    "있어 실측할 수 없기 때문입니다. 다만 전월말 주식평가액 × 월간 USD/KRW "
-    "변화와 맞춰 보면 상관계수 0.937(R²=0.878), 부호 17개월 중 15개월 일치, "
-    "절대합의 63%가 설명됩니다 — 대부분 환율입니다."
+    "있어 **종목별로 실측할 수 없기** 때문입니다. 다만 무엇인지는 확인했습니다 — "
+    "전체 구간에서 '그 외' -3,203,574 를 환율(추정) -3,091,778 · 배당 +121,611 · "
+    "수수료 -120,399 로 쪼개면 설명 안 되는 몫이 -113,008(3.5%)만 남습니다. "
+    "즉 대부분 환율이고 나머지는 배당과 수수료입니다. "
+    "⚠️다만 **월 단위로는 어긋납니다** — 설명 안 되는 몫이 달마다 ±30만원씩 "
+    "흔들리는데(환산 시점 차이로 월 경계에서 밀리는 것으로 보입니다) 합치면 "
+    "-11만입니다. 월별 숫자를 '이만큼이 환율'로 읽지 마세요. "
+    "기간 리포트 화면에서 달별 분해를 볼 수 있습니다."
 )
 
 
@@ -2571,7 +2580,16 @@ def get_monthly_cashflow(
     #: 월 → 그 달 **마지막 거래일**의 자산 잔액. 월말 잔액은 합이 아니라 끝값이다.
     closing: dict[str, Decimal | None] = {}
 
-    for base_date, dep, wd, div, cost, buy, sell, pnl, assets in rows:
+    # ⚠️**첫날은 기준선이다.** 그날의 입출금·손익·비용은 이미 첫날 마감 자산에
+    #   들어 있어서, 또 더하면 두 번 세는 것이 된다. 예전에는 첫 달의 월초
+    #   잔액을 아예 모른다고 두어 '그 외'가 null 이었는데, 그 바람에 **기간
+    #   리포트와 같은 달이 다른 말을 했다**(리포트는 617,854, 여기는 빈 칸).
+    #   기간 리포트와 같은 규칙을 쓴다 — 첫 행을 기준선으로 삼고 세지 않는다.
+    baseline_close: Decimal | None = None
+    for index, (base_date, dep, wd, div, cost, buy, sell, pnl, assets) in enumerate(rows):
+        if index == 0:
+            baseline_close = assets
+            continue
         key = f"{base_date.year:04d}-{base_date.month:02d}"
         bucket = flows.setdefault(key, [zero] * 7)
         for i, v in enumerate((dep, wd, div, cost, buy, sell, pnl)):
@@ -2579,9 +2597,12 @@ def get_monthly_cashflow(
         # 행이 날짜 오름차순이라 마지막으로 덮어쓴 값이 그 달의 끝값이 된다.
         closing[key] = assets
 
+    if not flows:
+        return empty
+
     months = sorted(flows)
     out: list[MonthlyCashflowRowOut] = []
-    previous_close: Decimal | None = None
+    previous_close: Decimal | None = baseline_close
 
     for month in months:
         dep, wd, div, cost, buy, sell, pnl = flows[month]
