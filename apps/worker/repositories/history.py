@@ -144,6 +144,16 @@ _SET_EXCHANGE_CODE = text(
     "WHERE ticker = :ticker AND broker_exchange_code IS DISTINCT FROM :code"
 )
 
+#: ⚠️`assets` 에는 **보유 종목만** 있어서 판 종목의 코드는 거기 못 남는다
+#:  (실측: SGOV 는 배당이 14건인데 코드가 안 남아 매번 세 거래소를 다시
+#:  더듬었다). 티커별 표에 따로 남긴다 — alembic 0017.
+_REMEMBER_EXCHANGE_CODE = text(
+    "INSERT INTO broker_exchange_codes (ticker, code, source) "
+    "VALUES (:ticker, :code, :source) "
+    "ON CONFLICT (ticker) DO UPDATE SET "
+    "  code = EXCLUDED.code, source = EXCLUDED.source, updated_at = now()"
+)
+
 _FIND_ASSET = text(
     "SELECT id FROM assets WHERE ticker = :ticker ORDER BY created_at LIMIT 1"
 )
@@ -269,16 +279,45 @@ def upsert_dividends(conn, account_id, rows, source_job_id=None):
     return len(rows)
 
 
-def remember_exchange_codes(conn, rows) -> int:
-    """종목별 거래소 코드를 assets 에 남긴다. 다음 조회에서 탐색을 건너뛴다."""
+def remember_exchange_codes(conn, rows, source: str = "dividend") -> int:
+    """종목별 거래소 코드를 남긴다. 다음 조회에서 탐색을 건너뛴다.
+
+    두 군데에 적는다.
+      · `assets.broker_exchange_code` — 보유 종목 화면들이 이미 읽고 있다.
+      · `broker_exchange_codes` — **판 종목까지** 남는 티커별 표(alembic 0017).
+
+    ⚠️assets 에만 적으면 판 종목은 코드를 잃는다. 그러면 탐색을 "행이 온 코드만
+      인정"으로 조일 수 없다 — 판 종목이 매번 '확인 못 함'으로 보고되기 때문이다.
+    """
     seen = {}
     for row in rows:
         code = getattr(row, "broker_exchange_code", None)
-        if code and row.ticker not in seen:
-            seen[row.ticker] = code
+        ticker = getattr(row, "ticker", None)
+        if code and ticker and ticker not in seen:
+            seen[ticker] = code
     for ticker, code in seen.items():
         conn.execute(_SET_EXCHANGE_CODE, {"code": code, "ticker": ticker})
+        conn.execute(
+            _REMEMBER_EXCHANGE_CODE,
+            {"ticker": ticker, "code": code, "source": source},
+        )
     return len(seen)
+
+
+def remember_probed_codes(conn, codes: dict[str, str]) -> int:
+    """더듬어 찾은 거래소 코드를 티커별 표에 남긴다.
+
+    ⚠️`remember_exchange_codes` 는 **배당 행**에서 코드를 거둔다. 배당을 안 주는
+      종목은 행이 없어 코드가 안 남고, 그래서 동기화마다 세 거래소를 다시
+      더듬었다. 여기서는 배당 유무와 무관하게 남긴다.
+    """
+    for ticker, code in codes.items():
+        if ticker and code:
+            conn.execute(
+                _REMEMBER_EXCHANGE_CODE,
+                {"ticker": ticker, "code": code, "source": "probe"},
+            )
+    return len(codes)
 
 
 def tickers_for_dividends(conn, account_id):
@@ -289,6 +328,9 @@ def tickers_for_dividends(conn, account_id):
     # ⚠️assets 에서만 뽑으면 **이미 판 종목이 빠진다** — assets 행은 보유 포지션에서만
     #   만들어지기 때문이다. 실측에서 SGOV(전량 매도)가 통째로 빠져 배당이 20건 중
     #   10건만 들어왔다. 체결 테이블에서 티커를 직접 모으고, 거래소 코드는 있으면 붙인다.
+    #
+    # ⚠️거래소 코드도 같은 이유로 **티커별 표**(alembic 0017)를 먼저 본다.
+    #   assets 에만 적어 두면 판 종목은 코드를 잃어 매번 다시 더듬는다.
     rows = conn.execute(
         text(
             "WITH held AS ( "
@@ -299,9 +341,11 @@ def tickers_for_dividends(conn, account_id):
             "), all_tickers AS ( "
             "  SELECT ticker FROM held UNION SELECT ticker FROM traded "
             ") "
-            "SELECT t.ticker, max(a.broker_exchange_code) "
-            "FROM all_tickers t LEFT JOIN assets a ON a.ticker = t.ticker "
-            "GROUP BY t.ticker ORDER BY t.ticker"
+            "SELECT t.ticker, coalesce(c.code, max(a.broker_exchange_code)) "
+            "FROM all_tickers t "
+            "LEFT JOIN assets a ON a.ticker = t.ticker "
+            "LEFT JOIN broker_exchange_codes c ON c.ticker = t.ticker "
+            "GROUP BY t.ticker, c.code ORDER BY t.ticker"
         ),
         {"acc": account_id},
     ).all()

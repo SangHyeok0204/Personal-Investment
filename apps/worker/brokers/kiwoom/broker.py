@@ -21,6 +21,7 @@ from ..base import (
     BalanceRow,
     BrokerAdapter,
     DailyPerformanceRow,
+    DividendFetch,
     DividendRow,
     PositionRow,
     RealizedPnlRow,
@@ -356,13 +357,17 @@ class KiwoomAdapter(BrokerAdapter):
           똑같이 보인다** — 배당을 주는 종목인데 빠져 있어도 알 길이 없다.
           건너뛴 티커를 두 번째 값으로 함께 돌려준다.
 
-        돌려주는 것: `(배당 행 목록, 건너뛴 티커 목록)`
+        돌려주는 것: `DividendFetch(배당 행, 건너뛴 티커, 새로 알아낸 거래소 코드)`
+
+        ⚠️**배당이 0건이어도 알아낸 코드는 돌려준다.** 남겨 두지 않으면 다음
+          동기화에서 같은 종목을 또 세 번 더듬는다.
         """
         if "US" not in self._markets:
-            return [], []
+            return DividendFetch(rows=[], skipped=[], exchange_codes={})
 
         out: list[DividendRow] = []
         skipped: list[str] = []
+        found: dict[str, str] = {}
         for ticker, known_code in tickers:
             if not ticker:
                 continue
@@ -371,6 +376,8 @@ class KiwoomAdapter(BrokerAdapter):
                 # 세 거래소 어디에도 없다 — **조회를 못 한 것**이지 배당이 0 인 게 아니다.
                 skipped.append(ticker)
                 continue
+            if code != known_code:
+                found[ticker] = code
             try:
                 pages = self._client.request_tr(
                     API_US_STOCK_DAILY,
@@ -409,7 +416,9 @@ class KiwoomAdapter(BrokerAdapter):
                     )
 
         out.sort(key=lambda d: (d.pay_date, d.ticker))
-        return out, sorted(set(skipped))
+        return DividendFetch(
+            rows=out, skipped=sorted(set(skipped)), exchange_codes=found
+        )
 
     def _resolve_exchange_code(self, ticker: str, end: date) -> str | None:
         """종목이 어느 거래소인지 찾는다(ND/NY/NA).
@@ -434,7 +443,7 @@ class KiwoomAdapter(BrokerAdapter):
         probe_start = end - timedelta(days=_EXCHANGE_PROBE_DAYS)
         for code in _US_EXCHANGE_CODES:
             try:
-                self._client.request_tr(
+                pages = self._client.request_tr(
                     API_US_STOCK_DAILY,
                     {
                         "from": probe_start.strftime("%Y%m%d"),
@@ -444,7 +453,13 @@ class KiwoomAdapter(BrokerAdapter):
                     },
                     path=us_equities.US_ACNT_PATH,
                 )
-                return code
+                # ⚠️**행이 온 코드만 인정한다.** 예전에는 "에러가 안 나면 맞는
+                #   거래소"로 쳤는데, 빈 응답도 통과해서 첫 코드(ND)가 그대로
+                #   붙었다. 그 종목이 사실 NYSE 면 배당 조회가 조용히 빈 값을
+                #   돌려주고, 건너뛴 것으로도 안 잡힌다 — 화면에는 '배당 0원'으로
+                #   보인다. 못 찾으면 못 찾았다고 하는 편이 낫다(호출부가 센다).
+                if any(page.get("result_list") for page in pages):
+                    return code
             except KiwoomApiError as exc:
                 if _is_unknown_symbol(exc):
                     continue

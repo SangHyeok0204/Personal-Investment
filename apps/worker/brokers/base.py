@@ -29,6 +29,23 @@ class AccountRef:
 
 
 @dataclass(frozen=True)
+class DividendFetch:
+    """배당 조회 한 번의 결과.
+
+    ⚠️세 가지를 **따로** 들고 나온다.
+      · rows           받은 배당
+      · skipped        거래소를 못 찾거나 증권사가 모른다고 해서 **못 물어본** 종목.
+                       '배당 0원'과 구분하려고 따로 센다.
+      · exchange_codes 이번에 알아낸 (티커 → 거래소 코드). 배당이 0건이어도
+                       코드는 알아낼 수 있고, 그걸 남겨야 다음에 다시 안 더듬는다.
+    """
+
+    rows: list["DividendRow"]
+    skipped: list[str]
+    exchange_codes: dict[str, str]
+
+
+@dataclass(frozen=True)
 class PositionRow:
     """보유 종목 한 줄 — 증권사 필드명을 이미 벗겨낸 형태."""
 
@@ -256,12 +273,12 @@ class BrokerAdapter:
         tickers: list[tuple[str, str | None]],
         start: date,
         end: date,
-    ) -> tuple[list[DividendRow], list[str]]:
-        """배당 수령 이력과 **못 물어본 종목**.
+    ) -> "DividendFetch":
+        """배당 수령 이력 · 못 물어본 종목 · 새로 알아낸 거래소 코드.
 
         tickers: (종목코드, 증권사 거래소코드 or None). 코드를 모르면 구현체가 찾는다.
 
-        ⚠️돌려주는 것은 `(배당 행, 건너뛴 티커)` 다. 건너뛴 것을 따로 내놓지
-          않으면 화면에서 **'배당 0원'과 '안 물어봤다'가 똑같이 보인다.**
+        ⚠️건너뛴 것을 따로 내놓지 않으면 화면에서 **'배당 0원'과 '안 물어봤다'가
+          똑같이 보인다.**
         """
         raise NotImplementedError

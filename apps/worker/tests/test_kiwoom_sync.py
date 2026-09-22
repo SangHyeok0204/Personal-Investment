@@ -831,16 +831,63 @@ def test_dividend_fetch_reports_tickers_it_could_not_ask_about():
         sleep=lambda _s: None,
         markets=("US",),
     )
-    rows, skipped = adapter.fetch_dividends(
+    fetched = adapter.fetch_dividends(
         AccountRef(external_account_id="1"),
         [("GOOD", None), ("GHOST", None)],
         date(2026, 1, 1),
         date(2026, 9, 23),
     )
 
-    assert [r.ticker for r in rows] == ["GOOD"]
+    assert [r.ticker for r in fetched.rows] == ["GOOD"]
     # GHOST 는 '배당 0원'이 아니라 **확인 못 한 것**이다.
-    assert skipped == ["GHOST"]
+    assert fetched.skipped == ["GHOST"]
+    # 알아낸 코드는 돌려줘야 다음 동기화에서 다시 안 더듬는다.
+    assert fetched.exchange_codes == {"GOOD": "ND"}
+
+
+def test_exchange_probe_rejects_an_empty_response():
+    """⚠️**행이 온 코드만 인정한다.**
+
+    예전에는 "에러가 안 나면 맞는 거래소"로 쳤는데 빈 응답도 통과했다. 최근
+    5일에 아무 행이 없는 종목(판 종목이 특히)은 첫 코드인 ND 가 그대로 붙고,
+    그 종목이 사실 NYSE 면 배당이 **조용히 비어** 나온다 — 건너뛴 것으로도
+    안 잡혀 화면에는 '배당 0원'으로 보인다.
+    """
+    from brokers.base import AccountRef
+    from brokers.credentials import BrokerCredentials
+    from brokers.kiwoom.broker import KiwoomAdapter
+
+    def usa21730(headers, body):
+        # NYSE 종목이다 — ND 로 물으면 **빈 응답**(에러가 아니다)이 온다.
+        if body.get("stex_tp") == "NY":
+            return FakeResponse({
+                "result_list": [
+                    {"last_base_dt": "20260807", "dvid_amt": "8711", "stk_nm": "뉴욕종목"}
+                ],
+                "return_code": 0,
+            })
+        return FakeResponse({"result_list": [], "return_code": 0})
+
+    adapter = KiwoomAdapter(
+        BrokerCredentials(
+            broker_code="KIWOOM", app_key="k", secret_key="s",
+            base_url="https://mockapi.kiwoom.com",
+        ),
+        http_client=FakeHttpClient({"usa21730": usa21730}),
+        sleep=lambda _s: None,
+        markets=("US",),
+    )
+    fetched = adapter.fetch_dividends(
+        AccountRef(external_account_id="1"),
+        [("NYSTOCK", None)],
+        date(2026, 1, 1),
+        date(2026, 9, 23),
+    )
+
+    # ND 를 덥석 물지 않고 NY 까지 가야 한다.
+    assert fetched.exchange_codes == {"NYSTOCK": "NY"}
+    assert [r.ticker for r in fetched.rows] == ["NYSTOCK"]
+    assert fetched.skipped == []
 
 
 def test_normalize_ticker_strips_kiwoom_prefix():

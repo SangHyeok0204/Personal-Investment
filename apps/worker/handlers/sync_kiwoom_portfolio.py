@@ -498,15 +498,21 @@ def run(engine, job_id, payload, storage_dir, log_job):
                         dividend_targets = history_repo.tickers_for_dividends(
                             conn, account_id
                         )
-                    dividends, dividend_skipped = adapter.fetch_dividends(
+                    fetched = adapter.fetch_dividends(
                         account_ref, dividend_targets, history_start, now.date()
                     )
+                    dividend_skipped = fetched.skipped
                     with engine.begin() as conn:
                         history_counts["dividends"] += history_repo.upsert_dividends(
-                            conn, account_id, dividends, job_id
+                            conn, account_id, fetched.rows, job_id
                         )
                         # 찾아낸 거래소 코드를 남겨 다음 동기화의 탐색을 줄인다.
-                        history_repo.remember_exchange_codes(conn, dividends)
+                        history_repo.remember_exchange_codes(conn, fetched.rows)
+                        # ⚠️**배당이 0건이어도 코드는 남긴다.** 배당 행에서만
+                        #   거두면 배당을 안 주는 종목은 매번 다시 더듬는다.
+                        history_repo.remember_probed_codes(
+                            conn, fetched.exchange_codes
+                        )
                     # ⚠️**못 물어본 종목을 조용히 넘기지 않는다.** 배당 조회는
                     #   종목마다 거래소 코드가 있어야 하는데, 못 찾으면 그 종목은
                     #   조회 자체를 못 한다. 그걸 안 알리면 화면에서 '배당 0원'과
