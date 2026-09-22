@@ -3124,13 +3124,19 @@ export interface LiveQuote {
   quantity: string | null;
   market_value_local: string | null;
   market_value_krw: string | null;
+  /** ⚠️**증권사와 같은 기준** — 제비용을 뺀 값이다. */
   unrealized_pnl_krw: string | null;
+  /** 뺀 제비용(모형). 빼기 전 값이 필요하면 더한다. */
+  fee_reserve_krw: string | null;
 }
 
 export interface LiveQuotes {
   items: LiveQuote[];
   total_market_value_krw: string | null;
+  /** 제비용을 뺀 뒤 — 증권사 스냅샷과 같은 기준이다. */
   total_unrealized_pnl_krw: string | null;
+  /** 뺀 제비용의 합(모형). */
+  total_fee_reserve_krw: string | null;
   /** 시세를 못 받은 종목. 숨기지 않는다. */
   missing: string[];
   fetched: number;

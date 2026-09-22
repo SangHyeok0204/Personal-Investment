@@ -318,6 +318,35 @@ class Audit:
             f"— 차이 {money(gap)} ({share:.1f}%). 0.25% × (매입+평가) 로 설명된다"
         )
 
+        # ⚠️실시간 평가손익도 **증권사와 같은 기준**이어야 한다. 예전에는 실시간만
+        #   제비용을 안 빼서, 시세가 도착하는 순간 가격이 하나도 안 움직여도
+        #   자산 현황의 평가손익이 ₩174,262 뛰었다. 한 칸이 두 기준을 오갔다.
+        if quotes.get("total_market_value_krw") and not quotes.get("missing"):
+            self.same(
+                "실시간: 매입 + 평가손익 + 제비용 = 평가금액",
+                dec(summary["purchase_amount_krw"])
+                + dec(quotes["total_unrealized_pnl_krw"])
+                + dec(quotes["total_fee_reserve_krw"]),
+                dec(quotes["total_market_value_krw"]),
+                "summary+quotes", "quotes",
+            )
+            # 기준이 같은지 — 평가액 차이와 손익 차이가 (제비용 변화만큼만) 달라야 한다.
+            value_gap = dec(quotes["total_market_value_krw"]) - dec(
+                summary["securities_value_krw"]
+            )
+            pnl_gap = dec(quotes["total_unrealized_pnl_krw"]) - dec(
+                summary["unrealized_pnl_krw"]
+            )
+            fee_gap = dec(quotes["total_fee_reserve_krw"]) - dec(
+                summary["fee_reserve_krw"]
+            )
+            print(
+                f"  ·  실시간 vs 증권사 — 평가액 {money(value_gap)}, "
+                f"손익 {money(pnl_gap)}, 제비용 {money(fee_gap)}. "
+                f"손익 차이는 평가액 차이에서 제비용 변화를 뺀 만큼이어야 한다 "
+                f"({money(value_gap - fee_gap)})"
+            )
+
         print("\n[실현손익·배당]")
         self.same(
             "실현손익", realized["pnl_krw"], analytics["realized_pnl_krw"],

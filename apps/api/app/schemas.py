@@ -591,7 +591,10 @@ class LiveQuoteOut(BaseModel):
     quantity: Decimal | None
     market_value_local: Decimal | None
     market_value_krw: Decimal | None
+    #: ⚠️**증권사와 같은 기준**이다 — 제비용을 뺀 값. 자세한 건 LiveQuotesOut 참고.
     unrealized_pnl_krw: Decimal | None
+    #: 그 종목에서 뺀 제비용(모형). 빼기 전 값을 되살리려면 이걸 더하면 된다.
+    fee_reserve_krw: Decimal | None
 
 
 class LiveQuotesOut(BaseModel):
@@ -601,11 +604,25 @@ class LiveQuotesOut(BaseModel):
       새로 받아오지 않는다 — 가격과 환율이 서로 다른 시점의 값이면 합계가
       종목별 수치와 어긋나고, 그 차이는 화면에서 "합이 안 맞는다"로 보인다.
       움직이는 건 가격뿐이고 환율은 마지막 동기화 값에 고정돼 있다.
+
+    ⚠️**평가손익은 증권사와 같은 기준으로 낸다 — 제비용을 뺀 값이다.**
+      예전에는 (평가액 − 매입액) 만 냈다. 그래서 자산 현황 화면에서 실시간
+      시세가 도착하는 순간 **가격이 하나도 안 움직여도 평가손익이 ₩174,262
+      뛰었다.** 증권사 스냅샷은 제비용을 뺀 값이고 실시간은 안 뺀 값이라,
+      한 칸이 두 기준을 오가고 있었다.
+
+    ⚠️여기서 빼는 제비용은 **모형**이다(0.25% × (매입 + 평가)). 증권사가 실시간
+      평가손익을 주지 않으니 실측할 방법이 없다. 보유 종목 화면의 제비용은
+      실측 잔차이고 이쪽은 모형이라, 둘이 몇 원 다를 수 있다 — 실측으로 전체
+      137원이었다. `fee_reserve_krw` 로 얼마를 뺐는지 같이 내보낸다.
     """
 
     items: list[LiveQuoteOut]
     total_market_value_krw: Decimal | None
+    #: 제비용을 뺀 뒤. 증권사 스냅샷과 같은 기준이다.
     total_unrealized_pnl_krw: Decimal | None
+    #: 뺀 제비용의 합(모형). 빼기 전 값이 필요하면 더하면 된다.
+    total_fee_reserve_krw: Decimal | None
     # 시세를 못 받은 종목 — 숨기지 않고 개수로 알린다.
     missing: list[str]
     fetched: int

@@ -129,13 +129,38 @@ export default function PortfolioPage() {
       ? String(Number(stockKrw) + Number(cashKrw))
       : stockKrw;
 
+  // ⚠️평가손익의 **값과 비율을 같은 원천에서** 낸다. 예전에는 값은 실시간,
+  //   비율은 증권사 스냅샷이라 가격이 움직이면 둘이 서로 다른 말을 했다.
+  // ★두 원천의 기준도 맞춰 두었다 — 실시간 쪽도 제비용을 뺀 값을 준다.
+  //   (예전에는 실시간이 안 뺀 값이라, 시세가 도착하는 순간 가격이 하나도
+  //    안 움직여도 평가손익이 ₩174,262 뛰었다.)
+  const pnlKrw =
+    (allLive ? quotes.data?.total_unrealized_pnl_krw : null) ??
+    s?.unrealized_pnl_krw ??
+    null;
+  const purchaseKrw = s?.purchase_amount_krw ?? null;
+  const pnlRate =
+    allLive && pnlKrw != null && purchaseKrw != null && Number(purchaseKrw) !== 0
+      ? formatPercentString(String(Number(pnlKrw) / Number(purchaseKrw)))
+      : s?.unrealized_return != null
+        ? formatPercentString(s.unrealized_return)
+        : null;
+
+  // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 예전에는 조각만 증권사
+  //   스냅샷이고 분모(totalKrw)는 실시간이라, 같은 화면에서 SOXL 이 도넛
+  //   19.9%(₩7,504,865) · 표 20.5%(₩7,817,339) 로 갈렸다. 분자만 옛 값이니
+  //   모든 비중이 조금씩 낮게 나오고, 합도 100% 가 안 된다.
   const holdingSlices: DonutSlice[] = useMemo(() => {
-    const slices = rows.map((h) => ({
-      key: h.asset_id,
-      label: h.name ?? h.ticker,
-      value: Number(h.market_value_krw ?? 0),
-      caption: formatKrwString(h.market_value_krw),
-    }));
+    const slices = rows.map((h) => {
+      const valueKrw =
+        liveByTicker.get(h.ticker)?.market_value_krw ?? h.market_value_krw;
+      return {
+        key: h.asset_id,
+        label: h.name ?? h.ticker,
+        value: Number(valueKrw ?? 0),
+        caption: formatKrwString(valueKrw),
+      };
+    });
     // 분모에만 더하고 조각에서 빼면 비중 합이 100% 가 안 된다 — 현금도 넣는다.
     if (cashKrw != null && Number(cashKrw) > 0) {
       slices.push({
@@ -146,7 +171,7 @@ export default function PortfolioPage() {
       });
     }
     return slices;
-  }, [rows, cashKrw]);
+  }, [rows, cashKrw, liveByTicker]);
 
   const axisSlices: DonutSlice[] = useMemo(
     () =>
@@ -177,22 +202,23 @@ export default function PortfolioPage() {
 
         {/* 1행: 요약 4칸 — 높이 고정 */}
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+          {/* ⚠️`s.total_assets_krw` 를 쓰면 안 된다. 그건 증권사 스냅샷이라,
+              아래 '보유종목 평가액' 이 실시간으로 갈아끼워지는 순간
+              **부제에 적은 "보유종목 + 예수금" 이 성립하지 않는다**(실측
+              357,512원 차이). 같은 stockKrw 로 만든 totalKrw 를 쓴다. */}
           <StatTile
             label="총 평가금액"
-            value={formatKrwString(s?.total_assets_krw)}
-            hint="보유종목 평가액 + 예수금"
+            value={formatKrwString(totalKrw)}
+            hint={allLive ? "보유종목 + 예수금 · 실시간" : "보유종목 평가액 + 예수금"}
             loading={summary.isLoading}
           />
           <StatTile
             label="평가손익"
-            value={formatKrwSigned(
-              (allLive ? quotes.data?.total_unrealized_pnl_krw : null) ??
-                s?.unrealized_pnl_krw,
-            )}
+            value={formatKrwSigned(pnlKrw)}
             hint={
-              s?.unrealized_return != null
-                ? `매입원가 대비 ${formatPercentString(s.unrealized_return)}`
-                : "매입원가 대비"
+              pnlRate != null
+                ? `매입원가 대비 ${pnlRate} · 제비용 뺀 뒤`
+                : "매입원가 대비 · 제비용 뺀 뒤"
             }
             accent="auto"
             loading={summary.isLoading}
@@ -255,13 +281,17 @@ export default function PortfolioPage() {
             />
           </StubCard>
 
+          {/* ⚠️이 카드만 **마지막 동기화 기준**이다. 왼쪽 도넛과 오른쪽 표는
+              실시간 시세로 갈아끼우는데, 배분은 /allocation 이 주는 스냅샷을
+              쓴다(리밸런싱·자산 현황과 분모를 맞춰 둔 값이라 여기만 실시간으로
+              바꾸면 그쪽이 어긋난다). 기준이 다르면 화면에 적는다. */}
           <StubCard
             title="배분"
             subtitle={
               allocation.data?.unclassified_market_value_krw &&
               Number(allocation.data.unclassified_market_value_krw) > 0
-                ? `미분류 ${formatKrwString(allocation.data.unclassified_market_value_krw)}`
-                : undefined
+                ? `마지막 동기화 기준 · 미분류 ${formatKrwString(allocation.data.unclassified_market_value_krw)}`
+                : "마지막 동기화 기준"
             }
             scrollBody
             action={

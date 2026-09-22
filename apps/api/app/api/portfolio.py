@@ -1514,12 +1514,23 @@ def get_live_quotes(
       움직이는 건 가격뿐이다.
 
     ⚠️시세를 못 받은 종목은 0 으로 채우지 않고 `missing` 에 담아 내보낸다.
+
+    ⚠️**평가손익은 증권사와 같은 기준으로 낸다 — 제비용을 뺀 값이다.**
+      예전에는 (평가액 − 매입액) 만 냈다. 그래서 자산 현황 화면에서 실시간
+      시세가 도착하는 순간 **가격이 하나도 안 움직여도 평가손익이 ₩174,262
+      뛰었다**(실측: 실시간 총 손익이 증권사 대비 +515,518 인데, 평가액 차이는
+      +341,256 뿐이었다 — 나머지 174,262 가 정확히 제비용이다).
+      한 칸이 두 기준을 오가고 있었다.
+
+    ⚠️여기서 빼는 제비용은 **모형**이다(`fee_reserve.modelled_krw`). 증권사가
+      실시간 평가손익을 주지 않으니 실측할 방법이 없다. 얼마를 뺐는지
+      `fee_reserve_krw` 로 같이 내보낸다 — 숨기고 빼지 않는다.
     """
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
         return LiveQuotesOut(
             items=[], total_market_value_krw=None, total_unrealized_pnl_krw=None,
-            missing=[], fetched=0, as_of=None,
+            total_fee_reserve_krw=None, missing=[], fetched=0, as_of=None,
         )
 
     rows = db.execute(
@@ -1531,7 +1542,7 @@ def get_live_quotes(
     if not rows:
         return LiveQuotesOut(
             items=[], total_market_value_krw=None, total_unrealized_pnl_krw=None,
-            missing=[], fetched=0, as_of=None,
+            total_fee_reserve_krw=None, missing=[], fetched=0, as_of=None,
         )
 
     quotes, fetched = quote_cache.get_quotes([a.ticker for _, a in rows])
@@ -1553,6 +1564,8 @@ def get_live_quotes(
             else None
         )
         purchase_krw = _purchase_krw(position, asset.currency)
+        # 증권사와 같은 기준을 만든다 — 제비용을 뺀 평가손익.
+        reserve = fr.modelled_krw(value_krw, purchase_krw)
         items.append(
             LiveQuoteOut(
                 ticker=asset.ticker,
@@ -1570,10 +1583,13 @@ def get_live_quotes(
                 market_value_local=value_local,
                 market_value_krw=value_krw,
                 unrealized_pnl_krw=(
-                    (value_krw - purchase_krw)
-                    if value_krw is not None and purchase_krw is not None
+                    (value_krw - purchase_krw - reserve)
+                    if value_krw is not None
+                    and purchase_krw is not None
+                    and reserve is not None
                     else None
                 ),
+                fee_reserve_krw=reserve,
             )
         )
 
@@ -1581,6 +1597,7 @@ def get_live_quotes(
         items=items,
         total_market_value_krw=_sum([i.market_value_krw for i in items]),
         total_unrealized_pnl_krw=_sum([i.unrealized_pnl_krw for i in items]),
+        total_fee_reserve_krw=_sum([i.fee_reserve_krw for i in items]),
         missing=missing,
         fetched=fetched,
         as_of=max((i.as_of for i in items if i.as_of), default=None),
