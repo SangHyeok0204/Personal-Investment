@@ -32,6 +32,18 @@ import { cn } from "@/lib/utils";
 //
 // ★한 페이지 안에 다 들어간다(스크롤 없음). 세부는 hover 로 알리고 click 으로
 //   가운데 팝업을 띄운다 — 표를 길게 늘어놓는 대신.
+//
+// ⚠️2026-09-22: 이 화면에도 **기준이 다른 숫자가 섞여 있었다.** 상단은
+//   '전체 수익률 −1.98%', 오른쪽은 '합계 +8.64% = 평가수익률'. 부호가 반대라
+//   "종목은 다 잘했는데 왜 전체는 마이너스냐"로 읽힌다. 셋이 다르다:
+//     · 기간    기간수익률은 조회 구간, 기여도는 **매입 시점 이후**
+//     · 범위    기간수익률은 계좌 전체(판 것·배당·예수금 포함),
+//               기여도는 **지금 들고 있는 종목만**
+//     · 통화    기간수익률은 예탁자산 기반이라 **원화 기준**(환율 포함),
+//               기여도는 원가·평가액 모두 오늘 환율로 환산해 **주가 기준**
+//   실측으로 같은 가족끼리는 맞는다 — 주가 기준 +7.25%(수익률 추이의 연쇄
+//   수익률) vs +8.64%, 원화 기준 −1.86% vs −1.98%.
+//   숫자를 고치는 게 아니라 **기준을 화면에 적는다.**
 
 /** 비율 문자열(0.0711) → "+7.11%". null 은 "—". */
 function pct(value: string | null | undefined, digits = 2): string {
@@ -68,6 +80,7 @@ export default function PerformanceAnalysisPage() {
   const [detail, setDetail] = useState<Contribution | null>(null);
   const [openRisk, setOpenRisk] = useState(false);
   const [openMonthly, setOpenMonthly] = useState(false);
+  const [openBasis, setOpenBasis] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["performance-analytics", accountId],
@@ -80,7 +93,10 @@ export default function PerformanceAnalysisPage() {
 
   return (
     <>
-      <Topbar title="성과 분석" subtitle="기간수익률 · 위험지표 · 종목 기여도" />
+      <Topbar
+        title="성과 분석"
+        subtitle="기간수익률(원화 기준) · 위험지표 · 종목 기여도(주가 기준)"
+      />
       <PageContainer fit>
         {!connected && !isLoading && (
           <NotConnectedBanner what="일별 계좌 수익률" />
@@ -95,10 +111,14 @@ export default function PerformanceAnalysisPage() {
                 label={`${p.label} 수익률`}
                 value={p.return_ratio == null ? null : pct(p.return_ratio)}
                 hint={
-                  p.start_date
-                    ? `${p.start_date} ~ ${p.end_date} · ${p.observations}일`
-                    : undefined
+                  p.label === "전체"
+                    ? "원화 기준 · 눌러서 설명"
+                    : p.start_date
+                      ? `${p.start_date} ~ ${p.end_date} · ${p.observations}일`
+                      : undefined
                 }
+                actionHint={p.label === "전체" ? "눌러서 읽는 법 보기" : undefined}
+                onClick={p.label === "전체" ? () => setOpenBasis(true) : undefined}
                 accent="auto"
                 loading={isLoading}
               />
@@ -129,6 +149,43 @@ export default function PerformanceAnalysisPage() {
           />
         </div>
       </PageContainer>
+
+      <Modal
+        open={openBasis}
+        onClose={() => setOpenBasis(false)}
+        title="이 화면의 숫자는 기준이 셋입니다"
+        subtitle="더하거나 비교하기 전에"
+      >
+        <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
+          <li>
+            <strong>기간 수익률은 원화 기준입니다.</strong> 예탁자산(원화 환산액)의
+            일별 변화에서 입출금을 뺀 값이라, 환율이 빠지면 종목이 그대로여도
+            마이너스가 됩니다.
+          </li>
+          <li>
+            <strong>종목별 기여도는 주가 기준입니다.</strong> 매입원가와 평가액을
+            모두 <strong>오늘 환율</strong>로 환산해 비교하므로 환율이 상쇄됩니다.
+            그래서 같은 계좌인데 부호가 반대일 수 있습니다 — 틀린 게 아니라 재는
+            것이 다릅니다.
+          </li>
+          <li>
+            <strong>기간도 범위도 다릅니다.</strong> 기여도는 <strong>지금 들고
+            있는 종목만</strong>, <strong>산 날부터</strong> 셉니다. 이미 판 종목,
+            배당, 예수금은 들어 있지 않습니다. 기간 수익률은 계좌 전체입니다.
+            그래서 <strong>두 숫자를 더하거나 빼면 안 됩니다.</strong>
+          </li>
+          <li>
+            같은 기준끼리는 맞습니다 — 주가 기준으로는 &apos;수익률 추이&apos;
+            화면의 연쇄 수익률(+7.25%)과 여기 합계(+8.64%)가 같은 가족이고,
+            원화 기준으로는 그 화면의 −1.86% 와 여기 전체 수익률(−1.98%)이 같은
+            가족입니다.
+          </li>
+          <li>
+            <strong>환율이 얼마나 먹었는지</strong>는 &apos;수익률 추이&apos;
+            화면의 &apos;환율 등&apos; 칸과 &apos;환노출&apos; 화면에서 봅니다.
+          </li>
+        </ul>
+      </Modal>
 
       <Modal
         open={openRisk}
@@ -225,6 +282,21 @@ const RISK_ROWS: { key: keyof RiskMetrics; label: string; kind: "pct" | "num" }[
   { key: "hit_ratio", label: "승률", kind: "num" },
 ];
 
+/** 연환산이 필요한 지표는 1년치가 모여야 낸다. 서버의 TRADING_DAYS_PER_YEAR. */
+const TRADING_DAYS_PER_YEAR = 252;
+
+/** 빈 칸에 **왜 비었는지**를 적는다.
+ *
+ * ⚠️'—' 만 있으면 고장으로 읽힌다. 실제로 연환산 수익률과 샤프가 나란히
+ *   비어 있었는데, 이유는 "3개월 수익률을 4제곱해 연 +180% 라고 쓰지 않는다"
+ *   는 **의도된 규칙**이었다. 규칙을 화면이 말하지 않으면 없는 것과 같다.
+ */
+function missingReason(key: keyof RiskMetrics, r: RiskMetrics): string | null {
+  if (key !== "annualized_return" && key !== "sharpe") return null;
+  if (r.observations >= TRADING_DAYS_PER_YEAR) return null;
+  return `1년치부터 (${r.observations}/${TRADING_DAYS_PER_YEAR}일)`;
+}
+
 function RiskCard({
   risk,
   loading,
@@ -272,6 +344,11 @@ function RiskCard({
               >
                 <dt className="text-[12px] font-medium text-ink-secondary">
                   {row.label}
+                  {raw == null && missingReason(row.key, primary) && (
+                    <span className="ml-1.5 text-[10px] font-semibold text-ink-faint">
+                      {missingReason(row.key, primary)}
+                    </span>
+                  )}
                 </dt>
                 <dd
                   className={cn(
@@ -390,7 +467,7 @@ function ContributionCard({
       title="종목별 기여도"
       subtitle={
         data?.total_return
-          ? `합계 ${pct(data.total_return)} = 평가수익률`
+          ? `합계 ${pct(data.total_return)} · 보유분 · 매입 이후 · 주가 기준`
           : undefined
       }
       scrollBody

@@ -129,6 +129,7 @@ class Audit:
         )
         tax_years = self.get("/portfolio/tax")["years"]
         rebalance = self.get("/portfolio/rebalance")
+        benchmark = self.get("/portfolio/benchmark?days=1095")
         allocation = self.get("/portfolio/allocation")
         taxes = [self.get(f"/portfolio/tax?year={y}")["current"] for y in tax_years]
 
@@ -216,6 +217,25 @@ class Audit:
             f"손익 빈 날 {bridge['missing_pnl_days']}) — **주가 기준**이라 "
             f"성과분석의 원화 기준 수익률과 값이 다르다"
         )
+
+        # ── 기간 수익률 ────────────────────────────────────────────────
+        # ⚠️같은 '내 계좌 수익률'을 두 화면이 각자 계산한다. 기준일이 하루만
+        #   어긋나도 값이 갈린다 — 실측: 벤치마크 화면이 첫 수익률일의 지수를
+        #   기준으로 삼아 첫날치가 빠지는 바람에 전체가 −1.21%, 성과 분석은
+        #   −1.98% 였다. 같은 구간·같은 관측일수라 버그로 보이지도 않았다.
+        print("\n[기간 수익률]")
+        bench_by_label = {p["label"]: p for p in benchmark["periods"]}
+        ana_by_label = {p["label"]: p for p in analytics["periods"]}
+        for bench_label, ana_label in [("1M", "1개월"), ("3M", "3개월"), ("전체", "전체")]:
+            b = bench_by_label.get(bench_label)
+            a = ana_by_label.get(ana_label)
+            if b is None or a is None:
+                continue
+            self.same(
+                f"{ana_label} 수익률 (벤치마크 vs 성과분석)",
+                b["portfolio"], a["return_ratio"],
+                "benchmark", "analytics",
+            )
 
         print("\n[실현손익·배당]")
         self.same(

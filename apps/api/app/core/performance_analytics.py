@@ -155,13 +155,20 @@ def cumulative_return(returns: list[DailyReturn]) -> Decimal | None:
     """기간 누적 수익률(비율). 비어 있으면 None."""
     if not returns:
         return None
-    return returns[-1].index / _base_index(returns) - Decimal("1")
+    return returns[-1].index / base_index(returns) - Decimal("1")
 
 
-def _base_index(returns: list[DailyReturn]) -> Decimal:
-    """구간 첫 수익률 **직전**의 지수. 구간을 잘라 써도 기준이 맞는다."""
+def base_index(returns: list[DailyReturn]) -> Decimal:
+    """구간 첫 수익률 **직전**의 지수. 구간을 잘라 써도 기준이 맞는다.
+
+    ⚠️비교 화면에서 이 값을 쓰지 않으면 **첫날 수익률이 통째로 빠진다.**
+      실측: 벤치마크 화면이 첫 수익률일(2026-06-05)의 지수를 기준으로 삼는 바람에
+      같은 구간·같은 관측일수인데 전체 수익률이 −1.98% 가 아니라 −1.21% 로
+      나왔다. 화면 둘이 서로 다른 말을 했다.
+    """
     first = returns[0]
     return first.index / (Decimal("1") + first.ret)
+
 
 
 def annualized_return(returns: list[DailyReturn]) -> Decimal | None:
@@ -222,7 +229,7 @@ def max_drawdown(returns: list[DailyReturn]) -> Drawdown | None:
     """최대낙폭(음수). 고점 대비 얼마나 빠졌는지."""
     if not returns:
         return None
-    peak = _base_index(returns)
+    peak = base_index(returns)
     peak_date = returns[0].base_date
     worst: Drawdown | None = None
 

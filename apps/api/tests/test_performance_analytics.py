@@ -14,6 +14,7 @@ import pytest
 from app.core.performance_analytics import (
     DailyPoint,
     annualized_return,
+    base_index,
     cumulative_return,
     daily_returns,
     hit_ratio,
@@ -84,6 +85,23 @@ def test_cumulative_on_a_slice_rebases() -> None:
     cum = cumulative_return(tail)
     assert cum is not None
     assert cum == pytest.approx(Decimal("0.1"), abs=Decimal("1e-9"))
+
+
+def test_base_index_is_before_the_first_return() -> None:
+    """비교의 기준은 첫 수익률 **직전** 지수다.
+
+    ⚠️첫 수익률일의 지수를 기준으로 삼으면 **그날 수익률이 통째로 빠진다.**
+      실제로 벤치마크 화면이 그렇게 계산해, 같은 구간·같은 관측일수인데
+      성과 분석은 −1.98%, 벤치마크는 −1.21% 를 보였다. 화면 둘이 서로 다른
+      말을 하는데 버그로 보이지도 않았다.
+    """
+    rs = daily_returns([pt(1, "100"), pt(2, "110"), pt(3, "121")])
+    assert base_index(rs) == pytest.approx(Decimal("1"), abs=Decimal("1e-9"))
+    # 첫 수익률일의 지수로 나누면 +10% 가 빠져 +10% 만 남는다 — 틀린 값이다.
+    assert rs[-1].index / rs[0].index == pytest.approx(
+        Decimal("1.1"), abs=Decimal("1e-9")
+    )
+    assert cumulative_return(rs) == pytest.approx(Decimal("0.21"), abs=Decimal("1e-9"))
 
 
 def test_max_drawdown_measures_from_the_peak() -> None:

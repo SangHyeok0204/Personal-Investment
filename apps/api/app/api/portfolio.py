@@ -1869,6 +1869,16 @@ def get_benchmark(
 
     ⚠️기간을 자를 때마다 **그 구간 시작으로 다시 기준을 잡는다**(rebase).
       전체 구간 지수를 그대로 잘라 쓰면 1개월 수익률이 누적값 차이로 나온다.
+
+    ⚠️기준일은 **첫 수익률 직전 날**이다. 첫 수익률일의 지수를 기준으로 삼으면
+      그날 수익률이 통째로 빠진다 — 실측으로 같은 구간·같은 관측일수인데 이
+      화면이 −1.21%, 성과 분석이 −1.98% 를 보였다. 값이 비슷해서 버그로
+      보이지도 않았다. 지금은 `scripts/audit_consistency.py` 가 두 화면을 맞댄다.
+
+    ★**시차 보정은 하지 않는다.** 한국 마감 기준 계좌 시계열과 미국 지수 종가를
+      같은 날짜로 맞대는 게 맞는지 확인했다 — 계좌 일간수익률과 ^SOX 일간수익률의
+      상관이 lag 0 에서 +0.699, lag 1 에서 +0.016, lag 2 에서 −0.212 였다(75일).
+      증권사가 같은 달력날짜로 기록한다는 뜻이므로 밀지 않는다.
     """
     empty = BenchmarkOut(
         series=[], periods=[], benchmarks=[m[1] for m in _BENCHMARKS],
@@ -1906,6 +1916,15 @@ def get_benchmark(
     if not returns:
         return empty
     mine = {r.base_date: r.index for r in returns}
+
+    # ⚠️첫 수익률 **직전** 날짜의 지수도 넣는다. 안 넣으면 비교 시작점이 하루
+    #   밀려 **첫날 수익률이 통째로 빠진다.** 실측: 같은 구간(2026-06-05~09-21)
+    #   같은 관측일수(109일)인데 이 화면은 -1.21%, 성과 분석은 -1.98% 였다.
+    #   지수 쪽은 그날 종가가 기준이 되는데 계좌 쪽만 그날 **종료 후** 지수가
+    #   기준이 되어, 둘이 하루 어긋난 채 비교되고 있었다.
+    prior = [p.base_date for p in points if p.base_date < returns[0].base_date]
+    if prior:
+        mine[prior[-1]] = pa.base_index(returns)
 
     history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
     fx = history.get(_FX_SYMBOL)
