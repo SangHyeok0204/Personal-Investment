@@ -1707,3 +1707,41 @@ class RebalanceOut(BaseModel):
     cost_rate: Decimal
     trade_count: int
     notes: list[str]
+
+
+# ── 수집 신선도 ──────────────────────────────────────────────────────────────
+
+class LedgerFreshnessOut(BaseModel):
+    """원장 하나의 최신 상태.
+
+    ⚠️`last_date` 가 며칠 전이어도 **뒤처진 것이 아닐 수 있다.** 배당은 지급일에만
+      생기고 매매는 거래한 날에만 생긴다. 뒤처짐의 기준은 원장 날짜가 아니라
+      **마지막 이력 동기화 시각**이다.
+    """
+
+    key: str
+    label: str
+    last_date: date | None
+    row_count: int
+    #: 이 원장이 5초 자동 동기화로 갱신되는가(아니면 이력 동기화가 필요한가).
+    auto: bool
+
+
+class FreshnessOut(BaseModel):
+    """"이력을 마지막으로 언제 받았나."
+
+    ⚠️잔고·보유는 5초마다 자동으로 갱신되지만 **체결·배당·주문·일별성과는
+      이력 동기화를 돌려야만** 들어온다. 그 둘을 한 숫자로 뭉뚱그리면
+      "방금 동기화됨"이라고 적어 놓고 체결은 사흘 전 것을 보여 주게 된다.
+    """
+
+    last_history_sync_at: datetime | None
+    last_history_sync_status: str | None
+    hours_since: Decimal | None
+    #: 마지막 동기화 이후 미국 정규장이 닫힌 적이 있는가. True 면 새 체결이
+    #: 있을 수 있는데 안 받아 온 상태다.
+    stale: bool
+    #: 뒤처짐 판정의 기준이 된 시각(마지막 정규장 마감).
+    last_market_close_at: datetime | None
+    ledgers: list[LedgerFreshnessOut]
+    notes: list[str]

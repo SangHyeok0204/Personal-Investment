@@ -155,3 +155,49 @@ def test_sync_requires_configuration(client, env_file):
     response = client.post("/api/v1/brokerage/sync")
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "NOT_CONFIGURED"
+
+
+# ── 수집 신선도 ──────────────────────────────────────────────────────────────
+
+def test_last_us_close_is_a_weekday_four_pm_et():
+    """뒤처짐은 **시간이 아니라 장 마감** 기준이다.
+
+    ⚠️"몇 시간 지났나"로 판정하면 주말에는 사흘이 지나도 받을 게 없는데 계속
+      경고하고, 장 마감 직후에는 한 시간만 지나도 받을 게 있는데 조용하다.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.api.brokerage import _last_us_close
+
+    ET = ZoneInfo("America/New_York")
+
+    # 화요일 오전 → 직전 마감은 월요일 16:00
+    tue_am = datetime(2026, 9, 22, 9, 0, tzinfo=ET)
+    assert _last_us_close(tue_am) == datetime(2026, 9, 21, 16, 0, tzinfo=ET)
+
+    # 화요일 장 마감 직후 → 그날 16:00
+    tue_pm = datetime(2026, 9, 22, 17, 0, tzinfo=ET)
+    assert _last_us_close(tue_pm) == datetime(2026, 9, 22, 16, 0, tzinfo=ET)
+
+    # ⚠️일요일에는 **금요일** 마감으로 돌아가야 한다. 토요일로 잡으면 주말 내내
+    #   "받아올 것 있음"이 켜져 있게 된다.
+    sunday = datetime(2026, 9, 20, 12, 0, tzinfo=ET)
+    assert _last_us_close(sunday) == datetime(2026, 9, 18, 16, 0, tzinfo=ET)
+
+
+def test_freshness_separates_auto_from_history_ledgers(client):
+    """⚠️잔고와 이력을 한 숫자로 뭉뚱그리면 "방금 동기화됨"이라 적어 놓고
+    체결은 사흘 전 것을 보여 주게 된다."""
+    body = client.get("/api/v1/brokerage/freshness").json()
+    auto = {l["key"] for l in body["ledgers"] if l["auto"]}
+    manual = {l["key"] for l in body["ledgers"] if not l["auto"]}
+    assert auto == {"positions", "balances"}
+    assert {"trades", "orders", "dividends", "realized", "daily_performance"} == manual
+
+
+def test_freshness_without_any_sync_is_stale(client):
+    """한 번도 안 돌렸으면 뒤처진 것이다 — 모른다고 '최신'이라 하지 않는다."""
+    body = client.get("/api/v1/brokerage/freshness").json()
+    assert body["last_history_sync_at"] is None
+    assert body["stale"] is True

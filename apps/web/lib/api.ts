@@ -3720,6 +3720,39 @@ export function getMarketNews(lang: "ko" | "en" = "ko"): Promise<MarketNews> {
   return request<MarketNews>(`/api/v1/market/news?lang=${lang}`);
 }
 
+// ── 수집 신선도 ──────────────────────────────────────────────────────────────
+// ⚠️잔고·보유는 5초마다 자동이지만 **체결·배당·주문·일별성과는 이력 동기화를
+//   돌려야만** 들어온다. 한 숫자로 뭉뚱그리면 "방금 동기화됨"이라 적어 놓고
+//   체결은 사흘 전 것을 보여 주게 된다.
+
+export interface LedgerFreshness {
+  key: string;
+  label: string;
+  last_date: string | null;
+  row_count: number;
+  /** 5초 자동 동기화로 갱신되는가. false 면 이력 동기화가 필요하다. */
+  auto: boolean;
+}
+
+export interface Freshness {
+  last_history_sync_at: string | null;
+  last_history_sync_status: string | null;
+  hours_since: string | null;
+  /** 마지막 동기화 이후 미국 정규장이 닫힌 적이 있는가. */
+  stale: boolean;
+  last_market_close_at: string | null;
+  ledgers: LedgerFreshness[];
+  notes: string[];
+}
+
+export function getFreshness(): Promise<Freshness> {
+  return request<Freshness>("/api/v1/brokerage/freshness");
+}
+
+export function runHistorySync(): Promise<unknown> {
+  return request<unknown>("/api/v1/brokerage/sync", { method: "POST" });
+}
+
 // ── 리밸런싱 ─────────────────────────────────────────────────────────────────
 // ★알림이 "SOXL 비중 21.32% > 20%" 를 잡아 준다. 여기는 그 다음 질문에 답한다 —
 //   **그래서 몇 주를 팔아야 하나.**

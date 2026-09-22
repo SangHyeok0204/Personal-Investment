@@ -11,7 +11,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { runQuickSync } from "@/lib/api";
+import { getFreshness, runHistorySync, runQuickSync } from "@/lib/api";
 
 // 자동 갱신.
 //
@@ -51,13 +51,20 @@ const CLOSED_REFRESH_MS = 60_000;
 // 실패가 이어질 때 물러나는 한계. 60초를 넘기면 "멈춘 것"과 구분이 안 된다.
 const MAX_BACKOFF_MS = 60_000;
 
+// 이력이 뒤처졌는지 확인하는 주기와, 한 번 시도한 뒤 다시 시도하기까지의 간격.
+// ⚠️확인은 가볍지만(조회 한 번) 실제 동기화는 40초쯤 걸리고 TR 을 여러 번
+//   부른다 — 확인은 자주, 시도는 드물게.
+const HISTORY_CHECK_MS = 10 * 60_000;
+const HISTORY_RETRY_MS = 60 * 60_000;
+
 // ⚠️툴팁 문구를 손으로 적지 않는다. 사용자 요청으로 증권사 동기화를 30초 → 5초로
 //   내렸을 때 **상단바 툴팁만 30초로 남아** 화면이 사실과 다른 말을 했다.
 //   주기를 바꾸면 문구도 같이 바뀌도록 상수에서 만든다.
 export const AUTO_REFRESH_LABEL =
   `자동 갱신 켜짐 — 화면 ${VIEW_REFRESH_MS / 1000}초, ` +
   `증권사 잔고 ${BROKER_SYNC_MS / 1000}초(장중·이 탭이 보일 때만). ` +
-  `장 마감 중에는 ${CLOSED_REFRESH_MS / 1000}초로 늦춥니다.`;
+  `장 마감 중에는 ${CLOSED_REFRESH_MS / 1000}초로 늦춥니다. ` +
+  `체결·배당 등 이력은 뒤처졌을 때만 ${HISTORY_RETRY_MS / 60000}분에 한 번 받아옵니다.`;
 const STORAGE_KEY = "pi:auto-refresh";
 
 type AutoRefreshCtx = {
@@ -197,6 +204,54 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
         setSyncing(false);
       });
   }, [queryClient]);
+
+  // ── 이력 동기화 (체결·배당·주문·일별성과) ────────────────────────────
+  //
+  // ★2026-09-22: 잔고는 5초마다 자동인데 **이력은 아무도 안 돌렸다.** 그래서
+  //   체결 원장이 2일 밀린 걸 며칠 뒤에야 발견했고, 그동안 수수료/세금·편입비·
+  //   매매일지가 옛 것을 보여 주고 있었다.
+  //
+  // ⚠️**시간으로 판정하지 않는다.** 주말에는 사흘이 지나도 받을 게 없고 장
+  //   마감 직후에는 한 시간만 지나도 받을 게 있다. 서버가 '마지막 동기화 이후
+  //   정규장이 닫혔는가'로 판정해 준 값을 그대로 쓴다.
+  //
+  // ⚠️한 번 돌리는 데 40초쯤 걸리고 증권사 TR 을 여러 번 부른다. 그래서
+  //   ① 탭이 보일 때만 ② 자동 갱신이 켜져 있을 때만 ③ **한 시간에 한 번만**
+  //   시도한다. 실패해도 조용히 넘어간다 — 화면(수집 상태)이 상태를 말한다.
+  //
+  // ⚠️증권사 배치 시간(KST 05~07시)에는 이력이 비어서 오므로 건드리지 않는다.
+  const historyInFlight = useRef(false);
+  const historyNextAt = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      if (historyInFlight.current) return;
+      if (Date.now() < historyNextAt.current) return;
+
+      const kst = inZone(new Date(), "Asia/Seoul");
+      if (kst.minutes >= 5 * 60 && kst.minutes < 7 * 60) return;
+
+      historyInFlight.current = true;
+      // 성공하든 실패하든 한 시간은 다시 시도하지 않는다.
+      historyNextAt.current = Date.now() + HISTORY_RETRY_MS;
+      try {
+        const fresh = await getFreshness();
+        if (fresh.stale) {
+          await runHistorySync();
+          void queryClient.invalidateQueries();
+        }
+      } catch {
+        /* 실패는 수집 상태 화면이 보여 준다 — 여기서 시끄럽게 하지 않는다 */
+      } finally {
+        historyInFlight.current = false;
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), HISTORY_CHECK_MS);
+    return () => window.clearInterval(id);
+  }, [enabled, queryClient]);
 
   // 증권사 잔고 동기화 타이머.
   useEffect(() => {

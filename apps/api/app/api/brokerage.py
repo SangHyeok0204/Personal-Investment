@@ -17,14 +17,28 @@ from __future__ import annotations
 
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core import credentials_store
+from app.models import (
+    AccountBalance,
+    AccountDailyPerformance,
+    CurrentPosition,
+    Dividend,
+    Job,
+    Order,
+    RealizedPnl,
+    Trade,
+)
+from app.schemas import FreshnessOut, LedgerFreshnessOut
 from app.core.errors import AppError
 from app.db.session import engine, get_db
 
@@ -446,3 +460,102 @@ def _normalized_from(adapter, account_ref, raw_account) -> dict:
             if b.get("currency") != "KRW" or b.get("cash_balance")
         ]
     return normalized
+
+
+# ── 수집 신선도 ──────────────────────────────────────────────────────────────
+
+_FRESHNESS_NOTES = [
+    "**잔고·보유 종목은 5초마다 자동**으로 갱신됩니다. 하지만 체결·배당·주문·"
+    "일별성과는 **이력 동기화를 돌려야만** 들어옵니다 — 그 둘을 한 숫자로"
+    " 뭉뚱그리면 '방금 동기화됨'이라고 적어 놓고 체결은 사흘 전 것을 보여 주게"
+    " 됩니다.",
+    "**원장 날짜가 며칠 전이어도 뒤처진 것이 아닐 수 있습니다.** 배당은 지급일에만"
+    " 생기고 매매는 거래한 날에만 생깁니다. 뒤처짐의 기준은 원장 날짜가 아니라"
+    " **마지막 이력 동기화 시각**입니다.",
+    "마지막 동기화 이후 **미국 정규장이 닫힌 적이 있으면** 새 체결이 있을 수"
+    " 있다고 봅니다. 실제로 거래가 없었다면 동기화해도 바뀌는 것이 없습니다.",
+    "⚠️증권사 배치 시간(KST 05~07시)에는 이력이 비어서 올 수 있습니다 — 그때는"
+    " 동기화를 피하세요.",
+]
+
+_LEDGERS: list[tuple[str, str, bool]] = [
+    ("positions", "보유 종목", True),
+    ("balances", "예수금·잔고", True),
+    ("trades", "체결", False),
+    ("orders", "주문", False),
+    ("dividends", "배당", False),
+    ("realized", "실현손익", False),
+    ("daily_performance", "일별 성과", False),
+]
+
+
+def _last_us_close(now: datetime | None = None) -> datetime:
+    """가장 최근에 지나간 미국 정규장 마감(평일 16:00 ET).
+
+    ⚠️공휴일은 보지 않는다 — 휴장일이면 동기화해도 바뀌는 게 없으므로
+      "받아 보라"고 한 번 더 말하는 쪽이 안전하다.
+    """
+    et = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+    candidate = et.replace(hour=16, minute=0, second=0, microsecond=0)
+    if candidate > et:
+        candidate -= timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+@router.get("/freshness", response_model=FreshnessOut)
+def get_freshness(db: Session = Depends(get_db)) -> FreshnessOut:
+    """이력을 마지막으로 언제 받았나 — 그리고 그 사이 장이 닫혔나."""
+    job = db.execute(
+        select(Job)
+        .where(Job.job_type == "SYNC_KIWOOM_PORTFOLIO")
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    last_at = job.finished_at or job.created_at if job else None
+    now = datetime.now(timezone.utc)
+    last_close = _last_us_close(now)
+    hours = (
+        Decimal((now - last_at).total_seconds() / 3600).quantize(Decimal("0.1"))
+        if last_at
+        else None
+    )
+
+    counts: list[LedgerFreshnessOut] = []
+    for key, label, auto in _LEDGERS:
+        model, column = {
+            "positions": (CurrentPosition, CurrentPosition.as_of),
+            "balances": (AccountBalance, AccountBalance.as_of),
+            "trades": (Trade, Trade.trade_date),
+            "orders": (Order, Order.order_date),
+            "dividends": (Dividend, Dividend.pay_date),
+            "realized": (RealizedPnl, RealizedPnl.sell_date),
+            "daily_performance": (
+                AccountDailyPerformance,
+                AccountDailyPerformance.base_date,
+            ),
+        }[key]
+        last, total = db.execute(
+            select(func.max(column), func.count()).select_from(model)
+        ).one()
+        counts.append(
+            LedgerFreshnessOut(
+                key=key, label=label,
+                last_date=last.date() if isinstance(last, datetime) else last,
+                row_count=total or 0, auto=auto,
+            )
+        )
+
+    return FreshnessOut(
+        last_history_sync_at=last_at,
+        last_history_sync_status=job.status if job else None,
+        hours_since=hours,
+        # ⚠️"몇 시간 지났나"로 판정하지 않는다. 주말에는 사흘이 지나도 받을 게
+        #   없고, 장 마감 직후에는 한 시간만 지나도 받을 게 있다.
+        stale=bool(last_at is None or last_at < last_close),
+        last_market_close_at=last_close,
+        ledgers=counts,
+        notes=_FRESHNESS_NOTES,
+    )
