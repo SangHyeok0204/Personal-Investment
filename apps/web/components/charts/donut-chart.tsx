@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 //
 // 두 계열을 번갈아 두고 명도를 단계적으로 낮춰, 인접 조각이 색상이 아니라
 // **명도**로 구분되게 한다 — 같은 계열 안에서 채도만 바꾸면 붙은 조각이 뭉친다.
-const PALETTE = [
+export const CHART_PALETTE = [
   "#4C2C19", // BROWN
   "#6390BF", // BLUE
   "#7B401F", // 포인트 브라운
@@ -26,7 +26,19 @@ const PALETTE = [
   "#595959", // Dark Gray
   "#A6A6A6", // Gray
 ];
-const MUTED = "#D9D9D9"; // 기타/미분류 — 그레이 스케일
+export const CHART_MUTED = "#D9D9D9"; // 기타/미분류 — 그레이 스케일
+
+/** 키 → 색. **누적막대와 도넛이 같은 색을 써야** 눈이 두 그래프를 잇는다. */
+export function colorForKeys(keys: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  keys.forEach((k, i) => {
+    out[k] = CHART_PALETTE[i % CHART_PALETTE.length];
+  });
+  return out;
+}
+
+const PALETTE = CHART_PALETTE;
+const MUTED = CHART_MUTED;
 
 export type DonutSlice = {
   key: string;
