@@ -11,7 +11,6 @@ import {
   DataTable,
   NotConnectedBanner,
   PlannedList,
-  StatTile,
   StubCard,
 } from "@/components/stub";
 import { DonutChart, colorForKeys, type DonutSlice } from "@/components/charts/donut-chart";
@@ -160,41 +159,6 @@ export default function DividendsPage() {
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="키움 배당 조회" />}
 
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          <StatTile
-            label="총 수령 배당"
-            value={formatKrwString(data?.total_amount_krw)}
-            hint={
-              data?.first_pay_date
-                ? `${data.first_pay_date} ~ ${data.last_pay_date}`
-                : "조회 기간 합계"
-            }
-            loading={dividends.isLoading}
-          />
-          <StatTile
-            label="수령 횟수"
-            value={data ? `${data.total}` : undefined}
-            hint={
-              data?.by_ticker.length ? `${data.by_ticker.length}종목` : undefined
-            }
-            loading={dividends.isLoading}
-          />
-          <StatTile
-            label="월평균"
-            value={monthlyAvg == null ? undefined : formatKrwString(String(monthlyAvg))}
-            hint={`조회 기간 ${months}개월 기준`}
-            loading={dividends.isLoading}
-          />
-          <StatTile
-            label="최근 수령"
-            value={data?.last_pay_date ?? undefined}
-            hint={
-              items[0] ? `${items[0].asset_name ?? items[0].ticker}` : undefined
-            }
-            loading={dividends.isLoading}
-          />
-        </div>
-
         <div
           className={cn(
             "grid min-h-0 flex-1 gap-3",
@@ -232,6 +196,8 @@ export default function DividendsPage() {
                 <StackedBarChart
                   columns={columns}
                   colors={colors}
+                  // 요약 타일을 카드 안으로 옮기며 생긴 세로를 그래프가 쓴다.
+                  height={238}
                   formatTotal={(v) => formatKrwCompactString(String(v))}
                   selected={shownMonth}
                   onSelect={(key, isSticky) => {
@@ -313,7 +279,7 @@ export default function DividendsPage() {
           </StubCard>
 
           <StubCard
-            title="종목별"
+            title="배당 세부 내역"
             subtitle="누가 배당을 주고 있나"
             scrollBody
             action={
@@ -326,19 +292,58 @@ export default function DividendsPage() {
               </button>
             }
           >
-            {dividends.isLoading ? (
-              <Empty text="불러오는 중…" />
-            ) : donutSlices.length === 0 ? (
-              <Empty text="데이터가 없습니다" />
-            ) : (
-              <DonutChart
-                slices={donutSlices}
-                size={168}
-                centerLabel="총 배당"
-                centerValue={formatKrwCompactString(data?.total_amount_krw)}
-                maxLegend={9}
-              />
-            )}
+            <div className="space-y-3">
+              {/* ★2026-09-22 사용자 요청: 상단에 따로 있던 요약 타일 4개를 이
+                  카드 안으로 옮겼다. 화면 위쪽 한 줄을 통째로 쓰던 것을 한 줄로
+                  줄여 막대그래프가 세로를 더 갖는다. */}
+              <div className="grid grid-cols-4 gap-2 border-b border-hairline pb-2.5">
+                <Summary
+                  label="총 수령"
+                  value={formatKrwString(data?.total_amount_krw)}
+                  // 끝 날짜는 오른쪽 '최근' 칸이 이미 말한다 — 여기서는 시작만.
+                  hint={
+                    data?.first_pay_date
+                      ? `${data.first_pay_date.slice(2)}부터`
+                      : "조회 기간"
+                  }
+                  loading={dividends.isLoading}
+                />
+                <Summary
+                  label="횟수"
+                  value={data ? `${data.total}회` : null}
+                  hint={data?.by_ticker.length ? `${data.by_ticker.length}종목` : undefined}
+                  loading={dividends.isLoading}
+                />
+                <Summary
+                  label="월평균"
+                  value={
+                    monthlyAvg == null ? null : formatKrwString(String(monthlyAvg))
+                  }
+                  hint={`${months}개월 기준`}
+                  loading={dividends.isLoading}
+                />
+                <Summary
+                  label="최근"
+                  value={data?.last_pay_date?.slice(2) ?? null}
+                  hint={items[0] ? items[0].ticker : undefined}
+                  loading={dividends.isLoading}
+                />
+              </div>
+
+              {dividends.isLoading ? (
+                <Empty text="불러오는 중…" />
+              ) : donutSlices.length === 0 ? (
+                <Empty text="데이터가 없습니다" />
+              ) : (
+                <DonutChart
+                  slices={donutSlices}
+                  size={152}
+                  centerLabel="총 배당"
+                  centerValue={formatKrwCompactString(data?.total_amount_krw)}
+                  maxLegend={9}
+                />
+              )}
+            </div>
           </StubCard>
         </div>
       </PageContainer>
@@ -358,6 +363,39 @@ export default function DividendsPage() {
         />
       </Modal>
     </>
+  );
+}
+
+/**
+ * 한 줄 요약 칸. 카드 폭이 좁아 StatTile 을 그대로 쓸 수 없다 —
+ * ⚠️금액이 길어 **줄바꿈이 나면 네 칸의 높이가 어긋난다.** truncate 로 자르고
+ *   전체 값은 title 로 남긴다.
+ */
+function Summary({
+  label,
+  value,
+  hint,
+  loading,
+}: {
+  label: string;
+  value?: string | null;
+  hint?: string;
+  loading?: boolean;
+}) {
+  const shown = loading ? "…" : (value ?? "—");
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-[10px] font-semibold text-ink-faint">{label}</p>
+      <p
+        title={shown}
+        className="truncate text-[13px] font-extrabold tabular-nums text-ge-navy"
+      >
+        {shown}
+      </p>
+      {hint && (
+        <p className="truncate text-[9px] font-medium text-ink-faint">{hint}</p>
+      )}
+    </div>
   );
 }
 

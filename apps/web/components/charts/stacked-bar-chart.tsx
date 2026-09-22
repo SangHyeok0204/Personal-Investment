@@ -123,9 +123,15 @@ export function StackedBarChart({
                 ))}
               </span>
               {isActive && (
+                // ⚠️버튼은 차트 높이 전체를 차지한다. top 에 붙이면 표시선이
+                //   **막대 위가 아니라 차트 맨 위**에 뜬다(실제로 그렇게 나왔다).
+                //   막대 높이만큼 띄워 막대 머리에 얹는다.
                 <span
-                  className="pointer-events-none absolute inset-x-0 -top-0.5 mx-auto w-full rounded-t-[2px] border-t-2"
-                  style={{ borderColor: "#4C2C19" }}
+                  className="pointer-events-none absolute inset-x-0 border-t-2"
+                  style={{
+                    borderColor: "#4C2C19",
+                    bottom: Math.max(colHeight, col.total > 0 ? 2 : 0),
+                  }}
                 />
               )}
             </button>
