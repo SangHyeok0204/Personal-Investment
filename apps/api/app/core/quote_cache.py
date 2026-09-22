@@ -61,6 +61,43 @@ def us_regular_session_open(now: datetime | None = None) -> bool:
     return 9 * 60 + 30 <= minutes < 16 * 60
 
 
+# 한국 데이마켓(미국 주식 주간거래). 이 시간대에 토스 당일 봉은 **정규장이 아니다.**
+_KR_DAYMARKET_OPEN_MIN = 9 * 60
+_KR_DAYMARKET_CLOSE_MIN = 16 * 60 + 50
+
+
+def kr_daymarket_open(now: datetime | None = None) -> bool:
+    """한국 데이마켓(평일 KST 09:00~16:50)이 열려 있나."""
+    kst = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("Asia/Seoul"))
+    if kst.weekday() >= 5:
+        return False
+    minutes = kst.hour * 60 + kst.minute
+    return _KR_DAYMARKET_OPEN_MIN <= minutes < _KR_DAYMARKET_CLOSE_MIN
+
+
+def is_thin_session_quote(quote: Quote, now: datetime | None = None) -> bool:
+    """이 시세가 **얇은 데이마켓 체결**로 만들어졌나.
+
+    ★소스는 사실만 보고하고(거래량·거래일), 판단은 세션을 아는 여기서 한다.
+
+    ★2026-09-22 09:02 KST 실측 — 데이마켓 개장 2분 뒤 처음 관측했다:
+        NVDA 당일 봉 5,119주 vs 전일 정규장 81,522,377주 (**1/15,930**)
+        GLW    311주 vs 4,747,667주 / SOXL 108,875주 vs 31,658,379주
+      같은 순간 야후 값은 토스의 **전일 봉 종가와 소수점까지 일치**했다.
+
+    ⚠️평소에는 순서가 야후를 먼저 쓰므로 이 상황이 오지 않는다. 그러나 **야후가
+      죽으면** 사슬이 토스로 넘어가고, 그때 화면은 311주짜리 가격을 아무 표시
+      없이 "현재가"로 띄우게 된다. 값을 버리지는 않는다 — 데이마켓 가격은
+      한국 투자자가 **실제로 체결할 수 있는** 가격이기 때문이다. 다만 정규장
+      가격인 척하게 두지는 않는다.
+    """
+    return (
+        quote.source == "toss"
+        and not us_regular_session_open(now)
+        and kr_daymarket_open(now)
+    )
+
+
 def _build_source() -> CompositePriceSource:
     """시세 소스 사슬. **세션에 따라 순서가 바뀐다.**
 
@@ -71,6 +108,12 @@ def _build_source() -> CompositePriceSource:
     ★정규장 중에도, 끝난 뒤에도 두 소스는 값이 같았다(2026-09-22 실측: 장중
       5종목 / 마감 후 7종목 전부 0.00% 차이). 둘 다 시간외 체결은 주지 않으므로
       마감 후에는 16:00 ET 종가가 그대로 보인다 — 가격이 안 움직이는 게 정상이다.
+
+    ★단, **한국 데이마켓이 열리면 그 일치가 깨진다**(2026-09-22 09:02 KST 실측,
+      일곱 번째 시도 만에 창 안에 들어와 처음 관측했다). 토스에 당일 봉이 새로
+      생기고 SOXL 은 야후보다 +2.58% 였다 — 거래량은 정규장의 0.34%. 이때
+      야후 값이 토스의 전일 봉 종가와 정확히 같았다. 즉 이 시간대의 올바른
+      "현재가"는 야후 쪽이고, 지금 순서가 그걸 고른다. `is_thin_session_quote`.
 
     ⚠️토스의 미국 종목 당일 봉은 한국 **데이마켓**(KST 09:00~16:50) 체결을
       포함한다. 미국장이 닫혀 있는 동안 그 값은 거래량이 정규장의 1% 미만인

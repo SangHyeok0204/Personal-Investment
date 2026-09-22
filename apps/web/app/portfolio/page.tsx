@@ -484,12 +484,31 @@ function HoldingRow({
         </span>
       </Cell>
       <Cell>
-        {live
-          ? `$${Number(live.price).toLocaleString("en-US", {
+        {live ? (
+          <span className="inline-flex items-center gap-1">
+            {`$${Number(live.price).toLocaleString("en-US", {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
-            })}`
-          : formatPriceString(h.current_price, h.currency)}
+            })}`}
+            {/* ⚠️데이마켓 체결가를 정규장 가격인 척 두지 않는다. 값은 버리지
+                않는다 — 한국 투자자가 실제로 체결할 수 있는 가격이다. */}
+            {live.thin_session && (
+              <span
+                title={
+                  `한국 데이마켓 체결가입니다 (미국 정규장 마감 중).` +
+                  (live.volume
+                    ? ` 이 봉의 거래량 ${Number(live.volume).toLocaleString("en-US")}주 — 정규장보다 훨씬 얇습니다.`
+                    : "")
+                }
+                className="shrink-0 cursor-help rounded bg-ge-point/12 px-1 py-0.5 text-[9px] font-extrabold text-ge-point"
+              >
+                데이
+              </span>
+            )}
+          </span>
+        ) : (
+          formatPriceString(h.current_price, h.currency)
+        )}
       </Cell>
       <Cell tone={dayRate == null ? undefined : dayRate > 0 ? "up" : dayRate < 0 ? "down" : "muted"}>
         {dayRate == null ? "—" : `${dayRate > 0 ? "+" : ""}${dayRate.toFixed(2)}%`}

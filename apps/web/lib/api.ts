@@ -3070,6 +3070,14 @@ export interface LiveQuote {
   change_rate: string | null;
   as_of: string | null;
   source: string;
+  /**
+   * 이 가격이 **얇은 데이마켓 체결**로 만들어졌는지.
+   * 값을 버리지 않는다 — 한국 투자자가 실제로 체결할 수 있는 가격이다.
+   * 다만 정규장 가격인 척하게 두지 않는다.
+   */
+  thin_session: boolean;
+  /** 그 봉의 거래량. 얼마나 얇은지 화면이 말할 수 있어야 한다. */
+  volume: string | null;
   quantity: string | null;
   market_value_local: string | null;
   market_value_krw: string | null;

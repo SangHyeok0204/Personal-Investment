@@ -557,6 +557,12 @@ class LiveQuoteOut(BaseModel):
     change_rate: Decimal | None
     as_of: datetime | None
     source: str
+    #: 이 가격이 **얇은 데이마켓 체결**로 만들어졌는지. 값을 버리지는 않는다 —
+    #: 한국 투자자가 실제로 체결할 수 있는 가격이다. 다만 정규장 가격인 척하게
+    #: 두지 않는다(2026-09-22 실측: NVDA 데이마켓 5,119주 vs 정규장 8,152만주).
+    thin_session: bool = False
+    #: 그 봉의 거래량. thin_session 일 때 얼마나 얇은지 화면이 말할 수 있어야 한다.
+    volume: Decimal | None = None
     quantity: Decimal | None
     market_value_local: Decimal | None
     market_value_krw: Decimal | None

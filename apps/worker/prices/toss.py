@@ -26,6 +26,17 @@ BASE = "https://openapi.tossinvest.com"
 KST = timezone(timedelta(hours=9))
 
 
+def _bar_date(timestamp: str | None):
+    """봉의 거래일. ⚠️시각은 **13:00 KST 로 라벨링**되므로 시:분은 의미가 없다 —
+    날짜만 쓴다(2026-09-22 실측: 9/22 봉이 `2026-09-22T13:00:00+09:00`)."""
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp).date()
+    except ValueError:
+        return None
+
+
 class TossError(RuntimeError):
     pass
 
@@ -150,9 +161,18 @@ class TossPriceSource(PriceSource):
           시각이 아니라 거래일을 가리키는 표식이다. 그래서 한국 오전에 데이마켓이
           열리면 **아직 시작도 안 한 미국 거래일**의 봉이 얇은 값으로 먼저 생긴다.
 
-        ★정규장이 끝난 뒤에는 야후와 값이 완전히 같다(2026-09-22 ET 17:02 실측,
-          7종목 전부 0.00% 차이). 둘 다 16:00 ET 종가를 준다 — 시간외 체결은
-          어느 쪽도 주지 않는다.
+        ★정규장이 끝난 뒤에는 야후와 값이 같다 — **단, 데이마켓이 열리기 전까지만.**
+          (2026-09-22 ET 17:02 / KST 06:02 실측: 7종목 전부 0.00% 차이.)
+
+        ★2026-09-22 09:02 KST 실측 — **데이마켓 개장 2분 뒤 처음으로 관측했다.**
+          토스 당일 봉이 새로 생기고, 그 순간부터 야후와 갈린다:
+              종목    당일 봉(데이마켓)   전일 봉(정규장)      비율      야후 대비
+              NVDA          5,119주       81,522,377주   0.0063%     +0.05%
+              GLW             311주        4,747,667주   0.0066%     +1.49%
+              SOXL        108,875주       31,658,379주   0.34%       +2.58%
+          야후 값은 토스의 **전일 봉 종가와 소수점까지 일치**했다(NVDA 227.38).
+          즉 이 시간대에 토스 candles[0] 은 "현재가"가 아니라 **거래량 1/15,930
+          짜리 데이마켓 체결가**다. 호출부가 세션을 보고 순서를 정하는 이유다.
         """
         out: dict[str, Quote] = {}
         for symbol in dict.fromkeys(symbols):
@@ -179,6 +199,9 @@ class TossPriceSource(PriceSource):
                 ),
                 as_of=datetime.now(KST),
                 source=self.name,
+                # 이 가격이 얼마나 얇은 체결로 만들어졌는지 **숨기지 않는다.**
+                volume=_dec(candles[0].get("volume")),
+                trade_date=_bar_date(candles[0].get("timestamp")),
             )
         return out
 

@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 
@@ -33,6 +33,12 @@ class Quote:
     # 52주 고저. 야후만 준다(토스 일봉 응답에는 없다). 없으면 화면이 "—" 로 둔다.
     fifty_two_week_high: Decimal | None = None
     fifty_two_week_low: Decimal | None = None
+    # ★이 가격이 만들어진 봉의 거래량과 거래일.
+    #   소스는 **사실만 보고한다** — 이 값이 믿을 만한지는 세션을 아는 쪽이 판단한다.
+    #   (2026-09-22 09:02 KST 실측: 토스 NVDA 당일 봉 5,119주 vs 전일 정규장
+    #    81,522,377주 = 0.0063%. 한국 데이마켓 개장 2분치였다.)
+    volume: Decimal | None = None
+    trade_date: date | None = None
 
     @property
     def change(self) -> Decimal | None:

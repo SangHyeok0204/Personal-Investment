@@ -1396,6 +1396,8 @@ def get_live_quotes(
                 change_rate=quote.change_rate,
                 as_of=quote.as_of,
                 source=quote.source,
+                thin_session=quote_cache.is_thin_session_quote(quote),
+                volume=quote.volume,
                 quantity=quantity,
                 market_value_local=value_local,
                 market_value_krw=value_krw,
