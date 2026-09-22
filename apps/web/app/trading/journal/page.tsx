@@ -251,7 +251,7 @@ export default function JournalPage() {
 
           <StubCard
             title="안 적은 보유 종목"
-            subtitle={`${untracked.data?.length ?? 0}종목`}
+            subtitle={`${untracked.data?.length ?? 0}종목 · 주식 평가액 대비`}
             scrollBody
           >
             {untracked.isLoading ? (
@@ -260,19 +260,38 @@ export default function JournalPage() {
               <Empty text="보유 종목에 모두 근거를 남겼습니다" />
             ) : (
               <>
+                {/* ⚠️비중을 같이 보여 준다. 안 적은 것 중 **무엇부터 적어야
+                    하는지**는 크기가 말해 준다 — 20% 짜리를 안 적은 것과 0.3%
+                    짜리를 안 적은 것은 다르다. 분모는 주식 평가액이라
+                    자산 현황의 총자산 기준 비중과는 다른 숫자다. */}
                 <p className="mb-2 text-[11px] leading-snug text-ink-muted">
-                  근거를 안 남긴 종목입니다. 눌러서 바로 적으세요.
+                  근거를 안 남긴 종목입니다. 큰 것부터 적으세요.
                 </p>
-                <DataTable columns={["종목", ""]} align={["left", "right"]}>
-                  {(untracked.data ?? []).map((t) => (
-                    <tr key={t} className="border-b border-hairline">
+                <DataTable
+                  columns={["종목", "비중", ""]}
+                  align={["left", "right", "right"]}
+                >
+                  {(untracked.data ?? []).map((h) => (
+                    <tr key={h.ticker} className="border-b border-hairline">
                       <Cell left strong>
-                        {t}
+                        <span className="flex items-center gap-1.5">
+                          <span className="max-w-[150px] truncate">
+                            {h.name ?? h.ticker}
+                          </span>
+                          <span className="shrink-0 text-[10px] font-bold text-ink-faint">
+                            {h.ticker}
+                          </span>
+                        </span>
+                      </Cell>
+                      <Cell tone="muted">
+                        {h.weight == null
+                          ? "—"
+                          : `${(Number(h.weight) * 100).toFixed(1)}%`}
                       </Cell>
                       <Cell>
                         <button
                           type="button"
-                          onClick={() => setComposing(t)}
+                          onClick={() => setComposing(h.ticker)}
                           className="rounded border border-hairline px-2 py-0.5 text-[10px] font-bold text-ge-point transition-colors hover:bg-ge-blue-bg"
                         >
                           적기

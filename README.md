@@ -217,6 +217,9 @@ cd apps/web && npm run build:check
 
 # 금액·단가·수량 표시 규칙 (서버가 필요 없다)
 cd apps/web && npx tsx ../../scripts/check_format.ts
+
+# 결제 지연(T+2) 재측정 — 매매일지 창이 아직 맞는지 (매매가 쌓이면 다시 돌릴 것)
+.venv/bin/python scripts/measure_settlement_lag.py
 ```
 
 ⚠️`check_format.ts` 의 절반은 **반올림하면 안 되는 것들**이다. 금액이 소수점을

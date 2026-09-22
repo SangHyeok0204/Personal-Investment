@@ -3366,9 +3366,17 @@ export function removeJournal(id: string): Promise<JournalList> {
   return request<JournalList>(`/api/v1/journal/${id}`, { method: "DELETE" });
 }
 
+export interface UntrackedHolding {
+  ticker: string;
+  name: string | null;
+  market_value_krw: string | null;
+  /** 분모는 **주식 평가액**이다(예수금 제외) — 자산 현황의 비중과 다른 숫자다. */
+  weight: string | null;
+}
+
 /** 일지가 하나도 없는 보유 종목 — "무엇을 안 적었는가". */
-export function getUntrackedTickers(): Promise<string[]> {
-  return request<string[]>("/api/v1/journal/untracked");
+export function getUntrackedTickers(): Promise<UntrackedHolding[]> {
+  return request<UntrackedHolding[]>("/api/v1/journal/untracked");
 }
 
 // ── 주문 내역 ────────────────────────────────────────────────────────────────

@@ -60,11 +60,36 @@ def test_only_the_same_side_counts():
     assert out.filled_quantity == D("0")
 
 
+def test_merged_settlement_row_is_not_matched_by_quantity():
+    """⚠️증권사가 **같은 날 같은 종목 주문을 한 줄로 합쳐 결제한다.**
+
+    실측: 2026-09-14 에 EETH 2주와 32주를 따로 주문했는데, 체결 원장에는
+    09-16 에 **34주 한 줄**만 있다. 그래서 수량이 같은 체결을 찾으면 안 된다 —
+    "2주 계획"은 영영 체결을 못 찾고 "안 샀다"로 적히게 된다.
+    창 안의 같은 방향 체결을 **모두 더한다.**
+    """
+    merged = _ev(
+        planned_side="BUY",
+        planned_quantity=D("2"),
+        planned_price_krw=None,
+        fills=[Fill(date(2026, 9, 20), "BUY", D("34"), D("33"))],
+    )
+    assert merged.filled_quantity == D("34")
+    assert merged.no_order is True  # 주문 원장이 없으면 그건 따로 말한다
+
+
+def test_opposite_side_fills_are_not_counted():
+    """같은 창에 반대 방향 체결이 있어도 섞지 않는다."""
+    out = _ev(fills=[Fill(DAY, "BUY", D("11"), D("140"))])
+    assert out.filled_quantity == D("0")
+
+
 def test_window_is_asymmetric_because_trade_date_is_the_settlement_date():
     """★체결 원장의 날짜는 체결일이 아니라 **결제일(T+2)** 이다.
 
-    실측(주문과 짝지어진 85건): 0일 2 · 2일 55 · **4일 25**(주말 낀 경우) · 5일 3.
-    대칭 ±3일로 두면 28건(33%)을 놓친다 — 실제로 그래서 "체결 0주"가 나왔다.
+    실측(2026-09-23, 주문 87건을 체결과 **일대일**로 짝지은 85건):
+    2일 56 · **4일 26**(주말 낀 경우) · 5일 3 — 최대 5일.
+    대칭 ±3일로 두면 29건(34%)을 놓친다 — 실제로 그래서 "체결 0주"가 나왔다.
     """
     # 4일 뒤(주말 낀 T+2)도 잡혀야 한다.
     late = _ev(fills=[Fill(date(2026, 9, 22), "SELL", D("11"), D("140"))])

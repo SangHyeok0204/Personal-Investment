@@ -278,6 +278,31 @@ def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
     assert body["items"][0]["label"] == "미국"
 
 
+def test_untracked_holdings_carry_name_and_weight(client, kiwoom):
+    """일지를 안 쓴 보유 종목은 **이름과 비중**까지 준다.
+
+    ⚠️티커만 주면 이 화면만 "AAPL" 이라고 적혀 다른 화면과 같은 종목으로
+      읽히지 않는다. 그리고 **무엇부터 적어야 하는지**도 알 수 없다 —
+      20% 짜리를 안 적은 것과 0.3% 짜리를 안 적은 것은 다르다.
+
+    ⚠️분모는 **주식 평가액**이다(예수금 제외). 여기서 묻는 것은 "안 적은 종목이
+      내 주식에서 얼마나 되나"라서 자산 현황의 총자산 기준 비중과는 다르다.
+    """
+    body = client.get("/api/v1/journal/untracked").json()
+    by_ticker = {h["ticker"]: h for h in body}
+
+    # 큰 것부터 — 무엇을 먼저 적어야 하는지가 순서로 드러나야 한다.
+    assert [h["ticker"] for h in body] == ["AAPL", "005930"]
+
+    assert by_ticker["AAPL"]["name"] == "Apple"
+    # 미국 1,680,000 ÷ 주식 2,480,000 (예수금 500,000 은 분모에 없다)
+    assert Decimal(by_ticker["AAPL"]["weight"]) == Decimal("0.677419")
+    assert Decimal(by_ticker["005930"]["weight"]) == Decimal("0.322581")
+    assert sum(Decimal(h["weight"]) for h in body).quantize(
+        Decimal("0.0001")
+    ) == Decimal("1.0000")
+
+
 def test_fx_exposure_counts_foreign_cash(client, db, kiwoom, monkeypatch):
     """**외화 예수금도 환노출이다.** 그리고 분모는 총자산이다.
 

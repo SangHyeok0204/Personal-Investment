@@ -815,6 +815,20 @@ class JournalEntryOut(BaseModel):
     plan: PlanOutcomeOut | None
 
 
+class UntrackedHoldingOut(BaseModel):
+    """일지가 하나도 없는 보유 종목.
+
+    ⚠️티커만 주면 화면이 "SOXL" 이라고만 적는다. 다른 화면은 전부 종목명을
+      쓰는데 여기만 코드면 같은 종목으로 읽히지 않는다. **비중도 같이 준다** —
+      안 적은 것 중 무엇부터 적어야 하는지는 크기가 말해 준다.
+    """
+
+    ticker: str
+    name: str | None
+    market_value_krw: Decimal | None
+    weight: Decimal | None
+
+
 class JournalListOut(BaseModel):
     items: list[JournalEntryOut]
     total: int

@@ -12,7 +12,7 @@
 
 import uuid
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -36,6 +36,7 @@ from app.schemas import (
     JournalTradeOut,
     JournalUpdateIn,
     PlanOutcomeOut,
+    UntrackedHoldingOut,
 )
 
 router = APIRouter(prefix="/api/v1/journal", tags=["journal"])
@@ -45,9 +46,14 @@ VALID_KINDS = ("ENTRY", "EXIT", "REVIEW", "IDEA")
 # 메모 날짜 전후로 체결을 찾는 범위.
 #
 # ★**대칭이 아니다.** 체결 원장의 날짜는 체결일이 아니라 **결제일(T+2)** 이다
-#   (실측 2026-09-22, 주문과 짝지어진 85건: 0일 2 · 2일 55 · 4일 25 · 5일 3).
-#   대칭 ±3일로 두면 **28건(33%)을 놓친다** — 실제로 그래서 계획 메모가
-#   "체결 0주"라고 말했다. 체결은 판단보다 앞설 수 없으므로 앞은 좁게 둔다.
+#   (실측 2026-09-23, 주문 87건을 체결과 **일대일**로 짝지은 85건:
+#    2일 56 · 4일 26 · 5일 3 — 최대 5일). 대칭 ±3일로 두면 **29건(34%)을
+#   놓친다** — 실제로 그래서 계획 메모가 "체결 0주"라고 말했다.
+#   체결은 판단보다 앞설 수 없으므로 앞은 좁게 둔다.
+#   ⚠️창의 기준점은 **주문일이 아니라 일지를 적은 날**이다. 일지를 적고
+#     당일~다음날 주문이 나가면 결제는 2~6일째가 되므로 7 은 하루 여유다.
+#   ⚠️예전 측정(0일 2 · 2일 55 · 4일 25)은 틀렸다 — 자세한 경위는
+#     `app/core/plan_outcome.py` 머리말 참고.
 _TRADE_WINDOW_BEFORE = 1
 _TRADE_WINDOW_AFTER = 7
 
@@ -315,15 +321,23 @@ def remove_journal(entry_id: uuid.UUID, db: Session = Depends(get_db)) -> Journa
     return _build(_ordered(db, None, None), db)
 
 
-@router.get("/untracked", response_model=list[str])
+@router.get("/untracked", response_model=list[UntrackedHoldingOut])
 def list_untracked(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-) -> list[str]:
+) -> list[UntrackedHoldingOut]:
     """일지가 **하나도 없는 보유 종목**.
 
     이 화면의 쓸모는 "무엇을 안 적었는가"를 드러내는 데 있다. 비어 있는 자리를
     보여주지 않으면 일지는 결국 안 쓰게 된다.
+
+    ⚠️종목명과 비중을 같이 준다. 티커만 주면 이 화면만 "SOXL" 이라고 적혀
+      다른 화면과 같은 종목으로 읽히지 않고, **무엇부터 적어야 하는지**도
+      알 수 없다 — 20% 짜리를 안 적은 것과 0.3% 짜리를 안 적은 것은 다르다.
+
+    ⚠️비중의 분모는 **주식 평가액**이다. 여기서 묻는 것은 "안 적은 종목이
+      내 주식에서 얼마나 되나"라서 예수금은 분모에 넣지 않는다. 자산 현황·
+      배분의 총자산 기준 비중과는 다른 숫자다.
     """
     written = {
         ticker
@@ -332,8 +346,26 @@ def list_untracked(
         ).all()
     }
     held = db.execute(
-        select(Asset.ticker)
+        select(Asset.ticker, Asset.name, CurrentPosition.market_value_krw)
         .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
         .order_by(CurrentPosition.market_value_krw.desc().nullslast())
     ).all()
-    return [t for (t,) in held if t not in written][:limit]
+
+    total = sum(
+        (value for _, _, value in held if value is not None), Decimal("0")
+    )
+    return [
+        UntrackedHoldingOut(
+            ticker=ticker,
+            name=name,
+            market_value_krw=value,
+            # 분모가 0 이거나 평가액을 모르면 **0% 가 아니라 None** 이다.
+            weight=(
+                (value / total).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                if value is not None and total
+                else None
+            ),
+        )
+        for ticker, name, value in held
+        if ticker not in written
+    ][:limit]
