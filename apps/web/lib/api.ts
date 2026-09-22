@@ -3627,6 +3627,50 @@ export function getTradingCosts(
   );
 }
 
+// ── 보유 종목 뉴스 (구글 뉴스 RSS) ───────────────────────────────────────────
+// ★키가 필요 없다. 검색어는 SEC 영문 법인명에서 등기 접미사를 걷어내 만든다
+//   (실측: `"CORNING INC /NY"` 14건 → `"CORNING"` 100건).
+// ⚠️ETF 는 대상이 아니다 — 실측 제목 언급 비율 EETH 15% · TSL 33% · GLD 43%.
+
+export interface NewsArticle {
+  /** ⚠️한 기사가 여러 보유 종목에 걸릴 수 있다. 그래서 배열이다. */
+  tickers: string[];
+  companies: string[];
+  title: string;
+  publisher: string | null;
+  published_at: string | null;
+  url: string;
+}
+
+export interface NewsTicker {
+  ticker: string;
+  name: string | null;
+  company: string | null;
+  /** false 면 아예 대상이 아니다(ETF) — 조회 실패와 다르다. */
+  covered: boolean;
+  ok: boolean;
+  reason: string | null;
+  article_count: number;
+  /** 관련성 필터로 걸러낸 건수. 숨기지 않는다. */
+  filtered_out: number;
+}
+
+export interface News {
+  articles: NewsArticle[];
+  tickers: NewsTicker[];
+  window_days: number;
+  covered_count: number;
+  not_covered_count: number;
+  filtered_total: number;
+  /** false 면 화면이 "뉴스가 없습니다"라고 말하면 안 된다. */
+  source_ok: boolean;
+  notes: string[];
+}
+
+export function getHoldingsNews(accountId?: string | null): Promise<News> {
+  return request<News>(`/api/v1/portfolio/news${accountQuery(accountId)}`);
+}
+
 // ── 기간 리포트 ──────────────────────────────────────────────────────────────
 // ⚠️**기간별 평가 기여도는 없다.** 종목별 "이번 달 기여"를 내려면 보유 일별
 //   시계열이 필요한데 스냅샷이 6건뿐이다. 실현손익(증권사 실측)만 종목별로 온다.

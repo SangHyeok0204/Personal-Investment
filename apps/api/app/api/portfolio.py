@@ -35,6 +35,7 @@ _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
 if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 from prices import filings as filings_source  # noqa: E402
+from prices import news as news_source  # noqa: E402
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import (
@@ -79,6 +80,9 @@ from app.schemas import (
     FilingOut,
     FilingTickerOut,
     FilingsOut,
+    NewsArticleOut,
+    NewsOut,
+    NewsTickerOut,
     ReportBenchmarkOut,
     ReportOut,
     ReportPeriodOut,
@@ -2933,3 +2937,149 @@ def get_report(
         trading_days=trading_days,
         notes=_REPORT_NOTES,
     )
+
+
+# ── 보유 종목 뉴스 ───────────────────────────────────────────────────────────
+
+NEWS_TTL_SECONDS = 1800.0
+NEWS_WINDOW_DAYS = 7
+
+_news_lock = threading.Lock()
+_news_cache: dict[tuple[str, ...], tuple[float, NewsOut]] = {}
+
+_NEWS_NOTES = [
+    "검색어를 **영문 법인명**으로 만듭니다. 실측(10종목 각 100건에서 제목 언급"
+    " 비율): 법인명 97.3% · 티커 96.1% · 한국어 82.8%(최저 32%)."
+    " 한국어는 소형주에서 무너져서 쓰지 않았습니다.",
+    "**제목에 종목이 언급된 기사만** 남깁니다. 걸러낸 건수를 아래에 적어 두었으니"
+    " 너무 많이 걸러졌다면 그 종목은 검색어가 맞지 않는 것입니다.",
+    "**ETF 는 넣지 않았습니다.** 실측 제목 언급 비율이 EETH 15% · TSL 33% ·"
+    " GLD 43% 였고, TSL 검색은 아예 다른 회사 기사를 물어 왔습니다. ETF 의 관련"
+    " 뉴스는 기초자산 뉴스인데 그걸 그 ETF 뉴스라고 붙이면 우리가 만들어 낸"
+    " 편집 판단이 됩니다.",
+    "같은 기사가 여러 매체로 중복돼 오므로 제목으로 한 번 더 걸러 냅니다.",
+    "구글 뉴스 피드는 **개인 피드리더에서 개인적·비상업적 용도**로 제공됩니다"
+    " — 이 대시보드는 본인 비공개 화면이라 그 용도에 맞습니다.",
+]
+
+
+@router.get("/news", response_model=NewsOut)
+def get_news(
+    account_id: uuid.UUID | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> NewsOut:
+    """보유 종목 뉴스 — 내 포지션에 걸린 일.
+
+    ★키가 필요 없다(구글 뉴스 RSS). 검색어는 **영문 법인명**으로 만드는데,
+      그 이름은 공시 화면이 이미 받는 SEC company_tickers 에서 가져온다 —
+      같은 사실을 두 군데서 따로 관리하지 않는다.
+
+    ⚠️ETF 는 대상이 아니다. 공시 화면과 같은 판단 기준(SEC 에 CIK 가 있는가)을
+      쓰므로, GLD 처럼 상품신탁이라 SEC 에 등록된 ETF 는 자동으로 포함된다.
+    """
+    empty = NewsOut(
+        articles=[], tickers=[], window_days=NEWS_WINDOW_DAYS,
+        covered_count=0, not_covered_count=0, filtered_total=0,
+        source_ok=False, notes=_NEWS_NOTES,
+    )
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return empty
+
+    holdings = db.execute(
+        select(Asset.ticker, Asset.name)
+        .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+        .distinct()
+    ).all()
+    tickers = sorted({t for t, _ in holdings if t})
+    names = {t: n for t, n in holdings if t}
+    if not tickers:
+        return empty
+
+    key = tuple(tickers)
+    now = time.monotonic()
+    with _news_lock:
+        hit = _news_cache.get(key)
+        if not refresh and hit is not None and now - hit[0] < NEWS_TTL_SECONDS:
+            return hit[1]
+
+    cik_map = filings_source.fetch_cik_map()
+    # ⚠️SEC 목록을 못 받았으면 **티커로 대신 검색하지 않는다.** 정확도가 떨어지는
+    #   검색을 조용히 섞으면 화면이 왜 이상한지 알 수 없게 된다.
+    if not cik_map:
+        built = NewsOut(
+            articles=[], tickers=[], window_days=NEWS_WINDOW_DAYS,
+            covered_count=0, not_covered_count=len(tickers), filtered_total=0,
+            source_ok=False, notes=_NEWS_NOTES,
+        )
+        with _news_lock:
+            _news_cache[key] = (time.monotonic(), built)
+        return built
+
+    covered = [(t, cik_map[t][1]) for t in tickers if t in cik_map]
+    uncovered = [t for t in tickers if t not in cik_map]
+
+    results = news_source.fetch_news(covered, days=NEWS_WINDOW_DAYS) if covered else []
+
+    # ⚠️한 기사가 여러 종목에 걸리면 **합친다.** 두 줄로 늘어놓으면 화면이
+    #   고장 난 것처럼 보이고(실측: 같은 알파벳 기사 2건), 하나를 지우면 다른
+    #   종목의 뉴스가 사라진다.
+    merged: dict[str, NewsArticleOut] = {}
+    summary: list[NewsTickerOut] = []
+    for r in results:
+        for a in r.articles:
+            key = news_source.title_key(a.title)
+            label = names.get(a.ticker) or a.company or a.ticker
+            existing = merged.get(key)
+            if existing is not None:
+                if a.ticker not in existing.tickers:
+                    existing.tickers.append(a.ticker)
+                    existing.companies.append(label)
+                continue
+            merged[key] = NewsArticleOut(
+                tickers=[a.ticker],
+                # 화면에 쓰는 이름은 우리 DB 의 한글 종목명이다.
+                companies=[label],
+                title=a.title,
+                publisher=a.publisher,
+                published_at=a.published_at,
+                url=a.url,
+            )
+        summary.append(
+            NewsTickerOut(
+                ticker=r.ticker, name=names.get(r.ticker), company=r.company,
+                covered=True, ok=r.ok, reason=r.reason,
+                article_count=len(r.articles), filtered_out=r.filtered_out,
+            )
+        )
+    for t in uncovered:
+        summary.append(
+            NewsTickerOut(
+                ticker=t, name=names.get(t), company=None, covered=False, ok=True,
+                reason="개별 기업 뉴스 대상이 아닙니다 (ETF 등)",
+                article_count=0, filtered_out=0,
+            )
+        )
+
+    # 날짜를 모르는 기사는 **뒤로** 보낸다. 지금 시각으로 채우면 최신인 척한다.
+    articles = list(merged.values())
+    articles.sort(
+        key=lambda a: (a.published_at is not None, a.published_at), reverse=True
+    )
+    summary.sort(key=lambda t: (-t.article_count, t.ticker))
+
+    built = NewsOut(
+        articles=articles,
+        tickers=summary,
+        window_days=NEWS_WINDOW_DAYS,
+        covered_count=sum(1 for t in summary if t.covered),
+        not_covered_count=sum(1 for t in summary if not t.covered),
+        filtered_total=sum(t.filtered_out for t in summary),
+        source_ok=any(t.ok and t.covered for t in summary),
+        notes=_NEWS_NOTES,
+    )
+    with _news_lock:
+        _news_cache[key] = (time.monotonic(), built)
+    return built

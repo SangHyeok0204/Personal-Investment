@@ -1413,3 +1413,54 @@ class ReportOut(BaseModel):
     worst_day_krw: Decimal | None
     trading_days: int
     notes: list[str]
+
+
+# ── 보유 종목 뉴스 (구글 뉴스 RSS) ───────────────────────────────────────────
+
+class NewsArticleOut(BaseModel):
+    """기사 한 건.
+
+    ⚠️한 기사가 **여러 보유 종목에 동시에 걸릴 수 있다**("Nvidia and AMD …").
+      그때 같은 제목을 두 줄로 늘어놓으면 화면이 고장 난 것처럼 보이고, 하나를
+      지우면 다른 종목의 뉴스가 사라진다. 그래서 한 줄로 합치고 종목을 다 싣는다.
+    """
+
+    tickers: list[str]
+    companies: list[str]
+    title: str
+    publisher: str | None
+    published_at: datetime | None
+    url: str
+
+
+class NewsTickerOut(BaseModel):
+    """종목별 조회 결과.
+
+    ⚠️`ok=False`(못 받았다)와 `article_count=0`(받았는데 없다)은 다른 상태다.
+      `covered=False` 는 또 다른 상태 — 아예 대상이 아니라는 뜻이다(ETF).
+    """
+
+    ticker: str
+    name: str | None
+    company: str | None
+    covered: bool
+    ok: bool
+    reason: str | None
+    article_count: int
+    filtered_out: int
+
+
+class NewsOut(BaseModel):
+    """보유 종목 뉴스.
+
+    ⚠️`source_ok=False` 면 화면이 "뉴스가 없습니다"라고 말하면 안 된다.
+    """
+
+    articles: list[NewsArticleOut]
+    tickers: list[NewsTickerOut]
+    window_days: int
+    covered_count: int
+    not_covered_count: int
+    filtered_total: int
+    source_ok: bool
+    notes: list[str]

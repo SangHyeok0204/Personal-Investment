@@ -238,7 +238,12 @@ export const navItems: NavItem[] = [
       },
       { label: "종토방", href: "/stock-discussion", status: "live" },
       { label: "기사", status: "planned" },
-      { label: "보유종목 뉴스", status: "planned", hint: "내 포지션에 걸린 뉴스만" },
+      {
+        label: "보유종목 뉴스",
+        href: "/news/holdings",
+        status: "live",
+        hint: "내 포지션에 걸린 일 — 제목에 언급된 기사만",
+      },
     ],
   },
   {
