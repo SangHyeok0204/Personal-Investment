@@ -5,13 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
+import { Modal } from "@/components/ui/modal";
 import { SeriesChart } from "@/components/charts/series-chart";
 import {
   Cell,
   DataTable,
   NotConnectedBanner,
   PlannedList,
-  StatRow,
   StatTile,
   StubCard,
   toneOf,
@@ -41,6 +41,7 @@ const RANGES = [
 export default function ReturnsPage() {
   const { accountId, connected } = useAccount();
   const [days, setDays] = useState(365);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [metric, setMetric] = useState<"assets" | "cumulative">("assets");
 
   const perf = useQuery({
@@ -65,10 +66,10 @@ export default function ReturnsPage() {
   return (
     <>
       <Topbar title="수익률 추이" subtitle="예탁자산 · 누적손익" />
-      <PageContainer wide>
+      <PageContainer fit>
         {!connected && <NotConnectedBanner what="계좌 성과" />}
 
-        <StatRow>
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="현재 예탁자산"
             value={formatKrwString(data?.end_assets_krw)}
@@ -100,9 +101,9 @@ export default function ReturnsPage() {
             accent="auto"
             loading={perf.isLoading}
           />
-        </StatRow>
+        </div>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {RANGES.map((r) => (
             <Chip key={r.id} active={days === r.id} onClick={() => setDays(r.id)}>
               {r.label}
@@ -122,14 +123,34 @@ export default function ReturnsPage() {
           )}
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+        {/* ★2026-09-22 전체 점검에서 걸렸다: `wide` 로 남아 페이지가 스크롤됐다.
+            '여기서 하지 않는 것' 카드는 카드 자리를 차지하는 대신 헤더 버튼 →
+            팝업으로 옮겼다(다른 화면과 같은 규약). */}
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 gap-3",
+            "grid-cols-1 auto-rows-[minmax(0,1fr)]",
+            "md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:auto-rows-auto",
+          )}
+        >
           <StubCard
             title={metric === "assets" ? "예탁자산 추이" : "누적손익 추이"}
             subtitle={metric === "assets" ? "현금 + 주식 평가" : "증권사 산출 누적손익"}
+            className="min-h-0"
+            scrollBody
+            action={
+              <button
+                type="button"
+                onClick={() => setNotesOpen(true)}
+                className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
+              >
+                이 화면의 범위
+              </button>
+            }
           >
             {items.length > 0 ? (
               <SeriesChart
-                height={280}
+                height={300}
                 includeZero={metric === "cumulative"}
                 points={items.map((p) => {
                   const raw =
@@ -141,13 +162,18 @@ export default function ReturnsPage() {
                 }
               />
             ) : (
-              <div className="flex h-[280px] items-center justify-center text-[12px] font-semibold text-ink-faint">
+              <div className="flex h-[300px] items-center justify-center text-[12px] font-semibold text-ink-faint">
                 {perf.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
               </div>
             )}
           </StubCard>
 
-          <StubCard title="월별" subtitle="월말 자산 · 월 손익 합">
+          <StubCard
+            title="월별"
+            subtitle="월말 자산 · 월 손익 합"
+            className="min-h-0"
+            scrollBody
+          >
             <DataTable
               columns={["월", "월말 예탁자산", "월 손익"]}
               align={["left", "right", "right"]}
@@ -170,17 +196,27 @@ export default function ReturnsPage() {
             </DataTable>
           </StubCard>
 
-          <StubCard title="여기서 하지 않는 것" className="xl:col-span-2">
-            <PlannedList
-              items={[
-                "TWR/MWR 을 계산해 붙이지 않았다 — 일별 현금흐름의 시점 가정이 필요한데, 지금 있는 건 입출금 일계뿐이다. 근거 없는 숫자에 'TWR' 이름을 붙이면 그걸로 판단하게 된다",
-                "벤치마크(KOSPI·S&P500) 비교는 지수 시계열을 붙인 뒤에",
-                "리스크 지표(변동성·MDD·샤프)는 일별 수익률이 정확해진 뒤에",
-              ]}
-            />
-          </StubCard>
         </div>
       </PageContainer>
+
+      <Modal
+        open={notesOpen}
+        onClose={() => setNotesOpen(false)}
+        title="이 화면의 범위"
+        subtitle="여기서 하지 않는 것과, 그걸 하는 화면"
+      >
+        {/* ⚠️2026-09-22 정정: 예전엔 "TWR·벤치마크·리스크 지표는 하지 않는다"고
+            적혀 있었는데 **그 뒤에 전부 만들었다.** 화면이 사실과 다른 말을
+            하고 있었다. 안 하는 이유가 아니라 **어디서 하는지**를 적는다. */}
+        <PlannedList
+          items={[
+            "여기는 **금액**을 본다 — 예탁자산과 누적손익의 추이. 입출금이 섞이면 금액은 늘지만 잘 굴린 것은 아니라서, '입출금 제외 증감'을 따로 낸다",
+            "시간가중 수익률(TWR)·변동성·MDD·샤프는 '성과 분석' 화면에서 본다 — 일별 현금흐름 보정(reconcile_flows)을 거쳐 계산한다",
+            "S&P 500·필라델피아 반도체 대비는 '벤치마크 비교' 화면에서 본다 (원화 환산 기준)",
+            "월·분기·연도를 잘라 보는 것은 '기간 리포트' 화면이다",
+          ]}
+        />
+      </Modal>
     </>
   );
 }

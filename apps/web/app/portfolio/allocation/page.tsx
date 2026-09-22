@@ -123,10 +123,10 @@ export default function AllocationPage() {
   return (
     <>
       <Topbar title="섹터/자산 배분" subtitle="섹터 · 산업 · 자산군 · 국가 · 통화" />
-      <PageContainer wide>
+      <PageContainer fit>
         {!connected && <NotConnectedBanner what="보유 종목" />}
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {DIMENSIONS.map((d) => (
             <button
               key={d.id}
@@ -152,23 +152,40 @@ export default function AllocationPage() {
 
         {/* 미분류가 남아 있으면 숨기지 않고 위에서 알린다. */}
         {unclassified && Number(unclassified) > 0 && (
-          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-[13px] font-semibold text-amber-900">
+          <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+            <p className="text-[12px] font-semibold text-amber-900">
               미분류 {formatKrwString(unclassified)} — 아래 표에서 종목별로 섹터를
               지정하면 비중에 바로 반영됩니다.
             </p>
           </div>
         )}
 
-        <div className="grid gap-4 xl:grid-cols-2">
+        {/* ★2026-09-22 전체 점검에서 걸렸다: `wide` 로 남아 페이지가 스크롤됐다.
+            세로 3단이던 것을 **왼쪽에 비중 두 개, 오른쪽에 분류 표**로 다시 짰다 —
+            그냥 fit 으로만 바꾸면 세 카드가 한 화면에 들어가지 않는다. */}
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 gap-3",
+            "grid-cols-1 auto-rows-[minmax(0,1fr)]",
+            "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:auto-rows-auto",
+          )}
+        >
+          <div className="flex min-h-0 flex-col gap-3">
           <StubCard
             title={`${DIMENSIONS.find((d) => d.id === dimension)?.label} 비중`}
             subtitle="평가금액(KRW) 기준"
+            className="min-h-0 flex-1"
+            scrollBody
           >
             <WeightBars items={data?.items ?? []} />
           </StubCard>
 
-          <StubCard title="종목 비중" subtitle="평가금액 순">
+          <StubCard
+            title="종목 비중"
+            subtitle="평가금액 순 상위 8"
+            className="min-h-0 flex-1"
+            scrollBody
+          >
             <WeightBars
               items={(holdings.data?.items ?? []).slice(0, 8).map((h) => ({
                 key: h.asset_id,
@@ -186,11 +203,13 @@ export default function AllocationPage() {
               }))}
             />
           </StubCard>
+          </div>
 
           <StubCard
             title="종목별 분류"
-            subtitle="섹터를 고치면 MANUAL 로 표시되어 자동 분류가 덮지 않습니다"
-            className="xl:col-span-2"
+            subtitle="섹터를 고치면 MANUAL 로 표시됩니다"
+            className="min-h-0"
+            scrollBody
           >
             <DataTable
               columns={["종목", "국가", "섹터", "세부 산업", "평가금액", ""]}

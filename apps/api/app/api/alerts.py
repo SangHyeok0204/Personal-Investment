@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -53,34 +54,88 @@ _NOTES = [
 ]
 
 
-def _facts(
-    db: Session, ticker: str | None, threshold: Decimal | None
-) -> ar.Facts:
+@dataclass
+class _Context:
+    """한 요청에서 **한 번만** 모은 사실.
+
+    ⚠️처음에는 규칙마다 따로 시세를 받고 DB 를 물었다. 규칙 8개에 시세 조회
+      8번 + 쿼리 24번이라 `/api/v1/alerts` 가 **2.1초**였다(실측). 화면이 60초
+      마다 부르는 엔드포인트다 — N+1 을 그대로 두면 규칙을 늘릴수록 느려진다.
+    """
+
+    quotes: dict
+    #: ticker → (평가액KRW, 매입액현지, 평가액현지, 행수)
+    positions: dict[str, tuple]
+    total_value_krw: Decimal | None
+    #: 주문 내역. None 이면 **조회하지 않았다**(빈 목록과 다르다).
+    orders: list | None
+    names: dict[str, str | None]
+
+
+def _build_context(db: Session, rules: list[AlertRule]) -> _Context:
+    tickers = sorted({r.ticker for r in rules if r.ticker})
+    needs_orders = any(r.ticker is None and r.enabled for r in rules)
+
+    # 시세 — 종목 전부를 **한 번에** 받는다.
+    quotes: dict = {}
+    if tickers:
+        quotes, _ = quote_cache.get_quotes(tickers, with_range=True)
+
+    positions: dict[str, tuple] = {}
+    names: dict[str, str | None] = {}
+    total_value_krw = None
+    if tickers:
+        rows = db.execute(
+            select(
+                Asset.ticker,
+                func.max(Asset.name),
+                func.sum(CurrentPosition.market_value_krw),
+                func.sum(CurrentPosition.purchase_amount_local),
+                func.sum(CurrentPosition.market_value_local),
+                func.count(CurrentPosition.id),
+            )
+            .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+            .where(Asset.ticker.in_(tickers))
+            .group_by(Asset.ticker)
+        ).all()
+        for ticker, name, value_krw, purchase_local, value_local, count in rows:
+            positions[ticker] = (value_krw, purchase_local, value_local, count)
+            names[ticker] = name
+        # 보유하지 않은 종목의 이름은 assets 에만 있을 수 있다.
+        missing = [t for t in tickers if t not in names]
+        if missing:
+            for ticker, name in db.execute(
+                select(Asset.ticker, Asset.name).where(Asset.ticker.in_(missing))
+            ).all():
+                names[ticker] = name
+        total_value_krw = db.execute(
+            select(func.sum(CurrentPosition.market_value_krw))
+        ).scalar()
+
+    orders = (
+        db.execute(select(Order)).scalars().all() if needs_orders else None
+    )
+    return _Context(
+        quotes=quotes, positions=positions, total_value_krw=total_value_krw,
+        orders=orders, names=names,
+    )
+
+
+def _facts(ctx: _Context, ticker: str | None, threshold: Decimal | None) -> ar.Facts:
     """판정에 쓸 지금 사실. 없는 값은 None 으로 둔다(0 으로 채우지 않는다)."""
     if ticker is None:
-        orders = db.execute(select(Order)).scalars().all()
-        if not orders:
+        if not ctx.orders:
             # ⚠️주문 내역 자체가 없는 것과 "창 안에 주문이 없다"는 다르다.
             return ar.Facts(order_total=None)
         days = int(threshold) if threshold is not None else 7
-        total, unfilled = ar.unfilled_orders(orders, days, date.today())
+        total, unfilled = ar.unfilled_orders(ctx.orders, days, date.today())
         return ar.Facts(order_total=total, order_unfilled=unfilled)
 
-    quotes, _ = quote_cache.get_quotes([ticker], with_range=True)
-    quote = quotes.get(ticker)
-
-    # ⚠️계좌가 여럿이면 같은 종목이 여러 행으로 온다. 첫 행만 보면 비중이 틀린다.
-    held_row = db.execute(
-        select(
-            func.sum(CurrentPosition.market_value_krw),
-            func.sum(CurrentPosition.purchase_amount_local),
-            func.sum(CurrentPosition.market_value_local),
-            func.count(CurrentPosition.id),
-        )
-        .join(Asset, Asset.id == CurrentPosition.asset_id)
-        .where(Asset.ticker == ticker)
-    ).first()
-    value_krw, purchase_local, value_local, row_count = held_row or (None, None, None, 0)
+    quote = ctx.quotes.get(ticker)
+    # ⚠️계좌가 여럿이면 같은 종목이 여러 행으로 온다 — 위에서 합산해 뒀다.
+    value_krw, purchase_local, value_local, row_count = ctx.positions.get(
+        ticker, (None, None, None, 0)
+    )
     held = bool(row_count)
 
     pnl_rate = None
@@ -90,14 +145,11 @@ def _facts(
         pnl_rate = value_local / purchase_local - Decimal("1")
 
     weight = None
-    if held and value_krw is not None:
-        total = db.execute(
-            select(func.sum(CurrentPosition.market_value_krw))
-        ).scalar()
+    if held and value_krw is not None and ctx.total_value_krw:
         # ⚠️환산 못 한 종목이 있으면 분모가 작아져 비중이 부풀어 오른다.
         #   그래도 0 으로 채우는 것보다 낫고, 화면 안내에 그 사실을 적어 둔다.
-        if total and total > 0:
-            weight = value_krw / total
+        if ctx.total_value_krw > 0:
+            weight = value_krw / ctx.total_value_krw
 
     return ar.Facts(
         price=quote.price if quote else None,
@@ -110,18 +162,16 @@ def _facts(
     )
 
 
-def _to_out(db: Session, rule: AlertRule) -> AlertRuleOut:
+def _to_out(ctx: _Context, rule: AlertRule) -> AlertRuleOut:
     spec = ar.KIND_BY_KEY.get(rule.kind)
-    name = None
-    if rule.ticker:
-        name = db.execute(
-            select(Asset.name).where(Asset.ticker == rule.ticker)
-        ).scalar_one_or_none()
+    name = ctx.names.get(rule.ticker) if rule.ticker else None
 
     if not rule.enabled:
         verdict = ar.Verdict(ar.UNKNOWN, None, "꺼져 있습니다.")
     else:
-        verdict = ar.evaluate(rule.kind, rule.threshold, _facts(db, rule.ticker, rule.threshold))
+        verdict = ar.evaluate(
+            rule.kind, rule.threshold, _facts(ctx, rule.ticker, rule.threshold)
+        )
 
     # ⚠️기록만 갱신한다. 다음 판정에 이 값을 쓰지 않는다.
     if rule.enabled:
@@ -155,7 +205,8 @@ def list_alerts(db: Session = Depends(get_db)) -> AlertsOut:
     rules = db.execute(
         select(AlertRule).order_by(AlertRule.created_at.desc())
     ).scalars().all()
-    out = [_to_out(db, r) for r in rules]
+    ctx = _build_context(db, rules)
+    out = [_to_out(ctx, r) for r in rules]
     db.commit()
 
     return AlertsOut(
@@ -200,7 +251,7 @@ def create_alert(payload: AlertRuleIn, db: Session = Depends(get_db)) -> AlertRu
     db.add(rule)
     db.commit()
     db.refresh(rule)
-    out = _to_out(db, rule)
+    out = _to_out(_build_context(db, [rule]), rule)
     db.commit()
     return out
 
@@ -220,7 +271,7 @@ def update_alert(
         rule.enabled = payload.enabled
     db.commit()
     db.refresh(rule)
-    out = _to_out(db, rule)
+    out = _to_out(_build_context(db, [rule]), rule)
     db.commit()
     return out
 

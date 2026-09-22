@@ -236,7 +236,15 @@ export const navItems: NavItem[] = [
       { label: "텔레그램", href: "/telegram-news", status: "placeholder",
         hint: "collector 필요 — 현재 미가동",
       },
-      { label: "종토방", href: "/stock-discussion", status: "live" },
+      {
+        label: "종토방",
+        href: "/stock-discussion",
+        // ⚠️2026-09-22 전체 점검에서 정정: `live` 라고 적혀 있었지만 **수집
+        //   서버가 없다**("수집 서버 미접속", 집계 전부 0). 원본 GE 의 LAN
+        //   수집기에 의존하는 화면이다.
+        status: "placeholder",
+        hint: "collector 필요 — 현재 미가동",
+      },
       {
         // ★"기사"를 **시장 뉴스**로 바꿨다. 그대로 만들면 보유종목 뉴스와
         //   소스가 같아 거의 같은 화면이 하나 더 생긴다. 주제별로 보면
@@ -304,7 +312,15 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "배치 · 잡 모니터",
       },
-      { label: "AI token usage", href: "/ai-token-usage", status: "live" },
+      {
+        label: "AI token usage",
+        href: "/ai-token-usage",
+        // ⚠️2026-09-22 전체 점검에서 정정: 화면이 10초 기다린 뒤
+        //   "모니터에 연결할 수 없습니다 (http://192.168.199.120:8002) — timed out"
+        //   을 띄운다. 그 LAN 모니터는 이 환경에 없다.
+        status: "placeholder",
+        hint: "LAN 모니터(192.168.199.120) 필요 — 현재 미접속",
+      },
       { label: "환경설정", href: "/settings", status: "live" },
       {
         label: "알림",

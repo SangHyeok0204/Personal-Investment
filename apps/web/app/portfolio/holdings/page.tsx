@@ -9,7 +9,6 @@ import {
   Cell,
   DataTable,
   NotConnectedBanner,
-  StatRow,
   StatTile,
   StubCard,
   toneOf,
@@ -75,7 +74,7 @@ export default function HoldingsPage() {
   return (
     <>
       <Topbar title="보유 종목" subtitle="종목별 수량 · 평단 · 손익" />
-      <PageContainer wide>
+      <PageContainer fit>
         {!connected && (
           <NotConnectedBanner
             what="키움 잔고 조회"
@@ -87,7 +86,7 @@ export default function HoldingsPage() {
           />
         )}
 
-        <StatRow>
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="보유 종목 수"
             value={s?.position_count ? `${s.position_count}` : undefined}
@@ -114,13 +113,19 @@ export default function HoldingsPage() {
             accent="auto"
             loading={summary.isLoading}
           />
-        </StatRow>
+        </div>
 
+        {/* ★2026-09-22 전체 점검에서 걸렸다: 이 화면만 `wide` 로 남아 있어
+            **페이지가 244px 스크롤**됐다(사용자가 요청한 1페이지 원칙 위반).
+            ⚠️`fit` 으로 바꾸는 것만으로는 부족하다 — 카드 본문 전체를 스크롤하면
+              필터 칩이 같이 밀려 올라가 안 보인다. 칩은 고정하고 **표만** 스크롤한다. */}
         <StubCard
           title="보유 종목 전체"
           subtitle="국내 · 해외 통합 (평가금액은 KRW 환산 기준)"
+          className="min-h-0 flex-1"
         >
-          <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex h-full min-h-0 flex-col">
+          <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
             {MARKET_FILTERS.map((f) => (
               <Chip
                 key={f.id}
@@ -157,6 +162,8 @@ export default function HoldingsPage() {
             </span>
           </div>
 
+          {/* 남는 높이를 표가 갖고, 넘치면 **여기서만** 스크롤한다. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
           <DataTable
             columns={[
               "종목",
@@ -220,6 +227,8 @@ export default function HoldingsPage() {
               </tr>
             ))}
           </DataTable>
+          </div>
+          </div>
         </StubCard>
       </PageContainer>
     </>
