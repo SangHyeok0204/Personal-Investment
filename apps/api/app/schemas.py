@@ -1464,3 +1464,67 @@ class NewsOut(BaseModel):
     filtered_total: int
     source_ok: bool
     notes: list[str]
+
+
+# ── 알림 ─────────────────────────────────────────────────────────────────────
+
+class AlertKindOut(BaseModel):
+    key: str
+    label: str
+    hint: str
+    needs_ticker: bool
+    #: "price" | "percent" | "days" | None
+    unit: str | None
+
+
+class AlertRuleIn(BaseModel):
+    kind: str
+    ticker: str | None = None
+    threshold: Decimal | None = None
+    memo: str | None = None
+    enabled: bool = True
+
+
+class AlertRulePatch(BaseModel):
+    threshold: Decimal | None = None
+    memo: str | None = None
+    enabled: bool | None = None
+
+
+class AlertRuleOut(BaseModel):
+    """규칙 하나와 **지금** 판정 결과.
+
+    ⚠️`state` 는 셋이다 — TRIGGERED / OK / **UNKNOWN**. 잴 수 없었는데
+      "미충족"이라고 적으면 화면이 괜찮다고 거짓말을 한다.
+    """
+
+    id: uuid.UUID
+    kind: str
+    kind_label: str
+    ticker: str | None
+    name: str | None
+    threshold: Decimal | None
+    unit: str | None
+    enabled: bool
+    memo: str | None
+    state: str
+    actual: Decimal | None
+    message: str
+    #: 이 상태가 된 시각(기록). 판정의 근거가 아니다.
+    triggered_since: datetime | None
+
+
+class AlertsOut(BaseModel):
+    """알림 규칙 목록 + 지금 판정.
+
+    ⚠️`delivery_configured` 가 False 면 **화면이 "알림을 보냈다"고 말하면 안 된다.**
+      규칙을 세우고 판정하는 데까지만 동작한다.
+    """
+
+    rules: list[AlertRuleOut]
+    kinds: list[AlertKindOut]
+    triggered_count: int
+    unknown_count: int
+    disabled_count: int
+    delivery_configured: bool
+    notes: list[str]

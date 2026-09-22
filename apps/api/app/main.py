@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     ai_key_data,
+    alerts,
     ai_usage,
     brokerage,
     earnings,
@@ -71,6 +72,7 @@ app.include_router(stock_monitor.router)
 app.include_router(ai_key_data.router)
 app.include_router(earnings.router)
 app.include_router(watchlist.router)
+app.include_router(alerts.router)
 app.include_router(market.router)
 app.include_router(journal.router)
 app.include_router(etf_class.router)

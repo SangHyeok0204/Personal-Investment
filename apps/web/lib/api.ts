@@ -3627,6 +3627,79 @@ export function getTradingCosts(
   );
 }
 
+// ── 알림 ─────────────────────────────────────────────────────────────────────
+// ★**아직 보내지 않는다.** 전달 경로(텔레그램 등)가 붙기 전까지 `delivery_configured`
+//   는 항상 false 다 — 화면이 "보냈다"고 말하면 안 된다.
+// ⚠️상태가 셋이다: TRIGGERED / OK / **UNKNOWN**. 잴 수 없었는데 "미충족"이라고
+//   적으면 화면이 괜찮다고 거짓말을 한다.
+
+export interface AlertKind {
+  key: string;
+  label: string;
+  hint: string;
+  needs_ticker: boolean;
+  /** "price" | "percent" | "days" | null */
+  unit: string | null;
+}
+
+export interface AlertRule {
+  id: string;
+  kind: string;
+  kind_label: string;
+  ticker: string | null;
+  name: string | null;
+  threshold: string | null;
+  unit: string | null;
+  enabled: boolean;
+  memo: string | null;
+  state: "TRIGGERED" | "OK" | "UNKNOWN";
+  actual: string | null;
+  message: string;
+  triggered_since: string | null;
+}
+
+export interface Alerts {
+  rules: AlertRule[];
+  kinds: AlertKind[];
+  triggered_count: number;
+  unknown_count: number;
+  disabled_count: number;
+  delivery_configured: boolean;
+  notes: string[];
+}
+
+export function getAlerts(): Promise<Alerts> {
+  return request<Alerts>("/api/v1/alerts");
+}
+
+export function createAlert(body: {
+  kind: string;
+  ticker?: string | null;
+  threshold?: string | null;
+  memo?: string | null;
+}): Promise<AlertRule> {
+  return request<AlertRule>("/api/v1/alerts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateAlert(
+  id: string,
+  body: { threshold?: string; memo?: string; enabled?: boolean },
+): Promise<AlertRule> {
+  return request<AlertRule>(`/api/v1/alerts/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteAlert(id: string): Promise<Alerts> {
+  return request<Alerts>(`/api/v1/alerts/${id}`, { method: "DELETE" });
+}
+
 // ── 보유 종목 뉴스 (구글 뉴스 RSS) ───────────────────────────────────────────
 // ★키가 필요 없다. 검색어는 SEC 영문 법인명에서 등기 접미사를 걷어내 만든다
 //   (실측: `"CORNING INC /NY"` 14건 → `"CORNING"` 100건).

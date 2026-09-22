@@ -1,0 +1,237 @@
+"""알림 — 조건을 세워 두고 지금 충족하는지 본다.
+
+★**전달(텔레그램 등)은 아직 없다.** 사용자의 텔레그램 설정이 있어야 하는 부분은
+  막혀 있다. 그래도 규칙을 세우고 판정하는 부분은 지금 데이터로 전부 된다 —
+  전달 경로가 생기면 이 판정 결과를 보내기만 하면 되고, 규칙을 다시 만들 필요가
+  없다. 화면은 **"보냈다"고 말하지 않는다.**
+
+⚠️판정은 언제나 **지금 시세로 다시** 한다. `last_state` 를 캐시로 쓰면 시세가
+  바뀌어도 화면이 옛 상태를 말한다.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import date
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.core import alert_rules as ar
+from app.core import quote_cache
+from app.core.errors import AppError
+from app.db.session import get_db
+from app.models import AlertRule, Asset, CurrentPosition, Order
+from app.schemas import (
+    AlertKindOut,
+    AlertRuleIn,
+    AlertRuleOut,
+    AlertRulePatch,
+    AlertsOut,
+)
+
+router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
+
+_NOTES = [
+    "**아직 보내지 않습니다.** 텔레그램 등 전달 경로가 연결돼야 실제로 알림이"
+    " 갑니다. 지금은 규칙을 세우고 **조건을 만족하는지 이 화면에서 판정**하는"
+    " 데까지 동작합니다.",
+    "판정은 **볼 때마다 지금 시세로 다시** 합니다. 마지막 상태를 캐시로 쓰면"
+    " 시세가 바뀌어도 옛 상태를 말하게 됩니다.",
+    "상태가 셋입니다 — 충족 / 미충족 / **판정 불가**. 시세를 못 받았거나 보유하지"
+    " 않은 종목이면 '미충족'이 아니라 판정 불가입니다. 잴 수 없는데 괜찮다고 하면"
+    " 그게 더 나쁩니다.",
+    "비중·평가손익률은 **보유 종목에만** 적용됩니다. 관심종목에는 가격·등락률·"
+    "52주 규칙을 거세요.",
+    "최근 미체결은 **취소한 주문을 세지 않습니다.** 스스로 취소한 것은 알릴 일이"
+    " 아닙니다.",
+    "처음엔 '미체결이 며칠째 방치됐나'로 만들었는데 **그런 상태가 없었습니다** —"
+    " 주문 145건이 전부 잔량 0 입니다. 증권사는 이미 닫힌 주문만 주고, 체결되지"
+    " 않은 지정가는 장 마감에 소멸합니다. 그대로 뒀다면 '55건이 477일째 미체결'"
+    "이라는, 손쓸 수도 없고 영원히 켜져 있는 알림이 됐을 것입니다.",
+]
+
+
+def _facts(
+    db: Session, ticker: str | None, threshold: Decimal | None
+) -> ar.Facts:
+    """판정에 쓸 지금 사실. 없는 값은 None 으로 둔다(0 으로 채우지 않는다)."""
+    if ticker is None:
+        orders = db.execute(select(Order)).scalars().all()
+        if not orders:
+            # ⚠️주문 내역 자체가 없는 것과 "창 안에 주문이 없다"는 다르다.
+            return ar.Facts(order_total=None)
+        days = int(threshold) if threshold is not None else 7
+        total, unfilled = ar.unfilled_orders(orders, days, date.today())
+        return ar.Facts(order_total=total, order_unfilled=unfilled)
+
+    quotes, _ = quote_cache.get_quotes([ticker], with_range=True)
+    quote = quotes.get(ticker)
+
+    # ⚠️계좌가 여럿이면 같은 종목이 여러 행으로 온다. 첫 행만 보면 비중이 틀린다.
+    held_row = db.execute(
+        select(
+            func.sum(CurrentPosition.market_value_krw),
+            func.sum(CurrentPosition.purchase_amount_local),
+            func.sum(CurrentPosition.market_value_local),
+            func.count(CurrentPosition.id),
+        )
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(Asset.ticker == ticker)
+    ).first()
+    value_krw, purchase_local, value_local, row_count = held_row or (None, None, None, 0)
+    held = bool(row_count)
+
+    pnl_rate = None
+    if held and purchase_local and purchase_local != 0 and value_local is not None:
+        # ★현지통화 기준이다 — **환율 효과가 빠져 있다.** 이 프로젝트가 계속
+        #   지켜 온 구분이다: "종목이 올랐나"와 "환율로 벌었나"는 다른 질문이다.
+        pnl_rate = value_local / purchase_local - Decimal("1")
+
+    weight = None
+    if held and value_krw is not None:
+        total = db.execute(
+            select(func.sum(CurrentPosition.market_value_krw))
+        ).scalar()
+        # ⚠️환산 못 한 종목이 있으면 분모가 작아져 비중이 부풀어 오른다.
+        #   그래도 0 으로 채우는 것보다 낫고, 화면 안내에 그 사실을 적어 둔다.
+        if total and total > 0:
+            weight = value_krw / total
+
+    return ar.Facts(
+        price=quote.price if quote else None,
+        change_rate=quote.change_rate if quote else None,
+        week52_high=quote.fifty_two_week_high if quote else None,
+        week52_low=quote.fifty_two_week_low if quote else None,
+        pnl_rate=pnl_rate,
+        weight=weight,
+        held=held,
+    )
+
+
+def _to_out(db: Session, rule: AlertRule) -> AlertRuleOut:
+    spec = ar.KIND_BY_KEY.get(rule.kind)
+    name = None
+    if rule.ticker:
+        name = db.execute(
+            select(Asset.name).where(Asset.ticker == rule.ticker)
+        ).scalar_one_or_none()
+
+    if not rule.enabled:
+        verdict = ar.Verdict(ar.UNKNOWN, None, "꺼져 있습니다.")
+    else:
+        verdict = ar.evaluate(rule.kind, rule.threshold, _facts(db, rule.ticker, rule.threshold))
+
+    # ⚠️기록만 갱신한다. 다음 판정에 이 값을 쓰지 않는다.
+    if rule.enabled:
+        if verdict.state == ar.TRIGGERED and rule.last_state != ar.TRIGGERED:
+            rule.triggered_since = ar.now_utc()
+        elif verdict.state != ar.TRIGGERED:
+            rule.triggered_since = None
+        rule.last_state = verdict.state
+        rule.last_checked_at = ar.now_utc()
+
+    return AlertRuleOut(
+        id=rule.id,
+        kind=rule.kind,
+        kind_label=spec.label if spec else rule.kind,
+        ticker=rule.ticker,
+        name=name,
+        threshold=rule.threshold,
+        unit=spec.unit if spec else None,
+        enabled=rule.enabled,
+        memo=rule.memo,
+        state=verdict.state,
+        actual=verdict.actual,
+        message=verdict.message,
+        triggered_since=rule.triggered_since,
+    )
+
+
+@router.get("", response_model=AlertsOut)
+def list_alerts(db: Session = Depends(get_db)) -> AlertsOut:
+    """규칙 목록 + **지금** 판정."""
+    rules = db.execute(
+        select(AlertRule).order_by(AlertRule.created_at.desc())
+    ).scalars().all()
+    out = [_to_out(db, r) for r in rules]
+    db.commit()
+
+    return AlertsOut(
+        rules=out,
+        kinds=[
+            AlertKindOut(
+                key=k.key, label=k.label, hint=k.hint,
+                needs_ticker=k.needs_ticker, unit=k.unit,
+            )
+            for k in ar.KINDS
+        ],
+        triggered_count=sum(1 for r in out if r.state == ar.TRIGGERED),
+        unknown_count=sum(1 for r in out if r.enabled and r.state == ar.UNKNOWN),
+        disabled_count=sum(1 for r in out if not r.enabled),
+        # ⚠️전달 경로가 붙기 전까지 **항상 False** 다. True 로 두면 화면이
+        #   "보냈다"고 말하게 된다.
+        delivery_configured=False,
+        notes=_NOTES,
+    )
+
+
+@router.post("", response_model=AlertRuleOut, status_code=201)
+def create_alert(payload: AlertRuleIn, db: Session = Depends(get_db)) -> AlertRuleOut:
+    spec = ar.KIND_BY_KEY.get(payload.kind)
+    if spec is None:
+        raise AppError(status_code=400, code="unknown_kind", message="모르는 알림 종류입니다.")
+    ticker = (payload.ticker or "").strip().upper() or None
+    if spec.needs_ticker and not ticker:
+        raise AppError(status_code=400, code="ticker_required", message="종목이 필요한 규칙입니다.")
+    if spec.unit is not None and payload.threshold is None:
+        # ⚠️기준값 없이 만들면 판정 불가 상태로만 남는다. 만들 때 막는다.
+        raise AppError(status_code=400, code="threshold_required", message="기준값이 필요합니다.")
+
+    rule = AlertRule(
+        id=uuid.uuid4(),
+        kind=payload.kind,
+        ticker=None if not spec.needs_ticker else ticker,
+        threshold=payload.threshold,
+        memo=(payload.memo or "").strip() or None,
+        enabled=payload.enabled,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    out = _to_out(db, rule)
+    db.commit()
+    return out
+
+
+@router.patch("/{rule_id}", response_model=AlertRuleOut)
+def update_alert(
+    rule_id: uuid.UUID, payload: AlertRulePatch, db: Session = Depends(get_db)
+) -> AlertRuleOut:
+    rule = db.get(AlertRule, rule_id)
+    if rule is None:
+        raise AppError(status_code=404, code="not_found", message="규칙이 없습니다.")
+    if payload.threshold is not None:
+        rule.threshold = payload.threshold
+    if payload.memo is not None:
+        rule.memo = payload.memo.strip() or None
+    if payload.enabled is not None:
+        rule.enabled = payload.enabled
+    db.commit()
+    db.refresh(rule)
+    out = _to_out(db, rule)
+    db.commit()
+    return out
+
+
+# 관심종목·매매일지와 같은 규약 — 지우고 **남은 목록을 그대로 돌려준다.**
+# 화면이 다시 조회하지 않아도 되고, 지운 뒤 판정이 어떻게 바뀌었는지 같이 온다.
+@router.delete("/{rule_id}", response_model=AlertsOut)
+def delete_alert(rule_id: uuid.UUID, db: Session = Depends(get_db)) -> AlertsOut:
+    rule = db.get(AlertRule, rule_id)
+    if rule is None:
+        raise AppError(status_code=404, code="not_found", message="규칙이 없습니다.")
+    db.delete(rule)
+    db.commit()
+    return list_alerts(db)

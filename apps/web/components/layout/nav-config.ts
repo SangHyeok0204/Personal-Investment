@@ -298,7 +298,13 @@ export const navItems: NavItem[] = [
       },
       { label: "AI token usage", href: "/ai-token-usage", status: "live" },
       { label: "환경설정", href: "/settings", status: "live" },
-      { label: "알림", status: "planned", hint: "가격 · 체결 · 배당 알림" },
+      {
+        label: "알림",
+        href: "/settings/alerts",
+        status: "live",
+        // ⚠️아직 **보내지 않는다** — 조건을 세우고 판정하는 데까지다.
+        hint: "조건 판정 — 전달은 아직 없음",
+      },
     ],
   },
 ];

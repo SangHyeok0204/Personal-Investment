@@ -603,6 +603,49 @@ class Dividend(Base):
     )
 
 
+class AlertRule(Base):
+    """알림 규칙 (alembic 0014).
+
+    ★전달(텔레그램 등)은 아직 없다. 그래도 조건을 세우고 **지금 충족하는지**
+      판정하는 부분은 지금 데이터로 전부 된다.
+
+    ⚠️`assets` 를 FK 로 걸지 않는다 — 아직 사지 않은 종목에도 걸 수 있어야 한다.
+
+    ⚠️`last_state` 를 **판정 근거로 쓰지 않는다.** 판정은 언제나 지금 시세로
+      다시 한다. 캐시로 쓰면 시세가 바뀌어도 화면이 옛 상태를 말한다.
+    """
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    #: NULL 이면 포트폴리오 전체에 거는 규칙이다.
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    threshold: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_state: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    triggered_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        Index("ix_alert_rules_ticker", "ticker"),
+        Index("ix_alert_rules_enabled", "enabled"),
+    )
+
+
 class WatchlistItem(Base):
     """관심종목 — 아직 안 산 종목도 담는 보드.
 
