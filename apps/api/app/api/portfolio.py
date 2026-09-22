@@ -1027,10 +1027,17 @@ def list_realized_pnl(
         )
     ).scalar() or zero
 
+    # 같은 범위(판 종목)의 달러 비용 — 원화 값과 짝이 맞는 숫자다.
+    cost_local = _sum([row.commission_tax_local for row, _ in rows])
+
     breakdown = RealizedBreakdownOut(
         gross_trading_krw=pnl_total + cost_krw,
         cost_krw=cost_krw,
-        # ⚠️원화로는 증권사가 합쳐서만 준다. 분리는 체결 원장의 **달러**뿐이다.
+        cost_local=cost_local,
+        # ⚠️원화로는 증권사가 합쳐서만 준다. 분리는 체결 원장의 **달러**뿐인데,
+        #   그 원장은 **이 기간 모든 체결**이라 위 cost_krw(판 종목만)와 범위가
+        #   다르다 — 실측 $91.56(49건) vs $68.02(10건). '분리'가 아니라
+        #   수수료/세금 **비율**을 보는 값으로만 쓴다.
         commission_usd=stats.commission if stats else None,
         tax_usd=stats.tax if stats else None,
         dividend_krw=dividend_total,

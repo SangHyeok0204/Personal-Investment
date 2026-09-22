@@ -2923,7 +2923,11 @@ export interface RealizedPnlItem {
  */
 export interface RealizedBreakdown {
   gross_trading_krw: string;
+  /** **판 종목**에 붙은 비용(원화). */
   cost_krw: string;
+  /** 같은 범위의 달러 금액 — cost_krw 와 짝이 맞는다. */
+  cost_local: string | null;
+  /** 체결 원장 **전체** 기준 분리. ⚠️cost_krw 의 분해가 아니다(범위가 다르다). */
   commission_usd: string | null;
   tax_usd: string | null;
   dividend_krw: string;

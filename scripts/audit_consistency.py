@@ -361,6 +361,29 @@ class Audit:
             )
 
         print("\n[실현손익·배당]")
+        # ⚠️실현손익 breakdown 의 **범위**를 확인한다. 화면이 원화 비용 옆에
+        #   달러 값을 적는데, 예전에는 체결 원장 **전체**(매수 포함) 달러를
+        #   적어 놓고 '분리'라고 불렀다 — 실측 $91.56 vs $68.02 로 35% 어긋난다.
+        rb = realized["breakdown"]
+        self.same(
+            "실현손익 분해 (총수익 − 비용 = 실현손익)",
+            dec(rb["gross_trading_krw"]) - dec(rb["cost_krw"]),
+            realized["pnl_krw"],
+            "breakdown", "realized",
+        )
+        self.same(
+            "실현손익 분해 (실현손익 + 배당 = 합계)",
+            dec(realized["pnl_krw"]) + dec(rb["dividend_krw"]),
+            rb["net_krw"],
+            "breakdown", "breakdown",
+        )
+        if rb.get("cost_local") and rb.get("commission_usd"):
+            ledger = dec(rb["commission_usd"]) + dec(rb["tax_usd"])
+            print(
+                f"  ·  비용 범위 — 판 종목 ${dec(rb['cost_local']):,.2f} vs "
+                f"체결 원장 전체 ${ledger:,.2f}. 뒤쪽엔 아직 안 판 종목의 매수"
+                f" 수수료가 들어 있다 — **분해가 아니다**"
+            )
         self.same(
             "실현손익", realized["pnl_krw"], analytics["realized_pnl_krw"],
             "realized", "analytics",

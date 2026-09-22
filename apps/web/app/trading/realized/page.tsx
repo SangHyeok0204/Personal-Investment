@@ -111,14 +111,20 @@ export default function RealizedPnlPage() {
             accent="auto"
             loading={realized.isLoading}
           />
+          {/* ⚠️예전 힌트는 "달러 분리: 수수료 $91.26 · 세금 $0.30" 이었다.
+              그 달러 값은 **이 기간 모든 체결**(49건)이고 위 원화는 **판
+              종목**(10건)이라, 분해인 척하면 35% 어긋난다($91.56 vs $68.02).
+              같은 범위의 달러 값을 적는다. */}
           <StatTile
             label="수수료·세금"
             value={b ? `-${formatKrwString(b.cost_krw)}` : undefined}
             hint={
-              b?.commission_usd != null
-                ? `달러 분리: 수수료 $${Number(b.commission_usd).toFixed(2)} · 세금 $${Number(b.tax_usd ?? 0).toFixed(2)}`
-                : "증권사는 원화로 합쳐서만 줍니다"
+              b?.cost_local != null
+                ? `판 종목 기준 $${Number(b.cost_local).toFixed(2)} · 눌러서 설명`
+                : "판 종목에 붙은 비용"
             }
+            actionHint="눌러서 읽는 법 보기"
+            onClick={() => setBreakdownOpen(true)}
             accent="down"
             loading={realized.isLoading}
           />
@@ -272,12 +278,29 @@ export default function RealizedPnlPage() {
               </li>
               <li>
                 <strong>수수료와 세금은 원화로 나뉘지 않습니다.</strong> 증권사가
-                원화로는 합쳐서만 줍니다 — 분리는 체결 원장의 달러뿐이라 그대로
-                적었습니다
+                원화로는 합쳐서만 줍니다. 위 비용은 <strong>판 종목</strong>에 붙은
+                것입니다
+                {b.cost_local != null && (
+                  <> (같은 범위의 달러로는 ${Number(b.cost_local).toFixed(2)})</>
+                )}
+                .
+              </li>
+              <li>
+                <strong>수수료·세금 비율은 다른 범위에서 봅니다.</strong> 체결
+                원장은 이 기간 <strong>모든 체결</strong>을 담고 있어 아직 안 판
+                종목의 매수 수수료까지 들어 있습니다 — 위 금액의 분해가{" "}
+                <strong>아닙니다</strong>
                 {b.commission_usd != null && (
                   <>
-                    {" "}(수수료 ${Number(b.commission_usd).toFixed(2)} · 세금 $
-                    {Number(b.tax_usd ?? 0).toFixed(2)}). 세금은 전체 비용의{" "}
+                    {" "}(원장 전체 수수료 ${Number(b.commission_usd).toFixed(2)} ·
+                    세금 ${Number(b.tax_usd ?? 0).toFixed(2)}, 합 $
+                    {(
+                      Number(b.commission_usd) + Number(b.tax_usd ?? 0)
+                    ).toFixed(2)}
+                    {b.cost_local != null && (
+                      <> vs 판 종목 ${Number(b.cost_local).toFixed(2)}</>
+                    )}
+                    ). 다만 <strong>세금이 비용의{" "}
                     {(
                       (Number(b.tax_usd ?? 0) /
                         Math.max(
@@ -286,7 +309,7 @@ export default function RealizedPnlPage() {
                         )) *
                       100
                     ).toFixed(1)}
-                    % 입니다
+                    %</strong> 라는 비율은 그대로 읽어도 됩니다
                   </>
                 )}
                 .
