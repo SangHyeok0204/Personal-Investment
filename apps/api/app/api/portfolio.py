@@ -30,6 +30,7 @@ from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
 from app.core import investing as inv
+from app.core import portfolio_character as pc
 from app.core import rebalance as rb
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
@@ -84,6 +85,8 @@ from app.schemas import (
     FilingTickerOut,
     FilingsOut,
     NewsArticleOut,
+    LeveragePositionOut,
+    PortfolioCharacterOut,
     RealizedBreakdownOut,
     RebalanceLineOut,
     RebalanceOut,
@@ -3225,6 +3228,55 @@ _REBALANCE_NOTES = [
 ]
 
 
+def _leverage_seed() -> tuple[dict, str]:
+    """ETF 배수 시드. 섹터 노출 시드와 같은 파일에 있다."""
+    import importlib.util
+
+    seed_path = (
+        Path(__file__).resolve().parents[4]
+        / "database" / "seeds" / "etf_exposure.py"
+    )
+    spec = importlib.util.spec_from_file_location("_etf_exposure_seed", seed_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_etf_exposure_seed"] = module
+    spec.loader.exec_module(module)
+    return module.ETF_LEVERAGE, module.LEVERAGE_NOTE
+
+
+def _character(plan: rb.Plan) -> PortfolioCharacterOut:
+    """목표를 정하기 전에 보는 '지금 어떤 모양인가'.
+
+    ★비중만 보면 SOXL 이 20% 지만, 3배 상품이라 **하루 움직임으로는 60%** 를
+      들고 있는 것과 같다. 목표를 정할 때 그 사실이 같이 보여야 한다.
+    """
+    leverage_map, note = _leverage_seed()
+    holdings = [
+        pc.Holding(ticker=line.ticker, name=line.name, weight=line.current_weight)
+        for line in (plan.lines + plan.untargeted)
+        if line.current_weight is not None
+    ]
+    character = pc.build(holdings, leverage_map, cash_ticker=CASH_TICKER)
+    return PortfolioCharacterOut(
+        leverage=[
+            LeveragePositionOut(
+                ticker=p.ticker, name=p.name, weight=p.weight,
+                multiplier=p.multiplier, effective_weight=p.effective_weight,
+                source=p.source, disputed=p.disputed,
+            )
+            for p in character.leverage
+        ],
+        leveraged_weight=character.leveraged_weight,
+        effective_exposure=character.effective_exposure,
+        top1_ticker=character.top1_ticker,
+        top1_weight=character.top1_weight,
+        top3_weight=character.top3_weight,
+        herfindahl=character.herfindahl,
+        effective_count=character.effective_count,
+        cash_weight=character.cash_weight,
+        leverage_note=note,
+    )
+
+
 def _to_line(line: rb.Line) -> RebalanceLineOut:
     return RebalanceLineOut(
         ticker=line.ticker, name=line.name, quantity=line.quantity,
@@ -3314,6 +3366,7 @@ def _rebalance_plan(
         shortfall_krw=shortfall,
         buy_krw=plan.buy_krw, sell_krw=plan.sell_krw, est_cost_krw=plan.est_cost_krw,
         cost_rate=rb.MEASURED_COST_RATE, trade_count=plan.trade_count,
+        character=_character(plan),
         notes=_REBALANCE_NOTES,
     )
 

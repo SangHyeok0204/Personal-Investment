@@ -1644,6 +1644,41 @@ class MarketNewsOut(BaseModel):
     notes: list[str]
 
 
+# ── 포트폴리오 성격 ──────────────────────────────────────────────────────────
+
+class LeveragePositionOut(BaseModel):
+    ticker: str
+    name: str | None
+    weight: Decimal
+    multiplier: Decimal
+    #: 비중 × 배수. **오늘 하루** 얼마나 움직이는지를 보는 숫자다.
+    effective_weight: Decimal
+    source: str
+    #: 시드와 증권사 종목명이 어긋나나. True 면 화면이 말해야 한다.
+    disputed: bool
+
+
+class PortfolioCharacterOut(BaseModel):
+    """목표 비중을 정하기 전에 보는 '지금 이 포트폴리오가 어떤 모양인가'.
+
+    ⚠️`effective_exposure` 는 **하루 기준**이다. 레버리지 ETF 의 배수는 하루
+      수익률에만 적용되고, 여러 날에 걸치면 변동성 끌림 때문에 배수 ×
+      기간수익률이 되지 않는다.
+    """
+
+    leverage: list[LeveragePositionOut]
+    leveraged_weight: Decimal
+    effective_exposure: Decimal
+    top1_ticker: str | None
+    top1_weight: Decimal | None
+    top3_weight: Decimal
+    herfindahl: Decimal
+    #: 1/HHI — "사실상 몇 종목에 걸려 있나".
+    effective_count: Decimal | None
+    cash_weight: Decimal
+    leverage_note: str
+
+
 # ── 리밸런싱 ─────────────────────────────────────────────────────────────────
 
 class RebalanceTargetIn(BaseModel):
@@ -1706,6 +1741,8 @@ class RebalanceOut(BaseModel):
     est_cost_krw: Decimal
     cost_rate: Decimal
     trade_count: int
+    #: 목표를 정하기 전에 보는 '지금 어떤 모양인가'.
+    character: PortfolioCharacterOut | None
     notes: list[str]
 
 

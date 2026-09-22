@@ -3758,6 +3758,38 @@ export function runHistorySync(): Promise<unknown> {
 //   **그래서 몇 주를 팔아야 하나.**
 // ⚠️`delta_shares` 가 null 이면 **주수를 계산할 수 없었다**(가격 미상). 0 과 다르다.
 
+/**
+ * 목표를 정하기 전에 보는 '지금 어떤 모양인가'.
+ *
+ * ⚠️`effective_exposure` 는 **하루 기준**이다. 레버리지 ETF 의 배수는 하루
+ *   수익률에만 적용되고, 여러 날에 걸치면 변동성 끌림 때문에 배수 ×
+ *   기간수익률이 되지 않는다.
+ */
+export interface LeveragePosition {
+  ticker: string;
+  name: string | null;
+  weight: string;
+  multiplier: string;
+  effective_weight: string;
+  source: string;
+  /** 시드와 증권사 종목명이 어긋나나. */
+  disputed: boolean;
+}
+
+export interface PortfolioCharacter {
+  leverage: LeveragePosition[];
+  leveraged_weight: string;
+  effective_exposure: string;
+  top1_ticker: string | null;
+  top1_weight: string | null;
+  top3_weight: string;
+  herfindahl: string;
+  /** 1/HHI — "사실상 몇 종목에 걸려 있나". */
+  effective_count: string | null;
+  cash_weight: string;
+  leverage_note: string;
+}
+
 export interface RebalanceLine {
   ticker: string;
   name: string | null;
@@ -3796,6 +3828,7 @@ export interface Rebalance {
   est_cost_krw: string;
   cost_rate: string;
   trade_count: number;
+  character: PortfolioCharacter | null;
   notes: string[];
 }
 

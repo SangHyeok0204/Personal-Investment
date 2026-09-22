@@ -17,6 +17,7 @@ import {
   addJournal,
   getRebalance,
   putRebalanceTargets,
+  type PortfolioCharacter,
   type Rebalance,
   type RebalanceLine,
 } from "@/lib/api";
@@ -37,6 +38,9 @@ import { cn } from "@/lib/utils";
 // ⚠️목표합만 보면 **실행할 수 없는 계획**이 나온다. 목표를 적지 않은 보유가
 //   자리를 차지하고 있으면 살 돈이 안 나온다(실측: 목표 80% + 목표없음 39.1%
 //   = 119.1% → 순매수 638만인데 예수금 133만). 부족액을 위에서 알린다.
+
+//: 서버가 예수금을 종목처럼 한 줄로 넣을 때 쓰는 가짜 티커.
+const CASH_TICKER = "__CASH__";
 
 const BANDS = [
   { value: 0, label: "0%p" },
@@ -329,7 +333,18 @@ export default function RebalancePage() {
                   팔라는 말이 아닙니다.
                 </p>
                 <div className="flex flex-wrap gap-1">
-                  {data!.untargeted.map((u) => (
+                  {/* ⚠️예수금은 내부 티커(__CASH__)를 쓴다. 그대로 찍으면 화면에
+                      코드가 샌다. 그리고 현금에는 목표를 걸 수 없다 — 담아도
+                      "몇 주 사라"가 나오지 않는다. */}
+                  {data!.untargeted.map((u) =>
+                    u.ticker === CASH_TICKER ? (
+                      <span
+                        key={u.ticker}
+                        className="rounded bg-canvas px-1.5 py-0.5 text-[10px] font-bold text-ink-faint"
+                      >
+                        {u.name ?? "예수금"} {pct(u.current_weight, 1)}
+                      </span>
+                    ) : (
                     <button
                       key={u.ticker}
                       type="button"
@@ -356,15 +371,30 @@ export default function RebalancePage() {
                     >
                       {u.ticker} {pct(u.current_weight, 1)}
                     </button>
-                  ))}
+                    ),
+                  )}
                 </div>
               </div>
             )}
           </StubCard>
 
+          <div className="flex min-h-0 flex-col gap-3">
+          {/* ★목표를 정하기 전에 **지금 어떤 모양인지** 본다. 비중만 보면
+              SOXL 이 20% 지만 3배 상품이라 하루 움직임으로는 60% 다. */}
+          {data?.character && (
+            <StubCard
+              title="지금 이 포트폴리오"
+              subtitle="목표를 정하기 전에"
+              className="shrink-0"
+            >
+              <CharacterPanel c={data.character} />
+            </StubCard>
+          )}
+
           <StubCard
             title="목표 비중"
             subtitle={`합계 ${draftSum.toFixed(2)}%`}
+            className="min-h-0 flex-1"
             scrollBody
             action={
               <button
@@ -493,6 +523,7 @@ export default function RebalancePage() {
               )}
             </div>
           </StubCard>
+          </div>
         </div>
       </PageContainer>
 
@@ -514,6 +545,122 @@ export default function RebalancePage() {
         </ul>
       </Modal>
     </>
+  );
+}
+
+/**
+ * 지금 포트폴리오의 성격.
+ *
+ * ⚠️**"3배 오른다"고 말하지 않는다.** 레버리지 배수는 하루 수익률에만
+ *   적용되고, 여러 날에 걸치면 변동성 끌림 때문에 배수 × 기간수익률이 되지
+ *   않는다. 그 사실을 숫자 바로 옆에 적는다.
+ */
+function CharacterPanel({ c }: { c: PortfolioCharacter }) {
+  const disputed = c.leverage.filter((l) => l.disputed);
+  return (
+    <div className="space-y-2.5">
+      <div className="grid grid-cols-3 gap-2">
+        <Metric
+          label="실효 노출"
+          value={pct(c.effective_exposure, 0)}
+          hint="하루 기준"
+          strong
+        />
+        <Metric
+          label="레버리지 비중"
+          value={pct(c.leveraged_weight, 1)}
+          hint={`${c.leverage.length}종목`}
+        />
+        <Metric
+          label="유효 종목 수"
+          value={c.effective_count ?? "—"}
+          hint={`상위3 ${pct(c.top3_weight, 0)}`}
+        />
+      </div>
+
+      {c.leverage.length > 0 && (
+        <div className="space-y-1">
+          {c.leverage.map((l) => (
+            <div key={l.ticker} className="flex items-baseline justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 rounded bg-ask-soft px-1 py-0.5 text-[9px] font-extrabold text-ask">
+                  {Number(l.multiplier)}배
+                </span>
+                <span className="truncate text-[11px] font-bold text-ink">
+                  {l.ticker}
+                </span>
+                {/* ⚠️두 출처가 어긋나면 조용히 한쪽을 고르지 않는다. */}
+                {l.disputed && (
+                  <span
+                    title={l.source}
+                    className="shrink-0 cursor-help rounded bg-ge-point/12 px-1 py-0.5 text-[9px] font-extrabold text-ge-point"
+                  >
+                    출처 불일치
+                  </span>
+                )}
+              </span>
+              <span className="shrink-0 text-[11px] font-semibold tabular-nums text-ink-secondary">
+                {pct(l.weight, 1)} → <strong className="text-ask">{pct(l.effective_weight, 1)}</strong>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[11px] leading-snug text-ink-muted">
+        {c.leverage_note.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+          i % 2 === 1 ? (
+            <strong key={i} className="text-ink">
+              {part}
+            </strong>
+          ) : (
+            part
+          ),
+        )}
+      </p>
+
+      {disputed.length > 0 && (
+        <p className="rounded-lg bg-ge-point/8 px-2.5 py-2 text-[11px] leading-snug text-ge-point">
+          {disputed.map((d) => d.ticker).join(", ")} 은(는) 내부 표와 증권사
+          종목명의 배수가 다릅니다 — <strong>증권사 이름을 따랐습니다.</strong>
+        </p>
+      )}
+
+      <p className="text-[11px] leading-snug text-ink-muted">
+        현금 {pct(c.cash_weight, 1)} · 최대 종목{" "}
+        <strong className="text-ink">{c.top1_ticker ?? "—"}</strong>{" "}
+        {c.top1_weight ? pct(c.top1_weight, 1) : "—"}
+      </p>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  hint,
+  strong,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  strong?: boolean;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg bg-canvas-soft px-2 py-1.5">
+      <p className="truncate text-[10px] font-semibold text-ink-faint">{label}</p>
+      <p
+        className={cn(
+          "truncate tabular-nums",
+          strong
+            ? "text-[15px] font-extrabold text-ask"
+            : "text-[13px] font-extrabold text-ge-navy",
+        )}
+      >
+        {value}
+      </p>
+      {hint && <p className="truncate text-[9px] text-ink-faint">{hint}</p>}
+    </div>
   );
 }
 
