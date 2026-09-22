@@ -2,7 +2,6 @@ import {
   BookOpen,
   LineChart,
   Newspaper,
-  PiggyBank,
   Receipt,
   Settings,
   TrendingUp,
@@ -104,38 +103,56 @@ export const navItems: NavItem[] = [
     ],
   },
   {
-    label: "매매",
+    // ★2026-09-22 사용자 지정: 현금흐름을 따로 두지 않고 **매매와 한 묶음**으로
+    //   본다. 사고파는 일과 돈이 들고 나는 일은 같은 이야기라, 메뉴가 갈려
+    //   있으면 "그래서 얼마 벌었나"를 두 군데서 맞춰 봐야 했다.
+    label: "매매/현금흐름",
     icon: Receipt,
     children: [
       {
-        label: "체결 내역",
-        href: "/trading/executions",
-        status: "live",
-        hint: "일자별 매수/매도 체결",
-      },
-      {
-        label: "주문/미체결",
-        href: "/trading/orders",
-        status: "live",
-        hint: "당일 주문 상태",
-      },
-      {
-        label: "실현손익",
+        // ★체결 내역과 실현손익을 **한 화면으로 합쳤다.** 따로 두면 "무엇을
+        //   팔았나"와 "그래서 얼마 벌었나"가 갈려 매번 두 화면을 오가야 했다.
+        label: "체결·실현손익",
         href: "/trading/realized",
         status: "live",
-        hint: "종목별 · 기간별 실현 PnL",
+        hint: "종목 수익 · 배당 · 수수료 · 세금으로 분해",
       },
       {
         label: "매매일지",
         href: "/trading/journal",
         status: "live",
-        hint: "진입 근거 · 복기 — 체결·손익과 함께",
+        hint: "진입 근거 · 복기 — 계획 대비 결과까지",
+      },
+      {
+        label: "배당 이력",
+        href: "/income/dividends",
+        status: "live",
+        // ⚠️'캘린더'가 아니다 — 키움은 **받은 배당**만 준다(예상·배당락 없음).
+        hint: "수령한 배당 · 월별 · 종목별",
+      },
+      {
+        label: "입출금",
+        href: "/income/transfers",
+        status: "live",
+        hint: "납입 · 인출 이력",
+      },
+      {
+        label: "월별 현금흐름",
+        href: "/income/monthly",
+        status: "live",
+        hint: "배당 − 비용 · 순납입 · 매매 회전",
       },
       {
         label: "수수료/세금",
         href: "/trading/costs",
         status: "live",
         hint: "거래비용 · 비용률 · 종목별",
+      },
+      {
+        label: "세금",
+        href: "/income/tax",
+        status: "live",
+        hint: "해외주식 양도소득 · 배당소득 (추정)",
       },
     ],
   },
@@ -265,39 +282,6 @@ export const navItems: NavItem[] = [
         href: "/news/holdings",
         status: "live",
         hint: "내 포지션에 걸린 일 — 제목에 언급된 기사만",
-      },
-    ],
-  },
-  {
-    label: "현금흐름",
-    icon: PiggyBank,
-    children: [
-      {
-        label: "배당 이력",
-        href: "/income/dividends",
-        status: "live",
-        // ⚠️'캘린더'가 아니다 — 키움은 **받은 배당**만 준다(예상·배당락 없음).
-        hint: "수령한 배당 · 월별 · 종목별",
-      },
-      {
-        label: "입출금",
-        href: "/income/transfers",
-        status: "live",
-        hint: "납입 · 인출 이력",
-      },
-      {
-        label: "월별 현금흐름",
-        href: "/income/monthly",
-        status: "live",
-        // ⚠️입출금 화면과 다른 질문이다 — 거기는 "내가 넣은 돈 대비 지금",
-        //   여기는 "한 달 동안 돈이 어디서 들어오고 어디로 나갔나"다.
-        hint: "배당 − 비용 · 순납입 · 매매 회전",
-      },
-      {
-        label: "세금",
-        href: "/income/tax",
-        status: "live",
-        hint: "해외주식 양도소득 · 배당소득 (추정)",
       },
     ],
   },

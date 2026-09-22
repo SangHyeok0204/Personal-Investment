@@ -852,6 +852,10 @@ class CashflowOut(BaseModel):
     total_deposit_krw: Decimal | None
     total_withdrawal_krw: Decimal | None
     net_deposit_krw: Decimal | None
+    #: 기간 **첫날**의 순입출금. 시작 잔고에 이미 반영돼 있어 순입금에서 뺐다.
+    #: ⚠️화면이 이걸 말하지 않으면, 목록에 보이는 입금이 합계에 없는 것처럼
+    #:   보여 사용자가 버그로 읽는다.
+    first_day_flow_krw: Decimal | None
     opening_balance_krw: Decimal | None
     current_assets_krw: Decimal | None
     gain_krw: Decimal | None
@@ -1146,6 +1150,36 @@ class RealizedPnlOut(BaseModel):
     fx_pnl_krw: Decimal | None
 
 
+class RealizedBreakdownOut(BaseModel):
+    """실현손익을 **무엇으로 벌었나**로 쪼갠 것.
+
+    ★2026-09-22 사용자 지정: 종목 수익 / 배당 / 수수료 / 세금으로 나누고,
+      **배당도 실현손익에 포함**한다.
+
+    ⚠️증권사 실현손익(`pnl_krw`)에는 **비용이 이미 차감돼 있다**(실측:
+      pnl_local = 매도 − 매수 − 수수료·세금). 그래서 여기서 비용을 또 빼면
+      두 번 빼게 된다 — 비용을 **되더해** 총수익을 만든 뒤 다시 뺀다.
+
+    ⚠️증권사는 원화로 **수수료와 세금을 합쳐서만** 준다. 분리는 체결 원장의
+      달러 금액뿐이라 그대로 싣는다(환산해 만들지 않는다).
+    """
+
+    #: 비용 차감 **전** 종목 수익(원화). = pnl_krw + 수수료·세금
+    gross_trading_krw: Decimal
+    #: 수수료·세금 합산(원화). 증권사가 원화로는 합쳐서만 준다.
+    cost_krw: Decimal
+    #: 체결 원장 기준 분리(달러). ⚠️원화로 환산하지 않는다.
+    commission_usd: Decimal | None
+    tax_usd: Decimal | None
+    #: 수령 배당(원화). 실현손익에 포함한다.
+    dividend_krw: Decimal
+    #: 종목 수익(비용 차감 후) + 배당.
+    net_krw: Decimal
+    #: 환차손익. ⚠️위 합계에 **넣지 않는다** — 종목으로 번 건지 환율로 번 건지
+    #: 구분이 사라지기 때문이다. 나란히 두고 판단은 사용자에게 맡긴다.
+    fx_pnl_krw: Decimal | None
+
+
 class RealizedPnlListOut(BaseModel):
     items: list[RealizedPnlOut]
     total: int
@@ -1156,6 +1190,11 @@ class RealizedPnlListOut(BaseModel):
     loss_count: int
     first_sell_date: date | None
     last_sell_date: date | None
+    #: 무엇으로 벌었나 — 종목 수익 / 배당 / 수수료 / 세금.
+    breakdown: RealizedBreakdownOut | None
+    #: 같은 기간의 체결 내역. 한 화면에서 "무엇을 팔았나"까지 본다.
+    trades: list[TradeOut]
+    trade_stats: TradeStatsOut | None
 
 
 # ── 배당 ────────────────────────────────────────────────────────────────────

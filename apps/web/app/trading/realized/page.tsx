@@ -46,6 +46,7 @@ const RANGES = [
 export default function RealizedPnlPage() {
   const { accountId, connected } = useAccount();
   const [days, setDays] = useState(365);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [picked, setPicked] = useState<RealizedPnlItem | null>(null);
 
   const realized = useQuery({
@@ -61,6 +62,8 @@ export default function RealizedPnlPage() {
 
   // 종목별 손익 기여 — 같은 종목을 여러 번 팔았으면 합친다.
   const byTicker = aggregateByTicker(items);
+  const b = data?.breakdown ?? null;
+  const trades = data?.trades ?? [];
 
   const ranges = (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -74,46 +77,49 @@ export default function RealizedPnlPage() {
 
   return (
     <>
-      <Topbar title="실현손익" subtitle="매도 확정 기준" />
+      <Topbar title="체결·실현손익" subtitle="무엇을 팔았고, 그래서 얼마 벌었나" />
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="키움 실현손익" />}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+          {/* ★2026-09-22 사용자 지정: 실현손익에 **배당을 포함**하고, 무엇으로
+              벌었는지 종목 수익 / 배당 / 수수료 / 세금으로 쪼갠다. */}
           <StatTile
-            label="실현손익 (주가)"
-            value={formatKrwSigned(data?.pnl_krw)}
+            label="실현손익 (배당 포함)"
+            value={formatKrwSigned(b?.net_krw)}
             hint={
               data?.first_sell_date
                 ? `${data.first_sell_date} ~ ${data.last_sell_date}`
-                : "매도 확정분"
+                : "종목 수익 + 배당"
             }
+            accent="auto"
+            actionHint="눌러서 분해 보기"
+            onClick={() => setBreakdownOpen(true)}
+            loading={realized.isLoading}
+          />
+          <StatTile
+            label="종목 수익"
+            value={formatKrwSigned(data?.pnl_krw)}
+            hint="비용 차감 후 · 환차 제외"
             accent="auto"
             loading={realized.isLoading}
           />
           <StatTile
-            label="환차손익"
-            value={formatKrwSigned(data?.fx_pnl_krw)}
-            hint={
-              // 합계도 알려주되 주인공이 아님을 분명히 한다 — 둘은 다른 사건이다.
-              data?.pnl_krw != null && data.fx_pnl_krw != null
-                ? `주가와 합치면 ${formatKrwSigned(String(Number(data.pnl_krw) + Number(data.fx_pnl_krw)))}`
-                : "환율 변동에 따른 손익 (별도)"
-            }
+            label="배당"
+            value={formatKrwSigned(b?.dividend_krw)}
+            hint="같은 기간 수령분"
             accent="auto"
             loading={realized.isLoading}
           />
           <StatTile
-            label="승률"
-            value={winRate == null ? undefined : `${winRate}%`}
+            label="수수료·세금"
+            value={b ? `-${formatKrwString(b.cost_krw)}` : undefined}
             hint={
-              data ? `익절 ${data.win_count} · 손절 ${data.loss_count}` : "익절 / 전체 청산"
+              b?.commission_usd != null
+                ? `달러 분리: 수수료 $${Number(b.commission_usd).toFixed(2)} · 세금 $${Number(b.tax_usd ?? 0).toFixed(2)}`
+                : "증권사는 원화로 합쳐서만 줍니다"
             }
-            loading={realized.isLoading}
-          />
-          <StatTile
-            label="청산 건수"
-            value={data ? `${data.total}` : undefined}
-            hint="매도일 × 종목 기준"
+            accent="down"
             loading={realized.isLoading}
           />
         </div>
@@ -173,29 +179,156 @@ export default function RealizedPnlPage() {
             </DataTable>
           </StubCard>
 
-          <StubCard title="종목별 손익 기여" subtitle="주가 손익 기준" scrollBody>
+          {/* ★체결 내역을 **여기로 합쳤다.** 따로 두면 "무엇을 팔았나"와
+              "그래서 얼마 벌었나"가 갈려 매번 두 화면을 오가야 했다. */}
+          <StubCard
+            title="체결 내역"
+            subtitle={
+              data?.trade_stats
+                ? `${trades.length}건 · 매수 ${data.trade_stats.buy_count} · 매도 ${data.trade_stats.sell_count}`
+                : `${trades.length}건`
+            }
+            scrollBody
+          >
             <DataTable
-              columns={["종목", "청산", "손익"]}
-              align={["left", "right", "right"]}
-              empty={realized.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
+              columns={["체결일", "종목", "구분", "수량", "단가"]}
+              align={["left", "left", "left", "right", "right"]}
+              empty={realized.isLoading ? "불러오는 중…" : "이 기간에 체결이 없습니다"}
             >
-              {byTicker.map((t) => (
-                <tr key={t.ticker} className="border-b border-hairline">
+              {trades.map((t) => (
+                <tr key={t.id} className="border-b border-hairline">
+                  <Cell left tone="muted">
+                    {t.trade_date.slice(5)}
+                  </Cell>
                   <Cell left strong>
-                    <span className="block max-w-[150px] truncate">
-                      {t.name ?? t.ticker}
+                    <span className="flex items-center gap-1.5">
+                      <span className="max-w-[92px] truncate">
+                        {t.asset_name ?? t.ticker}
+                      </span>
+                      <span className="shrink-0 text-[10px] font-bold text-ink-faint">
+                        {t.ticker}
+                      </span>
                     </span>
                   </Cell>
-                  <Cell tone="muted">{t.count}회</Cell>
-                  <Cell strong tone={t.pnl >= 0 ? "up" : "down"}>
-                    {formatKrwSigned(String(Math.round(t.pnl)))}
+                  <Cell left>
+                    <span
+                      className={cn(
+                        "rounded px-1.5 py-0.5 text-[10px] font-bold",
+                        t.side === "BUY"
+                          ? "bg-bid-soft text-bid"
+                          : "bg-ask-soft text-ask",
+                      )}
+                    >
+                      {t.side === "BUY" ? "매수" : "매도"}
+                    </span>
+                  </Cell>
+                  <Cell>{Number(t.quantity).toLocaleString()}</Cell>
+                  <Cell tone="muted">
+                    {t.price == null
+                      ? "—"
+                      : `$${Number(t.price).toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`}
                   </Cell>
                 </tr>
               ))}
             </DataTable>
+            {/* ⚠️체결 원장의 날짜는 체결일이 아니라 결제일(T+2)이다. */}
+            <p className="mt-2 text-[11px] leading-snug text-ink-muted">
+              체결일은 증권사 원장 기준이라 <strong>결제일(T+2)</strong>로 찍힙니다 —
+              주문을 낸 날과 2~5일 차이가 납니다.
+            </p>
           </StubCard>
         </div>
       </PageContainer>
+
+      <Modal
+        open={breakdownOpen}
+        onClose={() => setBreakdownOpen(false)}
+        title="실현손익 분해"
+        subtitle="무엇으로 벌었나"
+      >
+        {b ? (
+          <div className="space-y-3">
+            <div>
+              <BreakLine label="종목 수익 (비용 차감 전)" value={b.gross_trading_krw} signed />
+              <BreakLine label="수수료·세금" value={`-${b.cost_krw}`} signed />
+              <BreakLine label="배당" value={b.dividend_krw} signed />
+              <div className="mt-1 border-t border-ink pt-1">
+                <BreakLine label="실현손익 합계" value={b.net_krw} signed strong />
+              </div>
+            </div>
+
+            <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
+              <li>
+                <strong>배당을 실현손익에 넣었습니다.</strong> 팔아서 번 돈과 받아서
+                번 돈은 둘 다 이미 확정된 현금입니다.
+              </li>
+              <li>
+                <strong>비용을 두 번 빼지 않았습니다.</strong> 증권사 실현손익에는
+                수수료·세금이 이미 차감돼 있어서, 되더해 총수익을 만든 뒤 다시
+                뺐습니다.
+              </li>
+              <li>
+                <strong>수수료와 세금은 원화로 나뉘지 않습니다.</strong> 증권사가
+                원화로는 합쳐서만 줍니다 — 분리는 체결 원장의 달러뿐이라 그대로
+                적었습니다
+                {b.commission_usd != null && (
+                  <>
+                    {" "}(수수료 ${Number(b.commission_usd).toFixed(2)} · 세금 $
+                    {Number(b.tax_usd ?? 0).toFixed(2)}). 세금은 전체 비용의{" "}
+                    {(
+                      (Number(b.tax_usd ?? 0) /
+                        Math.max(
+                          Number(b.commission_usd) + Number(b.tax_usd ?? 0),
+                          0.0001,
+                        )) *
+                      100
+                    ).toFixed(1)}
+                    % 입니다
+                  </>
+                )}
+                .
+              </li>
+              <li>
+                <strong>환차손익은 합계에 넣지 않았습니다</strong>
+                {b.fx_pnl_krw != null && (
+                  <> ({formatKrwSigned(b.fx_pnl_krw)})</>
+                )}{" "}
+                — 합치면 종목이 올라서 번 건지 환율로 번 건지 구분이 사라집니다.
+              </li>
+            </ul>
+
+            <div>
+              <p className="mb-1.5 text-[11px] font-bold text-ge-navy">
+                종목별 손익 기여 (주가 기준)
+              </p>
+              <DataTable
+                columns={["종목", "청산", "손익"]}
+                align={["left", "right", "right"]}
+                empty="데이터가 없습니다"
+              >
+                {byTicker.map((t) => (
+                  <tr key={t.ticker} className="border-b border-hairline">
+                    <Cell left strong>
+                      <span className="block max-w-[180px] truncate">
+                        {t.name ?? t.ticker}
+                      </span>
+                    </Cell>
+                    <Cell tone="muted">{t.count}회</Cell>
+                    <Cell strong tone={t.pnl >= 0 ? "up" : "down"}>
+                      {formatKrwSigned(String(Math.round(t.pnl)))}
+                    </Cell>
+                  </tr>
+                ))}
+              </DataTable>
+            </div>
+          </div>
+        ) : (
+          <p className="text-[12px] text-ink-faint">분해할 내역이 없습니다.</p>
+        )}
+      </Modal>
 
       <Modal
         open={picked != null}
@@ -254,6 +387,41 @@ function RealizedDetail({ item: r }: { item: RealizedPnlItem }) {
         <strong>둘은 다른 사건입니다.</strong> 종목 선택이 좋았는지는 주가 손익만
         봅니다 — 환차는 환율이 움직인 결과이지 매매 판단의 결과가 아닙니다.
       </p>
+    </div>
+  );
+}
+
+function BreakLine({
+  label,
+  value,
+  signed,
+  strong,
+}: {
+  label: string;
+  value: string;
+  signed?: boolean;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span
+        className={cn(
+          "text-[12px]",
+          strong ? "font-bold text-ink" : "text-ink-secondary",
+        )}
+      >
+        {label}
+      </span>
+      <span
+        className={cn(
+          "tabular-nums",
+          strong
+            ? "text-[14px] font-extrabold text-ink"
+            : "text-[12px] font-semibold text-ink-secondary",
+        )}
+      >
+        {signed ? formatKrwSigned(value) : formatKrwString(value)}
+      </span>
     </div>
   );
 }

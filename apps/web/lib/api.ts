@@ -2894,6 +2894,25 @@ export interface RealizedPnlItem {
   fx_pnl_krw: string | null;
 }
 
+/**
+ * 실현손익을 **무엇으로 벌었나**로 쪼갠 것.
+ *
+ * ⚠️증권사 실현손익에는 **비용이 이미 차감돼 있다.** 그래서 `gross_trading_krw`
+ *   는 비용을 되더한 값이고, 거기서 `cost_krw` 를 빼야 원래 손익으로 돌아온다.
+ * ⚠️원화로는 수수료와 세금이 **합쳐서만** 온다. 분리는 달러뿐이다.
+ */
+export interface RealizedBreakdown {
+  gross_trading_krw: string;
+  cost_krw: string;
+  commission_usd: string | null;
+  tax_usd: string | null;
+  dividend_krw: string;
+  /** 종목 수익(비용 차감 후) + 배당. */
+  net_krw: string;
+  /** ⚠️합계에 넣지 않는다 — 종목으로 번 건지 환율로 번 건지 구분이 사라진다. */
+  fx_pnl_krw: string | null;
+}
+
 export interface RealizedPnlList {
   items: RealizedPnlItem[];
   total: number;
@@ -2903,6 +2922,10 @@ export interface RealizedPnlList {
   loss_count: number;
   first_sell_date: string | null;
   last_sell_date: string | null;
+  breakdown: RealizedBreakdown | null;
+  /** 같은 기간의 체결 내역 — 한 화면에서 "무엇을 팔았나"까지 본다. */
+  trades: Trade[];
+  trade_stats: TradeStats | null;
 }
 
 export function getPerformance(
@@ -3389,7 +3412,9 @@ export interface Cashflow {
   total_deposit_krw: string | null;
   total_withdrawal_krw: string | null;
   net_deposit_krw: string | null;
-  /** 조회 구간 시작 전부터 있던 돈. 수익에 섞으면 안 된다. */
+  /** 기간 첫날의 순입출금. 시작 잔고에 포함돼 순입금에서 빠졌다. */
+  first_day_flow_krw: string | null;
+  /** 기간 시작 시점의 자산. 수익에 섞으면 안 된다. */
   opening_balance_krw: string | null;
   current_assets_krw: string | null;
   /** 금액 증감 — 수익률(TWR)이 아니다. */

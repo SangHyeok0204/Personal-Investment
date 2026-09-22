@@ -211,10 +211,13 @@ class Audit:
             "dividends", "monthly-cashflow",
         )
         # 순납입도 같은 원천(일별성과)이라 입출금 화면과 정확히 같아야 한다.
+        # ⚠️두 화면의 '순납입'은 **범위가 다르다.** 입출금 화면은 기간 첫날의
+        #   흐름을 시작 잔고에 넣어 빼고, 월별 현금흐름은 그 달의 흐름을 그대로
+        #   센다. 되더해 같은 범위로 맞춘 뒤 비교한다.
         self.same(
-            "순납입",
-            Decimal(cashflow["total_deposit_krw"] or 0)
-            - Decimal(cashflow["total_withdrawal_krw"] or 0),
+            "순납입 (첫날 포함 기준)",
+            Decimal(cashflow["net_deposit_krw"] or 0)
+            + Decimal(cashflow["first_day_flow_krw"] or 0),
             Decimal(monthly["total_deposit_krw"]) - Decimal(monthly["total_withdrawal_krw"]),
             "cashflow", "monthly-cashflow",
         )
@@ -224,17 +227,24 @@ class Audit:
         #   빠지거나 겹치는 건이 있으면 여기서 걸린다.
         print("\n[세금]")
         if taxes:
-            self.same(
-                "배당 (연도 합)",
-                dividends["total_amount_krw"],
-                sum(Decimal(t["dividend_krw"]) for t in taxes),
-                "dividends", "tax",
+            # ⚠️세금 화면은 **역년(1/1~12/31)** 단위라 투자 기간과 범위가 다르다.
+            #   배당·실현 건수를 동일성으로 비교하면 당연히 어긋난다 — 그건
+            #   불일치가 아니라 **의도된 차이**다. 대신 세금 화면 안에서 연도별
+            #   합이 서로 맞는지만 본다.
+            print(
+                f"  ·  세금은 역년 기준({', '.join(str(t['year']) for t in taxes)})"
+                f" — 투자 기간({dividends.get('first_pay_date')}~)과 범위가 다르다"
             )
             self.same(
-                "실현 건수 (연도 합)",
-                Decimal(len(realized["items"])),
-                Decimal(sum(t["sale_count"] for t in taxes)),
-                "realized", "tax",
+                "세금 화면 내부 (양도차익 = 양도가액 − 취득가액 − 필요경비)",
+                sum(
+                    Decimal(t["proceeds_krw"])
+                    - Decimal(t["cost_basis_krw"])
+                    - Decimal(t["expense_krw"])
+                    for t in taxes
+                ),
+                sum(Decimal(t["gain_krw"]) for t in taxes),
+                "계산", "gain_krw",
             )
         else:
             print("  ·  세금: 실현 내역이 없어 건너뜀")
@@ -244,11 +254,19 @@ class Audit:
         #   예수금을 넣거나 배분이 빼면, 같은 종목이 화면마다 다른 비중으로
         #   보인다 — 사용자는 그걸 버그로 읽는다.
         print("\n[리밸런싱]")
+        # ⚠️분모가 갈리면 같은 종목이 화면마다 다른 비중으로 보인다
+        #   (실측: SOXL 이 자산 현황 20.9% vs 리밸런싱 20.1% 였다).
         self.same(
-            "비중 분모 (주식 평가액)",
+            "비중 분모 (총자산 = 주식 + 예수금)",
             allocation["total_market_value_krw"],
             rebalance["base_value_krw"],
             "allocation", "rebalance",
+        )
+        self.same(
+            "비중 분모 (자산 현황과도 같은가)",
+            summary["total_assets_krw"],
+            rebalance["base_value_krw"],
+            "summary", "rebalance",
         )
         self.same(
             "보유 종목 수",

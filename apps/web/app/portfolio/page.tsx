@@ -117,18 +117,36 @@ export default function PortfolioPage() {
   const allLive =
     (quotes.data?.missing.length ?? 1) === 0 && liveByTicker.size === rows.length;
   const liveTotalKrw = allLive ? (quotes.data?.total_market_value_krw ?? null) : null;
-  const totalKrw = liveTotalKrw ?? holdings.data?.total_market_value_krw ?? null;
+  const stockKrw = liveTotalKrw ?? holdings.data?.total_market_value_krw ?? null;
+  const cashKrw = s?.cash_krw ?? null;
 
-  const holdingSlices: DonutSlice[] = useMemo(
-    () =>
-      rows.map((h) => ({
-        key: h.asset_id,
-        label: h.name ?? h.ticker,
-        value: Number(h.market_value_krw ?? 0),
-        caption: formatKrwString(h.market_value_krw),
-      })),
-    [rows],
-  );
+  // ★2026-09-22 사용자 지정: **자산 = 주식 평가액 + 예수금.** 비중의 분모도
+  //   같은 총자산이다.
+  //   ⚠️여기만 주식만으로 나누면 같은 종목이 이 화면 20.9%, 리밸런싱 20.1% 로
+  //     갈린다(실측). 사용자는 그걸 버그로 읽는다.
+  const totalKrw =
+    stockKrw != null && cashKrw != null
+      ? String(Number(stockKrw) + Number(cashKrw))
+      : stockKrw;
+
+  const holdingSlices: DonutSlice[] = useMemo(() => {
+    const slices = rows.map((h) => ({
+      key: h.asset_id,
+      label: h.name ?? h.ticker,
+      value: Number(h.market_value_krw ?? 0),
+      caption: formatKrwString(h.market_value_krw),
+    }));
+    // 분모에만 더하고 조각에서 빼면 비중 합이 100% 가 안 된다 — 현금도 넣는다.
+    if (cashKrw != null && Number(cashKrw) > 0) {
+      slices.push({
+        key: "__cash__",
+        label: "예수금",
+        value: Number(cashKrw),
+        caption: formatKrwString(cashKrw),
+      });
+    }
+    return slices;
+  }, [rows, cashKrw]);
 
   const axisSlices: DonutSlice[] = useMemo(
     () =>
@@ -216,15 +234,20 @@ export default function PortfolioPage() {
         >
           <StubCard
             title="보유 종목"
-            subtitle={totalKrw ? formatKrwString(totalKrw) : "평가금액 비중"}
+            subtitle={totalKrw ? `${formatKrwString(totalKrw)} · 예수금 포함` : "총자산 비중"}
             scrollBody
           >
             <DonutChart
               slices={holdingSlices}
               size={132}
               maxLegend={5}
-              centerLabel="보유"
-              centerValue={rows.length ? `${rows.length}종목` : undefined}
+              centerLabel="자산"
+              // ⚠️"17종목"이라고만 쓰면 예수금 조각이 어디서 왔는지 모른다.
+              centerValue={
+                rows.length
+                  ? `${rows.length}종목${cashKrw && Number(cashKrw) > 0 ? " + 현금" : ""}`
+                  : undefined
+              }
               onSliceClick={(slice) => {
                 const found = rows.find((h) => h.asset_id === slice.key);
                 if (found) setPicked(found);

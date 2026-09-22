@@ -64,15 +64,19 @@ export default function TransfersPage() {
         {!connected && <NotConnectedBanner what="키움 일별 계좌수익률" />}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          {/* ⚠️수익률 추이 화면의 '순입금 (구간 중)'과 다른 값이다 —
-              여기는 첫날 입금까지 **전부** 센다. 증감은 두 화면이 같다. */}
+          {/* ★2026-09-22: 수익률 추이 화면과 **같은 기준**으로 맞췄다. 기간
+              첫날의 입금은 시작 잔고에 이미 들어 있어 순입금에서 뺀다.
+              ⚠️목록에는 그 입금이 보이므로, 왜 합계에 없는지 hint 로 말한다 —
+                안 적으면 사용자가 버그로 읽는다. */}
           <StatTile
-            label="순입금 (전체)"
+            label="순입금 (시작일 이후)"
             value={formatKrwString(data?.net_deposit_krw)}
             hint={
-              data
-                ? `입금 ${formatKrwString(data.total_deposit_krw)} · 출금 ${formatKrwString(data.total_withdrawal_krw)}`
-                : "입금 − 출금"
+              data?.first_day_flow_krw && Number(data.first_day_flow_krw) !== 0
+                ? `${data.first_date} 입금 ${formatKrwString(data.first_day_flow_krw)}은 시작 잔고에 포함`
+                : data
+                  ? `입금 ${formatKrwString(data.total_deposit_krw)} · 출금 ${formatKrwString(data.total_withdrawal_krw)}`
+                  : "입금 − 출금"
             }
             loading={cashflow.isLoading}
           />

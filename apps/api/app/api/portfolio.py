@@ -29,6 +29,7 @@ from app.core import position_timeline as pt
 from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
+from app.core import investing as inv
 from app.core import rebalance as rb
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
@@ -83,6 +84,7 @@ from app.schemas import (
     FilingTickerOut,
     FilingsOut,
     NewsArticleOut,
+    RealizedBreakdownOut,
     RebalanceLineOut,
     RebalanceOut,
     RebalanceTargetIn,
@@ -523,7 +525,19 @@ def get_allocation(
         .group_by(column)
     ).all()
 
+    # ★2026-09-22 사용자 지정: **자산에 예수금을 포함한다.** 분모가 총자산이
+    #   되므로 예수금도 한 조각으로 넣는다 — 분모에만 더하고 조각에서 빼면
+    #   비중 합이 100% 가 안 되고, 사용자는 그걸 버그로 읽는다.
+    cash = None
+    if inv.CASH_IN_ASSETS:
+        balances = db.execute(
+            select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
+        ).scalars().all()
+        cash = _sum([_cash_krw(b) for b in balances])
+
     total = _sum([value for _, value, _, _ in rows])
+    if total is not None and cash:
+        total = total + cash
     if not total:
         return AllocationOut(
             dimension=dimension,
@@ -547,6 +561,19 @@ def get_allocation(
                 market_value_krw=amount,
                 weight=(amount / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
                 position_count=count,
+            )
+        )
+
+    if cash:
+        amount = cash.quantize(_MONEY, rounding=ROUND_HALF_UP)
+        items.append(
+            AllocationSliceOut(
+                key=CASH_TICKER,
+                label="예수금",
+                market_value_krw=amount,
+                weight=(amount / total).quantize(_RATIO, rounding=ROUND_HALF_UP),
+                # 현금은 '종목 수'가 없다. 0 으로 두면 "0종목"이 찍히므로 1 로 센다.
+                position_count=1,
             )
         )
 
@@ -612,7 +639,7 @@ def list_trades(
             items=[], total=0, stats=[], first_trade_date=None, last_trade_date=None
         )
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     conditions = [Trade.account_id.in_(account_ids), Trade.trade_date >= since]
     if side is not None:
         conditions.append(Trade.side == side.upper())
@@ -726,7 +753,7 @@ def get_performance(
             net_deposit_krw=None, gain_krw=None,
         )
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(
             AccountDailyPerformance.base_date,
@@ -806,9 +833,10 @@ def list_realized_pnl(
             items=[], total=0, pnl_krw=None, fx_pnl_krw=None,
             win_count=0, loss_count=0,
             first_sell_date=None, last_sell_date=None,
+            breakdown=None, trades=[], trade_stats=None,
         )
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     conditions = [RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= since]
 
     rows = db.execute(
@@ -846,6 +874,69 @@ def list_realized_pnl(
     wins = sum(1 for i in items if (i.pnl_krw or 0) > 0)
     losses = sum(1 for i in items if (i.pnl_krw or 0) < 0)
 
+    # ── 같은 기간의 체결 내역 ────────────────────────────────────────────
+    # ★체결과 실현손익을 **한 화면**에서 본다. 따로 두면 "무엇을 팔았나"와
+    #   "그래서 얼마 벌었나"가 갈려 매번 두 화면을 오가야 했다.
+    trade_rows = db.execute(
+        select(Trade)
+        .where(Trade.account_id.in_(account_ids), Trade.trade_date >= since)
+        .order_by(Trade.trade_date.desc(), Trade.ticker)
+    ).scalars().all()
+    trades_out = [
+        TradeOut(
+            id=t.id, account_id=t.account_id, account_name=None,
+            trade_date=t.trade_date, trade_no=t.trade_no, side=t.side,
+            ticker=t.ticker, asset_name=t.asset_name, sector=None,
+            currency=t.currency, quantity=t.quantity, price=t.price,
+            amount_local=t.amount_local,
+            settlement_amount_local=t.settlement_amount_local,
+            commission_local=t.commission_local, tax_local=t.tax_local,
+            exchange=t.exchange, channel=t.channel, processed_at=t.processed_at,
+        )
+        for t in trade_rows
+    ]
+    zero = Decimal("0")
+    stats = (
+        TradeStatsOut(
+            # ⚠️통화가 섞이면 합산하지 않는다. 현재 체결은 전부 USD 다.
+            currency=trade_rows[0].currency,
+            buy_count=sum(1 for t in trade_rows if t.side == "BUY"),
+            sell_count=sum(1 for t in trade_rows if t.side == "SELL"),
+            buy_amount=sum((t.amount_local or zero) for t in trade_rows if t.side == "BUY"),
+            sell_amount=sum((t.amount_local or zero) for t in trade_rows if t.side == "SELL"),
+            commission=sum((t.commission_local or zero) for t in trade_rows),
+            tax=sum((t.tax_local or zero) for t in trade_rows),
+        )
+        if trade_rows and len({t.currency for t in trade_rows}) == 1
+        else None
+    )
+
+    # ── 무엇으로 벌었나 ──────────────────────────────────────────────────
+    # ⚠️증권사 실현손익에는 **비용이 이미 차감돼 있다**(실측: pnl_local =
+    #   매도 − 매수 − 수수료·세금). 비용을 또 빼면 두 번 빼게 되므로,
+    #   **되더해** 총수익을 만든 뒤 다시 뺀다.
+    cost_krw = _sum([row.commission_tax_krw for row, _ in rows]) or zero
+    pnl_total = _sum([i.pnl_krw for i in items]) or zero
+    dividend_total = db.execute(
+        select(func.sum(Dividend.amount_krw)).where(
+            Dividend.account_id.in_(account_ids), Dividend.pay_date >= since
+        )
+    ).scalar() or zero
+
+    breakdown = RealizedBreakdownOut(
+        gross_trading_krw=pnl_total + cost_krw,
+        cost_krw=cost_krw,
+        # ⚠️원화로는 증권사가 합쳐서만 준다. 분리는 체결 원장의 **달러**뿐이다.
+        commission_usd=stats.commission if stats else None,
+        tax_usd=stats.tax if stats else None,
+        dividend_krw=dividend_total,
+        # ★배당을 실현손익에 **포함**한다(사용자 지정).
+        net_krw=pnl_total + dividend_total,
+        # ⚠️환차는 합계에 넣지 않는다 — 종목으로 번 건지 환율로 번 건지
+        #   구분이 사라진다.
+        fx_pnl_krw=_sum([i.fx_pnl_krw for i in items]),
+    )
+
     return RealizedPnlListOut(
         items=items,
         total=len(items),
@@ -855,6 +946,9 @@ def list_realized_pnl(
         loss_count=losses,
         first_sell_date=min((i.sell_date for i in items), default=None),
         last_sell_date=max((i.sell_date for i in items), default=None),
+        breakdown=breakdown,
+        trades=trades_out,
+        trade_stats=stats,
     )
 
 
@@ -878,7 +972,7 @@ def list_dividends(
             first_pay_date=None, last_pay_date=None,
         )
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     conditions = [Dividend.account_id.in_(account_ids), Dividend.pay_date >= since]
 
     rows = db.execute(
@@ -1019,7 +1113,7 @@ def get_performance_analytics(
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(
             AccountDailyPerformance.base_date,
@@ -1211,6 +1305,11 @@ def get_inclusion(
     if not account_ids:
         return empty
 
+    # ⚠️여기만 투자 기간을 적용하지 **않는다.** 이 화면은 원가를 체결로
+    #   되감는다 — 기간을 자르면 그 앞에 산 종목이 통째로 사라진다
+    #   (실측: TSL 이 보유 목록에는 있는데 편입비에서 빠졌다).
+    #   기간은 '얼마를 벌었나'를 자를 때 쓰는 것이지, '얼마에 샀나'를
+    #   자를 때 쓰는 것이 아니다.
     since = date.today() - timedelta(days=days)
     rows = db.execute(
         select(Trade)
@@ -1488,7 +1587,7 @@ def list_orders(
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(Order)
         .where(Order.account_id.in_(account_ids), Order.order_date >= since)
@@ -1589,14 +1688,15 @@ def get_cashflow(
     """
     empty = CashflowOut(
         events=[], monthly=[], total_deposit_krw=None, total_withdrawal_krw=None,
-        net_deposit_krw=None, opening_balance_krw=None, current_assets_krw=None,
+        net_deposit_krw=None, first_day_flow_krw=None,
+        opening_balance_krw=None, current_assets_krw=None,
         gain_krw=None, gain_ratio=None, first_date=None, last_date=None,
     )
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(
             AccountDailyPerformance.base_date,
@@ -1636,14 +1736,18 @@ def get_cashflow(
         bucket[0] += deposit
         bucket[1] += withdrawal
 
-    total_deposit = _sum([e.deposit_krw for e in events]) or zero
-    total_withdrawal = _sum([e.withdrawal_krw for e in events]) or zero
+    # ⚠️**첫날의 입출금은 시작 잔고에 이미 반영돼 있다** — 순입금에서 뺀다.
+    #   수익률 추이 화면이 이미 그렇게 센다. 두 화면이 다르게 세면 같은 계좌를
+    #   놓고 "순입금"이 두 값으로 나온다(실측: 9,715,029 vs 1,874,876).
+    first_date = rows[0][0]
+    counted = [e for e in events if e.base_date > first_date]
+    total_deposit = _sum([e.deposit_krw for e in counted]) or zero
+    total_withdrawal = _sum([e.withdrawal_krw for e in counted]) or zero
     net_deposit = total_deposit - total_withdrawal
 
-    first_assets = rows[0][3]
-    first_flow = (rows[0][1] or zero) - (rows[0][2] or zero)
-    # 구간 시작 전부터 있던 돈. 0 에 가까우면 계좌가 이 구간에서 시작한 것이다.
-    opening = (first_assets - first_flow) if first_assets is not None else None
+    # 기간 시작 시점의 자산이 출발점이다(그날 들어온 돈까지 포함).
+    opening = rows[0][3]
+    first_day_flow = (rows[0][1] or zero) - (rows[0][2] or zero)
     current = rows[-1][3]
     gain = (
         current - (opening or zero) - net_deposit
@@ -1669,6 +1773,7 @@ def get_cashflow(
         total_deposit_krw=total_deposit,
         total_withdrawal_krw=total_withdrawal,
         net_deposit_krw=net_deposit,
+        first_day_flow_krw=first_day_flow,
         opening_balance_krw=opening,
         current_assets_krw=current,
         gain_krw=gain.quantize(_MONEY, rounding=ROUND_HALF_UP) if gain is not None else None,
@@ -1725,7 +1830,7 @@ def get_benchmark(
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(
             AccountDailyPerformance.base_date,
@@ -2076,7 +2181,7 @@ def get_trading_costs(
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(Trade).where(
             Trade.account_id.in_(account_ids), Trade.trade_date >= since
@@ -2227,7 +2332,7 @@ def get_monthly_cashflow(
     if not account_ids:
         return empty
 
-    since = date.today() - timedelta(days=days)
+    since = inv.since(days)
     rows = db.execute(
         select(
             AccountDailyPerformance.base_date,
@@ -2782,7 +2887,11 @@ def get_report(
             func.sum(AccountDailyPerformance.buy_amount_krw),
             func.sum(AccountDailyPerformance.sell_amount_krw),
         )
-        .where(AccountDailyPerformance.account_id.in_(account_ids))
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            # ⚠️투자 기간 밖은 다루지 않는다 — 기간 선택지도 그 안에서만 만든다.
+            AccountDailyPerformance.base_date >= inv.INVESTMENT_START,
+        )
         .group_by(AccountDailyPerformance.base_date)
         .order_by(AccountDailyPerformance.base_date)
     ).all()
@@ -3092,9 +3201,13 @@ def get_news(
 
 # ── 리밸런싱 ─────────────────────────────────────────────────────────────────
 
+#: 예수금을 종목처럼 한 줄로 넣을 때 쓰는 가짜 티커.
+CASH_TICKER = "__CASH__"
+
 _REBALANCE_NOTES = [
-    "**비중의 분모는 주식 평가액입니다**(예수금 제외). 섹터/자산 배분 화면과 같은"
-    " 분모를 써야 두 화면의 비중이 같은 말을 합니다.",
+    "**비중의 분모는 총자산입니다 — 주식 평가액 + 예수금.** 예수금이 많으면"
+    " 종목 비중이 그만큼 낮게 나옵니다. 예수금도 한 줄로 표시해 비중 합이"
+    " 100% 가 되게 했습니다.",
     "**주수는 0 방향으로 내립니다.** 반올림하면 목표를 넘겨 사거나 넘겨 팝니다."
     " 주수로 못 맞춘 나머지는 '잔여'로 적어 둡니다.",
     "**밴드 안의 차이는 거래하지 않습니다.** 실측 거래비용이 거래대금의 0.250%"
@@ -3137,6 +3250,27 @@ def _rebalance_plan(
         rb.Position(ticker=t, name=n, quantity=q, market_value_krw=v)
         for t, n, q, v in rows
     ]
+
+    cash = None
+    if account_ids:
+        balances = db.execute(
+            select(AccountBalance).where(AccountBalance.account_id.in_(account_ids))
+        ).scalars().all()
+        cash = _sum([_cash_krw(b) for b in balances])
+
+    # ★2026-09-22 사용자 지정: **자산에 예수금을 포함한다.** 비중의 분모도 같은
+    #   총자산이다 — 예수금이 많으면 종목 비중이 그만큼 낮게 나온다.
+    #   ⚠️현금을 **종목처럼** 한 줄로 넣는다. 분모에만 더하고 목록에서 빼면
+    #     비중 합이 100% 가 안 되고, 사용자는 그걸 버그로 읽는다.
+    if inv.CASH_IN_ASSETS and cash is not None and cash > 0:
+        positions.append(
+            rb.Position(
+                ticker=CASH_TICKER, name="예수금",
+                # 현금은 주수가 없다 — 수량 0 이면 가격이 None 이 되어
+                # "몇 주 사고팔라"는 말을 하지 않는다(그게 맞다).
+                quantity=Decimal("0"), market_value_krw=cash,
+            )
+        )
     targets = [
         rb.Target(
             ticker=r.ticker, name=r.asset_name, weight=r.target_weight, memo=r.memo

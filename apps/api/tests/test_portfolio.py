@@ -254,10 +254,16 @@ def test_allocation_rejects_unknown_dimension(client, kiwoom):
 
 
 def test_allocation_by_country_weights_sum_to_one(client, kiwoom):
+    """★2026-09-22 사용자 지정: **자산에 예수금을 포함**한다.
+
+    ⚠️분모에만 더하고 조각에서 빼면 비중 합이 100% 가 안 된다 — 현금도
+      한 조각으로 넣는다.
+    """
     body = client.get("/api/v1/portfolio/allocation?dimension=country").json()
     labels = {i["label"]: i for i in body["items"]}
-    # 국내 800,000 / 미국 1,680,000 → 합 2,480,000
-    assert Decimal(body["total_market_value_krw"]) == Decimal("2480000")
+    # 국내 800,000 / 미국 1,680,000 / 예수금 500,000 → 합 2,980,000
+    assert Decimal(body["total_market_value_krw"]) == Decimal("2980000")
+    assert Decimal(labels["예수금"]["market_value_krw"]) == Decimal("500000.00")
     assert Decimal(labels["미국"]["market_value_krw"]) == Decimal("1680000.00")
     assert Decimal(labels["한국"]["market_value_krw"]) == Decimal("800000.00")
     assert sum(Decimal(i["weight"]) for i in body["items"]).quantize(
@@ -273,8 +279,9 @@ def test_allocation_surfaces_unclassified_instead_of_hiding_it(client, kiwoom):
     숨기면 비중 합이 100% 로 보여 분류가 끝난 것처럼 착각하게 된다.
     """
     body = client.get("/api/v1/portfolio/allocation?dimension=sector").json()
-    assert len(body["items"]) == 1
-    only = body["items"][0]
+    # 미분류 한 조각 + 예수금 한 조각.
+    assert len(body["items"]) == 2
+    only = next(i for i in body["items"] if i["label"] != "예수금")
     assert only["key"] is None
     assert only["label"] == "미분류"
     assert Decimal(body["unclassified_market_value_krw"]) == Decimal("2480000.00")
@@ -442,8 +449,27 @@ def test_trades_respect_day_window(client, db, kiwoom):
 
     year = client.get("/api/v1/portfolio/trades?days=365").json()
     assert year["total"] == 1
-    all_time = client.get("/api/v1/portfolio/trades?days=3000").json()
-    assert all_time["total"] == 2
+
+
+def test_window_never_reaches_before_the_investment_start(client, db, kiwoom):
+    """★2026-09-22 사용자 지정: 투자 기간은 시작일부터다.
+
+    ⚠️화면에서 '전체'를 눌러도 그 앞은 끌어오지 않는다. 예전에는 days=3000 이면
+      전부 나왔다 — 이제는 시작일이 바닥이다.
+    """
+    from datetime import date as _date, timedelta as _td
+
+    from app.core.investing import INVESTMENT_START
+
+    account_id = kiwoom["account"].id
+    _add_trade(db, account_id, trade_no="000000001",
+               trade_date=INVESTMENT_START - _td(days=1))
+    _add_trade(db, account_id, trade_no="000000002",
+               trade_date=INVESTMENT_START + _td(days=1))
+
+    body = client.get("/api/v1/portfolio/trades?days=3000").json()
+    assert body["total"] == 1
+    assert body["items"][0]["trade_date"] > INVESTMENT_START.isoformat()
 
 
 def test_trades_carry_sector_when_asset_is_known(client, db, kiwoom):
@@ -601,7 +627,8 @@ def test_dividends_newest_first_and_carry_sector(client, db, kiwoom):
     from datetime import date as _date
 
     account_id = kiwoom["account"].id
-    _add_dividend(db, account_id, ticker="005930", pay_date=_date(2026, 5, 1),
+    # ⚠️날짜는 투자 기간(2026-06-04~) 안이어야 한다 — 그 앞은 조회되지 않는다.
+    _add_dividend(db, account_id, ticker="005930", pay_date=_date(2026, 7, 1),
                   asset_id=kiwoom["samsung"].id)
     _add_dividend(db, account_id, ticker="SGOV", pay_date=_date(2026, 8, 7))
 
@@ -619,7 +646,8 @@ def test_dividends_respect_day_window(client, db, kiwoom):
     _add_dividend(db, account_id, ticker="NEW", pay_date=_date.today())
 
     assert client.get("/api/v1/portfolio/dividends?days=365").json()["total"] == 1
-    assert client.get("/api/v1/portfolio/dividends?days=3000").json()["total"] == 2
+    # ⚠️days 를 늘려도 **투자 기간 앞으로는 가지 않는다**(2026-09-22 규칙 변경).
+    assert client.get("/api/v1/portfolio/dividends?days=3000").json()["total"] == 1
 
 
 # ── 월별 현금흐름 ────────────────────────────────────────────────────────────
