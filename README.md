@@ -148,12 +148,26 @@ http://localhost:8000/docs (Swagger UI)
 
 개발 중에는 컨테이너 없이 네이티브 Postgres + uvicorn + next dev 로도 돌린다.
 
+먼저 **`.env.local`** 을 만든다(저장소 뿌리, git 에 올리지 않는다).
+
+```bash
+cat > .env.local <<'EOF'
+DATABASE_URL=postgresql+psycopg://<user>@localhost:5432/investment
+EOF
+```
+
+⚠️**`.env` 가 아니라 `.env.local` 이다.** `.env` 는 docker compose 용이라 DB
+호스트가 `postgres`(컨테이너 이름)이고, 호스트 셸에서는 그 이름이 풀리지 않는다
+(`nodename nor servname provided`). 코드는 `.env.local` 을 **저장소 뿌리 절대경로**
+로 읽으므로 어느 디렉터리에서 실행해도 같게 동작한다 — `scripts/*.py` 는 뿌리에서,
+pytest 는 `apps/api` 에서 돌기 때문에 상대경로로 두면 한쪽에서만 읽힌다.
+환경변수가 이 파일보다 우선하므로 일회성 덮어쓰기는 `DATABASE_URL=... <명령>` 으로 한다.
+
 ```bash
 # API — ★포트는 8000 을 쓴다
 cd apps/api
-DATABASE_URL="postgresql+psycopg://<user>@localhost:5432/investment" \
-  ../../.venv/bin/python -m uvicorn app.main:app --port 8000 --reload \
-    --reload-dir . --reload-dir ../worker
+../../.venv/bin/python -m uvicorn app.main:app --port 8000 --reload \
+  --reload-dir . --reload-dir ../worker
 
 # 웹 (별도 터미널)
 cd apps/web && npm run dev

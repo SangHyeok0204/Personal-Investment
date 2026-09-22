@@ -1,4 +1,10 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 이 파일 기준으로 저장소 뿌리를 찾는다 — CWD 에 기대면 안 된다.
+# pytest 는 apps/api 에서, scripts/*.py 는 저장소 뿌리에서 돌기 때문이다.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 class Settings(BaseSettings):
@@ -6,9 +12,25 @@ class Settings(BaseSettings):
 
     Defaults mirror .env.example so the app and test collection work even when
     the environment is not fully populated.
+
+    ⚠️`.env` 는 **docker compose 용**이다 — 거기 적힌 호스트는 `postgres`,
+      컨테이너 안에서만 풀리는 이름이다. 지금 이 프로젝트는 uvicorn·next·postgres
+      를 전부 호스트에서 직접 띄워 쓰므로, 그 파일을 읽으면 오히려 틀린다.
+      그래서 호스트용 값은 **`.env.local`** 에 따로 둔다(git 에 올리지 않는다).
+
+    ★왜 절대경로로 읽는가: `scripts/audit_seeds.py` 는 저장소 뿌리에서, pytest 는
+      `apps/api` 에서 돈다. 상대경로로 두면 한쪽에서만 읽혀 "왜 여기선 되고
+      저기선 안 되지"가 된다 — 실제로 그 함정에 두 번 빠졌다.
+
+    환경변수가 `.env.local` 보다 우선한다(pydantic-settings 기본 순서). 한 번만
+    다르게 쓰고 싶으면 `DATABASE_URL=... 명령` 으로 덮어쓰면 된다.
     """
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=_REPO_ROOT / ".env.local",
+        env_file_encoding="utf-8",
+    )
 
     DATABASE_URL: str = "postgresql+psycopg://investment_user:change_me@postgres:5432/investment"
     STORAGE_DIR: str = "/app/storage"

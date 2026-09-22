@@ -3388,6 +3388,70 @@ def get_rebalance(
     return _rebalance_plan(db, _active_account_ids(db, account_id), band)
 
 
+@router.put("/rebalance/targets/{ticker}", response_model=RebalanceOut)
+def upsert_rebalance_target(
+    ticker: str,
+    payload: RebalanceTargetIn,
+    account_id: uuid.UUID | None = Query(default=None),
+    band: Decimal = Query(default=Decimal("0.01"), ge=0, le=1),
+    db: Session = Depends(get_db),
+) -> RebalanceOut:
+    """종목 하나의 목표 비중을 세우거나 고친다.
+
+    ★관심종목 화면에서 "사게 되면 몇 %"를 적을 때 쓴다. 전체를 갈아끼우는
+      `PUT /rebalance/targets` 와 달리 **다른 목표를 건드리지 않는다** —
+      관심종목에서 한 줄 고치려다 세워 둔 목표가 통째로 날아가면 안 된다.
+
+    ⚠️합이 100% 를 넘어도 막지 않는다(전체 저장과 같은 이유). 화면이 말한다.
+    """
+    key = (ticker or "").strip().upper()
+    if not key:
+        raise AppError(status_code=400, code="ticker_required", message="종목이 필요합니다.")
+    if payload.target_weight < 0 or payload.target_weight > 1:
+        raise AppError(
+            status_code=400, code="weight_out_of_range",
+            message="비중이 0~100% 를 벗어났습니다.",
+        )
+
+    existing = db.execute(
+        select(RebalanceTarget).where(RebalanceTarget.ticker == key)
+    ).scalar_one_or_none()
+    name = db.execute(
+        select(Asset.name).where(Asset.ticker == key)
+    ).scalar_one_or_none()
+
+    if existing is None:
+        db.add(
+            RebalanceTarget(
+                id=uuid.uuid4(), ticker=key, asset_name=name,
+                target_weight=payload.target_weight,
+                memo=(payload.memo or "").strip() or None,
+            )
+        )
+    else:
+        existing.target_weight = payload.target_weight
+        if payload.memo is not None:
+            existing.memo = payload.memo.strip() or None
+        if name and not existing.asset_name:
+            existing.asset_name = name
+    db.commit()
+    return _rebalance_plan(db, _active_account_ids(db, account_id), band)
+
+
+@router.delete("/rebalance/targets/{ticker}", response_model=RebalanceOut)
+def delete_rebalance_target(
+    ticker: str,
+    account_id: uuid.UUID | None = Query(default=None),
+    band: Decimal = Query(default=Decimal("0.01"), ge=0, le=1),
+    db: Session = Depends(get_db),
+) -> RebalanceOut:
+    """종목 하나의 목표를 지운다. 나머지는 그대로 둔다."""
+    key = (ticker or "").strip().upper()
+    db.execute(delete(RebalanceTarget).where(RebalanceTarget.ticker == key))
+    db.commit()
+    return _rebalance_plan(db, _active_account_ids(db, account_id), band)
+
+
 @router.put("/rebalance/targets", response_model=RebalanceOut)
 def put_rebalance_targets(
     payload: list[RebalanceTargetIn],

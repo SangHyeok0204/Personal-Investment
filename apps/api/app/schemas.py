@@ -630,6 +630,9 @@ class WatchlistItemOut(BaseModel):
     # 52주 저점 0 ~ 고점 1 사이의 위치.
     fifty_two_week_position: Decimal | None
     # 현재가 대비 목표가/손절가까지의 비율. 가격이 없으면 None(0 이 아니다).
+    #: 리밸런싱 목표 비중. 없으면 None — **0 으로 두지 않는다**(목표를 안 세운
+    #: 것과 "0% 로 두겠다"는 다른 말이다).
+    rebalance_weight: Decimal | None
     to_target: Decimal | None
     to_stop: Decimal | None
     source: str | None

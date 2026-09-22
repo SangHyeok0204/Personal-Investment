@@ -12,7 +12,8 @@
 ⚠️검사할 수 있는 것과 없는 것을 **구분해서 센다.** 증권사 이름이 없는 티커는
   '맞다'가 아니라 **'확인 불가'** 다. 통과 건수에 섞으면 검증됐다고 착각한다.
 
-사용: uv run --project apps/api python scripts/audit_seeds.py
+사용: .venv/bin/python scripts/audit_seeds.py
+      (DB 주소는 `.env.local` 에서 읽는다 — README 'Docker 없이 로컬에서 직접 돌리기')
 """
 from __future__ import annotations
 

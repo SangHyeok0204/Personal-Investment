@@ -33,3 +33,4 @@ storage/trigger/*.json
 # 패키지 옆에 떨어진다 — 어느 쪽이든 커밋하지 않는다(낡은 데이터가 이미지에 실린다).
 apps/collector/collector/market_signal/markets.ttl
 apps/web/tsconfig.tsbuildinfo
+.env.local

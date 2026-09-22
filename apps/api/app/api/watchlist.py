@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core import quote_cache
 from app.core.errors import AppError
 from app.db.session import get_db
-from app.models import Asset, CurrentPosition, WatchlistItem
+from app.models import RebalanceTarget, Asset, CurrentPosition, WatchlistItem
 from app.schemas import (
     WatchlistCreateIn,
     WatchlistItemOut,
@@ -58,6 +58,14 @@ def _held_tickers(db: Session) -> set[str]:
 
 def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
     held = _held_tickers(db)
+    # ★관심종목과 리밸런싱 목표를 **한 화면에서** 본다. 따로 두면 "사고 싶다"와
+    #   "사면 몇 %"가 갈려, 목표를 세워 놓고도 관심종목에서 안 보인다.
+    targets = {
+        t: w
+        for t, w in db.execute(
+            select(RebalanceTarget.ticker, RebalanceTarget.target_weight)
+        ).all()
+    }
     quotes, fetched = quote_cache.get_quotes(
         [i.ticker for i in items], with_range=True
     )
@@ -93,6 +101,8 @@ def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
                 ),
                 # ⚠️거리는 **가격이 있을 때만** 낸다. 없으면 None — 0 으로 두면
                 #   "이미 도달"처럼 보인다.
+                # ⚠️목표가 없으면 None 이다. 0 으로 두면 "0% 로 두겠다"로 읽힌다.
+                rebalance_weight=targets.get(item.ticker),
                 to_target=(
                     _ratio((item.target_price - price) / price)
                     if price and item.target_price is not None and price > 0

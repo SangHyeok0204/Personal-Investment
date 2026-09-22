@@ -13,6 +13,8 @@ import {
   importHoldingsToWatchlist,
   removeWatchlist,
   updateWatchlist,
+  deleteRebalanceTarget,
+  putRebalanceTarget,
   type WatchlistItem,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -100,6 +102,19 @@ export default function WatchlistPage() {
     },
   });
 
+  // 종목 하나의 리밸런싱 목표만 고친다 — 세워 둔 다른 목표를 건드리지 않는다.
+  const setWeight = useMutation({
+    mutationFn: ({ ticker, weight }: { ticker: string; weight: string | null }) =>
+      weight == null
+        ? deleteRebalanceTarget(ticker)
+        : putRebalanceTarget(ticker, weight),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["rebalance"] });
+      setPicked(null);
+    },
+  });
+
   const pull = useMutation({
     mutationFn: importHoldingsToWatchlist,
     onSuccess: settle,
@@ -117,7 +132,15 @@ export default function WatchlistPage() {
 
   // 목표가·손절가를 걸어 둔 종목만. 안 걸어 둔 게 대부분이라 따로 모은다.
   const targeted = useMemo(
-    () => items.filter((i) => i.target_price != null || i.stop_price != null),
+    // ⚠️목표 비중만 적어 둔 종목도 들어와야 한다 — 빠지면 "저장했는데 안
+    //   보인다"가 된다.
+    () =>
+      items.filter(
+        (i) =>
+          i.target_price != null ||
+          i.stop_price != null ||
+          i.rebalance_weight != null,
+      ),
     [items],
   );
 
@@ -261,19 +284,24 @@ export default function WatchlistPage() {
             </DataTable>
           </StubCard>
 
-          <StubCard title="목표가 · 손절가" subtitle={`${targeted.length}종목`} scrollBody>
+          {/* ★"언제 살까"(목표가)와 "사면 얼마나"(목표 비중)를 한 표에서 본다. */}
+          <StubCard
+            title="목표가 · 목표 비중"
+            subtitle={`${targeted.length}종목`}
+            scrollBody
+          >
             {targeted.length === 0 ? (
               <div className="flex h-full items-center justify-center px-4 text-center">
                 <span className="text-[12px] font-semibold leading-relaxed text-ink-faint">
                   걸어 둔 목표가가 없습니다.
                   <br />
-                  종목을 눌러 목표가·손절가를 설정하세요.
+                  종목을 눌러 목표가·손절가·목표 비중을 설정하세요.
                 </span>
               </div>
             ) : (
               <DataTable
-                columns={["종목", "목표가", "손절가"]}
-                align={["left", "right", "right"]}
+                columns={["종목", "목표가", "손절가", "목표 비중"]}
+                align={["left", "right", "right", "right"]}
               >
                 {targeted.map((i) => (
                   <tr
@@ -310,6 +338,15 @@ export default function WatchlistPage() {
                         </>
                       )}
                     </Cell>
+                    {/* ⚠️목표를 안 세운 것과 "0% 로 두겠다"는 다른 말이다. */}
+                    <Cell
+                      strong={i.rebalance_weight != null}
+                      tone={i.rebalance_weight == null ? "muted" : undefined}
+                    >
+                      {i.rebalance_weight == null
+                        ? "—"
+                        : `${(Number(i.rebalance_weight) * 100).toFixed(1)}%`}
+                    </Cell>
                   </tr>
                 ))}
               </DataTable>
@@ -328,8 +365,12 @@ export default function WatchlistPage() {
           <WatchDetail
             item={picked}
             saving={edit.isPending}
+            savingWeight={setWeight.isPending}
             removing={drop.isPending}
             onSave={(body) => edit.mutate({ id: picked.id, body })}
+            onSaveWeight={(w) =>
+              setWeight.mutate({ ticker: picked.ticker, weight: w })
+            }
             onRemove={() => drop.mutate(picked.id)}
           />
         )}
@@ -362,20 +403,31 @@ function RangeBar({ position }: { position: string | null }) {
 function WatchDetail({
   item,
   saving,
+  savingWeight,
   removing,
   onSave,
+  onSaveWeight,
   onRemove,
 }: {
   item: WatchlistItem;
   saving: boolean;
+  savingWeight: boolean;
   removing: boolean;
   onSave: (body: { memo: string | null; target_price: string | null; stop_price: string | null }) => void;
+  onSaveWeight: (weight: string | null) => void;
   onRemove: () => void;
 }) {
   const [memo, setMemo] = useState(item.memo ?? "");
   const [target, setTarget] = useState(item.target_price ?? "");
   const [stop, setStop] = useState(item.stop_price ?? "");
   const [confirming, setConfirming] = useState(false);
+  // ★관심종목과 리밸런싱을 잇는 자리. "사고 싶다"와 "사면 몇 %"가 따로 놀면
+  //   목표를 세워 놓고도 관심종목에서 안 보인다.
+  const [weight, setWeight] = useState(
+    item.rebalance_weight == null
+      ? ""
+      : String(Number((Number(item.rebalance_weight) * 100).toFixed(4))),
+  );
 
   const facts: [string, string][] = [
     ["현재가", price(item.price, item.currency)],
@@ -385,6 +437,13 @@ function WatchDetail({
     ["52주 고점", price(item.fifty_two_week_high, item.currency)],
     ["52주 위치", item.fifty_two_week_position == null ? "—" : `${(Number(item.fifty_two_week_position) * 100).toFixed(0)}%`],
     ["보유 여부", item.held ? "보유 중" : "미보유"],
+    [
+      "리밸런싱 목표",
+      // ⚠️목표가 없으면 "—" 다. 0% 로 적으면 "0% 로 두겠다"로 읽힌다.
+      item.rebalance_weight == null
+        ? "—"
+        : `${(Number(item.rebalance_weight) * 100).toFixed(2)}%`,
+    ],
     ["시세 소스", item.source ?? "—"],
   ];
 
@@ -431,6 +490,41 @@ function WatchDetail({
             />
           </Field>
         </div>
+
+        {/* ★관심종목 ↔ 리밸런싱을 잇는 자리. 목표가는 "언제 살까"이고 이건
+            "사면 얼마나 담을까"다 — 둘 다 적어 둬야 계획이 된다. */}
+        <Field label="사게 되면 몇 % (리밸런싱 목표)">
+          <div className="flex items-center gap-1.5">
+            <input
+              value={weight}
+              onChange={(e) => setWeight(e.target.value)}
+              inputMode="decimal"
+              placeholder="예: 5"
+              className="w-24 rounded-lg border border-hairline px-2.5 py-1.5 text-right text-[12px] tabular-nums focus:border-ge-point focus:outline-none"
+            />
+            <span className="text-[12px] font-bold text-ink-faint">%</span>
+            <button
+              type="button"
+              disabled={savingWeight}
+              onClick={() =>
+                // 빈칸은 "목표를 지운다"는 뜻이다 — 0 으로 저장하면
+                // "0% 로 두겠다"가 되어 다른 말이 된다.
+                onSaveWeight(
+                  weight.trim() === ""
+                    ? null
+                    : String((Number(weight) || 0) / 100),
+                )
+              }
+              className="ml-auto rounded-lg bg-ge-navy px-3 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-ge-navy/90 disabled:opacity-50"
+            >
+              {savingWeight ? "저장 중…" : "목표 비중 저장"}
+            </button>
+          </div>
+          <span className="mt-1 block text-[11px] leading-snug text-ink-muted">
+            리밸런싱 화면의 목표로 바로 들어갑니다. 비워서 저장하면 목표가
+            지워집니다 — <strong>0% 와 다른 말입니다.</strong>
+          </span>
+        </Field>
       </div>
 
       <div className="flex items-center gap-2">

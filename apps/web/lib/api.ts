@@ -3142,6 +3142,8 @@ export interface WatchlistItem {
   fifty_two_week_high: string | null;
   /** 52주 저점 0 ~ 고점 1 사이의 위치. */
   fifty_two_week_position: string | null;
+  /** 리밸런싱 목표 비중. null 이면 목표를 안 세운 것 — 0% 와 다른 말이다. */
+  rebalance_weight: string | null;
   to_target: string | null;
   to_stop: string | null;
   source: string | null;
@@ -3839,6 +3841,29 @@ export function getRebalance(
   const q = accountQuery(accountId);
   return request<Rebalance>(
     `/api/v1/portfolio/rebalance${q ? `${q}&` : "?"}band=${band}`,
+  );
+}
+
+/** 종목 하나의 목표 비중만 세운다 — **다른 목표를 건드리지 않는다.** */
+export function putRebalanceTarget(
+  ticker: string,
+  targetWeight: string,
+  memo?: string | null,
+): Promise<Rebalance> {
+  return request<Rebalance>(
+    `/api/v1/portfolio/rebalance/targets/${encodeURIComponent(ticker)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker, target_weight: targetWeight, memo }),
+    },
+  );
+}
+
+export function deleteRebalanceTarget(ticker: string): Promise<Rebalance> {
+  return request<Rebalance>(
+    `/api/v1/portfolio/rebalance/targets/${encodeURIComponent(ticker)}`,
+    { method: "DELETE" },
   );
 }
 

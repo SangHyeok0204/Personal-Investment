@@ -3,8 +3,33 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, text
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ENV_LOCAL = _REPO_ROOT / ".env.local"
+
+
+def _database_url() -> str | None:
+    """환경변수 → `.env.local` 순으로 찾는다.
+
+    ⚠️예전에는 `os.environ` 만 봤다. 그래서 API 쪽이 `.env.local` 을 읽게 된 뒤로도
+      워커 테스트 **17건이 조용히 건너뛰어졌다** — 합계는 '474 passed' 에서
+      '457 passed, 24 skipped' 로 줄었는데, 요약 한 줄만 보면 통과로 읽힌다.
+      건너뛴 시험은 통과한 시험이 아니다. 두 쪽이 같은 곳을 보게 맞춘다.
+    """
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return url
+    if not _ENV_LOCAL.exists():
+        return None
+    for line in _ENV_LOCAL.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("DATABASE_URL="):
+            return line.partition("=")[2].strip() or None
+    return None
 
 DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -192,9 +217,9 @@ CREATE INDEX IF NOT EXISTS ix_broker_api_raw_responses_job_id
 
 @pytest.fixture(scope="session")
 def test_engine():
-    base_url = os.environ.get("DATABASE_URL")
+    base_url = _database_url()
     if not base_url:
-        pytest.skip("DATABASE_URL not set")
+        pytest.skip(f"DATABASE_URL 없음 (환경변수에도, {_ENV_LOCAL} 에도)")
     prefix = base_url.rpartition("/")[0]
     test_url = f"{prefix}/investment_test"
     admin_url = f"{prefix}/postgres"
