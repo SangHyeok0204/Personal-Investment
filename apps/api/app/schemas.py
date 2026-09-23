@@ -1488,6 +1488,39 @@ class FilingTickerOut(BaseModel):
     truncated: bool
 
 
+class ResearchDocumentOut(BaseModel):
+    """리서치 자료 한 건. ⚠️**내용은 들어 있지 않다** — 이름·크기·시각뿐이다."""
+
+    name: str
+    relative_path: str
+    extension: str
+    size_bytes: int
+    modified_at: datetime
+    #: 파일 **이름**에서 찾은 보유 종목. 내용을 읽지 않으므로 놓칠 수 있다.
+    tickers: list[str]
+
+
+class ResearchLibraryOut(BaseModel):
+    """내가 가진 자료 목록.
+
+    ⚠️`configured=False` 는 오류가 아니라 **아직 폴더를 안 정한 것**이다.
+      화면은 그때 "무엇을 하면 켜지는지"를 말해야 한다 — 빈 화면에 "준비 중"만
+      적혀 있으면 영영 안 채워진다.
+    """
+
+    configured: bool
+    root: str | None
+    #: 폴더를 정했는데 없거나 폴더가 아닐 때의 이유.
+    problem: str | None
+    documents: list[ResearchDocumentOut]
+    #: 상한(2000건)에 걸려 잘렸는지. 조용히 자르지 않는다.
+    truncated: bool
+    #: 보유 종목과 이름이 맞은 자료 수.
+    matched_count: int
+    #: 켜는 방법. 화면이 그대로 보여 준다.
+    setup_hint: str
+
+
 class FilingsOut(BaseModel):
     """보유 종목 공시.
 

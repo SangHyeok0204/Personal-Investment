@@ -4,7 +4,18 @@ import Link from "next/link";
 import { ArrowRight, FileText, Film, Presentation, Table2 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
-import { PlannedList, StatRow, StatTile, StubCard } from "@/components/stub";
+import { useQuery } from "@tanstack/react-query";
+import { useAccount } from "@/components/layout/account-context";
+import {
+  Cell,
+  DataTable,
+  Emphasized,
+  PlannedList,
+  StatRow,
+  StatTile,
+  StubCard,
+} from "@/components/stub";
+import { getResearchLibrary } from "@/lib/api";
 
 // 리서치 라이브러리 — 내가 이미 가진 자료를 한곳에서 찾는 자리.
 //
@@ -22,7 +33,42 @@ const SHELVES = [
   { id: "video", label: "영상", desc: "YouTube 자막 · 요약", icon: Film, href: "/research/video" },
 ];
 
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="flex h-40 items-center justify-center text-[12px] font-semibold text-ink-faint">
+      {text}
+    </div>
+  );
+}
+
+/** 바이트를 사람이 읽는 크기로. 소수 한 자리면 충분하다. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)}${units[unit]}`;
+}
+
 export default function ResearchLibraryPage() {
+  const { accountId } = useAccount();
+  const library = useQuery({
+    queryKey: ["research-library", accountId],
+    queryFn: () => getResearchLibrary(accountId),
+    staleTime: 60_000,
+  });
+
+  const docs = library.data?.documents ?? [];
+  // '이번 달'은 **수정시각** 기준이다 — 파일을 언제 받았는지는 알 수 없다.
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const addedThisMonth = docs.filter((d) =>
+    d.modified_at.startsWith(thisMonth),
+  ).length;
+
   return (
     <>
       <Topbar
@@ -32,10 +78,36 @@ export default function ResearchLibraryPage() {
       />
       <PageContainer wide>
         <StatRow>
-          <StatTile label="자료 수" hint="인덱싱된 문서" />
-          <StatTile label="이번 달 추가" />
-          <StatTile label="다루는 종목" />
-          <StatTile label="미분류" hint="태그가 안 붙은 자료" />
+          <StatTile
+            label="자료 수"
+            value={library.data?.configured ? `${docs.length}` : undefined}
+            hint={library.data?.configured ? "폴더에서 읽은 문서" : "폴더 미지정"}
+            loading={library.isLoading}
+          />
+          <StatTile
+            label="이번 달 추가"
+            value={library.data?.configured ? `${addedThisMonth}` : undefined}
+            hint="수정시각 기준"
+            loading={library.isLoading}
+          />
+          <StatTile
+            label="보유 종목 자료"
+            value={
+              library.data?.configured ? `${library.data.matched_count}` : undefined
+            }
+            hint="파일 이름에 내 종목이 있는 것"
+            loading={library.isLoading}
+          />
+          <StatTile
+            label="종목 표시 없음"
+            value={
+              library.data?.configured
+                ? `${docs.length - library.data.matched_count}`
+                : undefined
+            }
+            hint="이름만으로는 못 찾은 자료"
+            loading={library.isLoading}
+          />
         </StatRow>
 
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -74,20 +146,76 @@ export default function ResearchLibraryPage() {
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
-          <StubCard title="최근 추가" subtitle="읽지 않은 자료 먼저">
-            <div className="flex h-40 items-center justify-center text-[12px] font-semibold text-ink-faint">
-              자료 인덱싱이 아직 연결되지 않았습니다
-            </div>
+          <StubCard
+            title="최근 추가"
+            subtitle={
+              library.data?.configured
+                ? `${docs.length}건 · 최근 수정순`
+                : "읽지 않은 자료 먼저"
+            }
+            scrollBody
+          >
+            {library.isLoading ? (
+              <Empty text="불러오는 중…" />
+            ) : !library.data?.configured ? (
+              /* ⚠️"준비 중"만 적힌 화면은 영영 안 채워진다. **무엇을 하면
+                 켜지는지**를 그 자리에 적는다. */
+              <div className="flex h-40 flex-col justify-center gap-2 px-1">
+                <p className="text-[12px] font-bold text-ge-navy">
+                  자료 폴더를 아직 정하지 않았습니다
+                </p>
+                <p className="text-[11px] leading-relaxed text-ink-secondary">
+                  {/* 서버 문구에도 `**강조**` 가 들어 있다 — 별표를 그대로 찍지 않는다. */}
+                  <Emphasized text={library.data?.setup_hint ?? ""} />
+                </p>
+              </div>
+            ) : library.data.problem ? (
+              <div className="flex h-40 flex-col justify-center gap-1.5 px-1">
+                <p className="text-[12px] font-bold text-ask">
+                  {library.data.problem}
+                </p>
+                <p className="text-[11px] text-ink-faint">{library.data.root}</p>
+              </div>
+            ) : docs.length === 0 ? (
+              <Empty text="그 폴더에 읽을 만한 자료가 없습니다" />
+            ) : (
+              <>
+                {library.data.truncated && (
+                  <p className="mb-2 rounded-lg bg-ask-soft px-2.5 py-1.5 text-[11px] font-semibold text-ask">
+                    자료가 많아 앞쪽만 실었습니다 — 이게 전부가 아닙니다.
+                  </p>
+                )}
+                <DataTable
+                  columns={["자료", "종목", "수정"]}
+                  align={["left", "left", "right"]}
+                >
+                  {docs.slice(0, 40).map((d) => (
+                    <tr key={d.relative_path} className="border-b border-hairline">
+                      <Cell left strong>
+                        <span className="block max-w-[320px] truncate">{d.name}</span>
+                        <span className="block text-[10px] font-medium text-ink-faint">
+                          {d.extension.toUpperCase()} · {formatBytes(d.size_bytes)}
+                        </span>
+                      </Cell>
+                      <Cell left tone={d.tickers.length ? undefined : "muted"}>
+                        {d.tickers.length ? d.tickers.join(", ") : "—"}
+                      </Cell>
+                      <Cell tone="muted">{d.modified_at.slice(0, 10)}</Cell>
+                    </tr>
+                  ))}
+                </DataTable>
+              </>
+            )}
           </StubCard>
 
-          <StubCard title="이 화면이 할 일">
+          <StubCard title="이 화면이 하는 일 · 안 하는 일">
             <PlannedList
               items={[
-                "지정 폴더를 훑어 pdf·pptx·docx·xlsx 의 제목·날짜·크기를 인덱싱",
-                "문서에서 종목코드·산업 키워드를 뽑아 태그로 붙임",
-                "보유 종목과 교차 — 내가 가진 종목의 자료를 먼저 띄운다",
-                "읽음/안읽음과 한 줄 메모를 남겨 다음에 뭘 볼지 고르게",
-                "원문 파일은 옮기지 않는다 — 경로만 들고 열기만 한다",
+                "지정 폴더를 훑어 pdf·pptx·docx·xlsx·md 의 **이름·크기·수정시각**을 읽는다",
+                "파일 **이름**에 보유 종목이 있으면 표시한다 — 내용은 열지 않으므로 놓칠 수 있다",
+                "**원문은 옮기지도 고치지도 않는다.** 경로만 들고 있는다",
+                "지정한 폴더 밖으로 나가지 않는다 — 링크를 따라가도 실경로가 밖이면 버린다",
+                "아직 안 하는 것: 문서 내용에서 키워드 뽑기 · 읽음 표시 · 한 줄 메모",
               ]}
             />
           </StubCard>

@@ -9,6 +9,7 @@ import { Modal } from "@/components/ui/modal";
 import {
   Cell,
   DataTable,
+  Emphasized,
   NotConnectedBanner,
   SourceDownBanner,
   StatTile,
@@ -365,21 +366,6 @@ function Chip({
 }
 
 /** 서버 문구의 `**강조**` 만 굵게. dangerouslySetInnerHTML 을 쓰지 않는다. */
-function Emphasized({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
-        i % 2 === 1 ? (
-          <strong key={i} className="text-ink">
-            {part}
-          </strong>
-        ) : (
-          part
-        ),
-      )}
-    </>
-  );
-}
 
 function Empty({ text }: { text: string }) {
   return (

@@ -9,6 +9,7 @@ import { Modal } from "@/components/ui/modal";
 import {
   Cell,
   DataTable,
+  Emphasized,
   NotConnectedBanner,
   StatTile,
   StubCard,
@@ -247,29 +248,6 @@ export default function TaxPage() {
           </p>
         )}
       </Modal>
-    </>
-  );
-}
-
-/**
- * 서버 문구의 `**강조**` 만 굵게 그린다.
- *
- * ⚠️dangerouslySetInnerHTML 을 쓰지 않는다. 지금은 서버 상수라 안전하지만,
- *   나중에 이 목록에 증권사 메시지나 사용자 입력이 섞이면 그때는 늦는다.
- */
-function Emphasized({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
-        // split 의 홀수 인덱스가 캡처 그룹(강조 대상)이다.
-        i % 2 === 1 ? (
-          <strong key={i} className="text-ink">
-            {part}
-          </strong>
-        ) : (
-          part
-        ),
-      )}
     </>
   );
 }

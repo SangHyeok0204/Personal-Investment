@@ -31,6 +31,8 @@ from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
 from app.core import investing as inv
 from app.core import naming
+from app.core import research_library
+from app.core.config import settings
 from app.core import portfolio_character as pc
 from app.core import rebalance as rb
 from app.core import fee_reserve as fr
@@ -100,6 +102,8 @@ from app.schemas import (
     ReportBenchmarkOut,
     ReportOut,
     ReportPeriodOut,
+    ResearchDocumentOut,
+    ResearchLibraryOut,
     ResidualBreakdownOut,
     ReportPositionChangeOut,
     ReportRealizedOut,
@@ -2927,6 +2931,65 @@ def _build_filings(tickers: list[str], names: dict[str, str]) -> FilingsOut:
         source_ok=any(t.cik is not None for t in summary) if summary else False,
         user_agent_is_default=filings_source.user_agent()
         == filings_source._DEFAULT_UA,
+    )
+
+
+#: 리서치 폴더를 켜는 방법. 화면이 그대로 보여 준다 — "준비 중"만 적힌 화면은
+#: 영영 안 채워진다.
+_RESEARCH_SETUP_HINT = (
+    "저장소 뿌리의 `.env.local` 에 `RESEARCH_DIR=/자료/폴더/경로` 를 적고 API 를 "
+    "다시 띄우면 켜집니다. 폴더 안의 pdf·pptx·docx·xlsx·md 를 **이름·크기·수정시각**"
+    "만 읽어 최근순으로 늘어놓고, 파일 이름에 보유 종목이 있으면 표시합니다. "
+    "⚠️파일을 옮기거나 고치지 않고 **내용도 열지 않습니다** — 경로만 들고 있습니다."
+)
+
+
+@router.get("/research/library", response_model=ResearchLibraryOut)
+def get_research_library(
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ResearchLibraryOut:
+    """내가 가진 리서치 자료 — **파일을 옮기지 않고** 목록만 만든다.
+
+    ★왜 이렇게 좁은가: 화면이 "자료 인덱싱이 아직 연결되지 않았습니다"라고만
+      적혀 있었다. 할 일 목록은 있는데 **무엇을 하면 켜지는지**가 없었다.
+      켜는 방법을 화면이 말하게 하고, 켜면 실제로 동작하는 가장 작은 것을 만든다.
+
+    ⚠️**내용은 읽지 않는다.** 문서를 열어 종목코드를 뽑는 것은 다음 단계다 —
+      지금 하면 사용자가 모르는 채로 개인 문서를 해석하게 된다.
+    """
+    holdings: dict[str, str] = {}
+    account_ids = _active_account_ids(db, account_id)
+    if account_ids:
+        holdings = {
+            ticker: (name or "")
+            for ticker, name in db.execute(
+                select(Asset.ticker, Asset.name)
+                .join(CurrentPosition, CurrentPosition.asset_id == Asset.id)
+                .where(CurrentPosition.account_id.in_(account_ids))
+            ).all()
+        }
+
+    library = research_library.scan(settings.RESEARCH_DIR or None, holdings)
+    documents = [
+        ResearchDocumentOut(
+            name=d.name,
+            relative_path=d.relative_path,
+            extension=d.extension,
+            size_bytes=d.size_bytes,
+            modified_at=d.modified_at,
+            tickers=d.tickers,
+        )
+        for d in library.documents
+    ]
+    return ResearchLibraryOut(
+        configured=library.configured,
+        root=library.root,
+        problem=library.problem,
+        documents=documents,
+        truncated=library.truncated,
+        matched_count=sum(1 for d in documents if d.tickers),
+        setup_hint=_RESEARCH_SETUP_HINT,
     )
 
 

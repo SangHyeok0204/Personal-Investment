@@ -398,6 +398,34 @@ export function toneOf(value: string | null | undefined): "up" | "down" | undefi
 }
 
 /** 앞으로 이 화면에 무엇이 들어올지 적어 두는 목록. 설계 메모가 화면에 남는다. */
+/**
+ * 서버·화면 문구의 `**강조**` 만 굵게 그린다.
+ *
+ * ⚠️**한 군데에 둔다.** 화면 일곱 곳이 똑같은 함수를 각자 복사해 두고 있었고,
+ *   정작 공용인 `PlannedList` 는 이걸 안 써서 `**금액**` 같은 별표가 **화면에
+ *   그대로 찍히고 있었다**(수익률 추이·리서치 등). 문구에 강조를 적는 습관이
+ *   있으면, 그 문구를 그리는 곳이 전부 이걸 써야 한다.
+ *
+ * ⚠️`dangerouslySetInnerHTML` 을 쓰지 않는다. 지금 들어오는 문구는 서버 상수라
+ *   안전하지만, 나중에 증권사 메시지나 사용자 입력이 섞이면 그때는 늦는다.
+ */
+export function Emphasized({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+        // split 의 홀수 인덱스가 캡처 그룹(강조 대상)이다.
+        i % 2 === 1 ? (
+          <strong key={i} className="text-ink">
+            {part}
+          </strong>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 export function PlannedList({ items }: { items: string[] }) {
   return (
     <ul className="space-y-2">
@@ -405,7 +433,7 @@ export function PlannedList({ items }: { items: string[] }) {
         <li key={t} className="flex items-start gap-2.5">
           <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ge-point/50" />
           <span className="text-[13px] font-semibold leading-snug text-ink-secondary">
-            {t}
+            <Emphasized text={t} />
           </span>
         </li>
       ))}

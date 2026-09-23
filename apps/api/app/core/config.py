@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://investment_user:change_me@postgres:5432/investment"
     STORAGE_DIR: str = "/app/storage"
 
+    # 리서치 자료 폴더. 비어 있으면 리서치 화면이 **켜는 방법을 안내**한다.
+    # ⚠️읽기 전용이다 — 이름·크기·수정시각만 본다. 내용은 열지 않는다.
+    RESEARCH_DIR: str = ""
+
     # Internal API auth shared with the worker/n8n; guards the /internal router.
     INTERNAL_API_KEY: str = "change_me_internal"
 

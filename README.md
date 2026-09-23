@@ -153,6 +153,11 @@ http://localhost:8000/docs (Swagger UI)
 ```bash
 cat > .env.local <<'EOF'
 DATABASE_URL=postgresql+psycopg://<user>@localhost:5432/investment
+
+# (선택) 리서치 자료 폴더 — 적으면 '리서치 라이브러리' 화면이 켜진다.
+# ⚠️읽기 전용이다. 이름·크기·수정시각만 읽고 **내용은 열지 않으며**, 파일을
+#   옮기거나 고치지 않는다. 지정한 폴더 밖으로도 나가지 않는다(링크 포함).
+# RESEARCH_DIR=/Users/<me>/Documents/05_리서치
 EOF
 ```
 

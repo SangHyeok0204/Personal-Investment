@@ -3383,6 +3383,38 @@ export function getUntrackedTickers(): Promise<UntrackedHolding[]> {
   return request<UntrackedHolding[]>("/api/v1/journal/untracked");
 }
 
+// ── 리서치 라이브러리 ────────────────────────────────────────────────────────
+
+export interface ResearchDocument {
+  name: string;
+  relative_path: string;
+  extension: string;
+  size_bytes: number;
+  modified_at: string;
+  /** 파일 **이름**에서 찾은 보유 종목. 내용을 읽지 않으므로 놓칠 수 있다. */
+  tickers: string[];
+}
+
+export interface ResearchLibrary {
+  /** false 는 오류가 아니라 **아직 폴더를 안 정한 것**이다. */
+  configured: boolean;
+  root: string | null;
+  problem: string | null;
+  documents: ResearchDocument[];
+  truncated: boolean;
+  matched_count: number;
+  /** 켜는 방법. 화면이 그대로 보여 준다. */
+  setup_hint: string;
+}
+
+export function getResearchLibrary(
+  accountId?: string | null,
+): Promise<ResearchLibrary> {
+  return request<ResearchLibrary>(
+    `/api/v1/portfolio/research/library${accountQuery(accountId)}`,
+  );
+}
+
 // ── 주문 내역 ────────────────────────────────────────────────────────────────
 
 export type OrderStatus = "FILLED" | "PARTIAL" | "UNFILLED" | "CANCELLED";
