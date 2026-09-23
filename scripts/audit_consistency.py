@@ -27,6 +27,14 @@ TIMEOUT = 90.0
 # 원 단위 비교 허용치. 서버가 소수 2자리로 반올림해 내보내므로 1원이면 넉넉하다.
 MONEY_TOL = Decimal("1")
 
+#: ⚠️**장중에는 같은 표를 두 번 읽으면 값이 달라진다.**
+#:  `current_positions` 는 5초마다 시세로 갱신되는데, 이 감사는 엔드포인트를
+#:  하나씩 순서대로 부른다. 그래서 장중에 돌리면 allocation 과 rebalance 가
+#:  ₩5,722 차이로 **실패**했다 — 계산이 틀린 게 아니라 **읽은 시각이 다른** 것이다.
+#:  그런 검사는 상대 허용치로 본다. 진짜 분모가 갈리면 비중이 통째로 어긋나므로
+#:  0.05% 면 잡고도 남는다(실측 차이는 0.015% 였다).
+LIVE_TOL_RATIO = Decimal("0.0005")
+
 
 def dec(value) -> Decimal | None:
     return None if value is None else Decimal(str(value))
@@ -59,9 +67,18 @@ class Audit:
         response.raise_for_status()
         return response.json()
 
-    def same(self, name: str, left, right, la: str, lb: str, tol=MONEY_TOL) -> None:
+    def same(
+        self, name: str, left, right, la: str, lb: str, tol=MONEY_TOL, live=False
+    ) -> None:
+        """두 값이 같은지. `live=True` 면 **장중 변동**을 감안해 상대 허용치를 쓴다.
+
+        ⚠️`live` 를 남발하지 말 것. 시세로 움직이는 같은 표를 두 시점에 읽는
+          경우에만 쓴다 — 계산 방식이 다른 값을 덮는 데 쓰면 감사가 무력해진다.
+        """
         self.checked += 1
         a, b = dec(left), dec(right)
+        if live and a is not None and b is not None:
+            tol = max(tol, abs(a) * LIVE_TOL_RATIO)
         if a is None or b is None:
             print(f"  ?  {name}: {la}={money(a)} / {lb}={money(b)} — 한쪽이 비어 있다")
             return
@@ -508,12 +525,14 @@ class Audit:
             allocation["total_market_value_krw"],
             rebalance["base_value_krw"],
             "allocation", "rebalance",
+            live=True,
         )
         self.same(
             "비중 분모 (자산 현황과도 같은가)",
             summary["total_assets_krw"],
             rebalance["base_value_krw"],
             "summary", "rebalance",
+            live=True,
         )
         self.same(
             "보유 종목 수",
@@ -666,6 +685,7 @@ class Audit:
             ).quantize(Decimal("0.01")),
             dec(summary["total_assets_krw"]).quantize(Decimal("0.01")),
             "fx", "summary",
+            live=True,
         )
         # 외화 노출액은 통화 축에서 KRW 아닌 조각의 합과 같아야 한다.
         non_krw = sum(
@@ -677,6 +697,7 @@ class Audit:
             "외화 노출액 (환노출 vs 배분 통화축)",
             fx["exposed_value_krw"], non_krw,
             "fx", "allocation(currency)",
+            live=True,
         )
 
         # ── 원장 신선도 ────────────────────────────────────────────────

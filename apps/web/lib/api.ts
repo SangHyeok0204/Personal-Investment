@@ -3659,6 +3659,10 @@ export interface AiData {
   total_accelerators: number;
   downloads: PackageDownloads[];
   sources: string[];
+  /** 못 받은 원천. 비어 있으면 둘 다 받았다는 뜻이다. */
+  missing: string[];
+  /** ⚠️"시장의 최신"이 아니라 **이 데이터셋이 아는 최신** 출시일이다. */
+  latest_release_date: string | null;
 }
 
 export function getAiData(): Promise<AiData> {

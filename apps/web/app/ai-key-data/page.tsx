@@ -70,9 +70,23 @@ export default function AiKeyDataPage() {
   const data = ai.data;
   const accelerators = data?.accelerators ?? [];
   // 가속기와 SDK 는 **서로 다른 원천**이다. 한쪽만 죽을 수 있으므로 따로 본다.
+  // ⚠️서버가 `missing` 으로 판정해 준다 — 화면이 같은 추론을 또 하면 두 곳이
+  //   따로 놀 수 있다. 서버 판정을 먼저 보고, 응답 자체를 못 받았을 때만
+  //   화면 쪽 판단으로 떨어진다.
   const hardwareDown =
-    !ai.isLoading && (ai.isError || (data?.total_accelerators ?? 0) === 0);
-  const npmDown = !ai.isLoading && (ai.isError || (data?.downloads.length ?? 0) === 0);
+    !ai.isLoading &&
+    (ai.isError || (data?.missing ?? []).some((m) => m.includes("Epoch")));
+  const npmDown =
+    !ai.isLoading &&
+    (ai.isError || (data?.missing ?? []).some((m) => m.includes("npm")));
+
+  // ⚠️Epoch 는 갱신이 몇 달 늦을 수 있다. "최신 출시"가 반년 전이면 앱이 고장
+  //   난 줄 알기 쉬우므로 **며칠 지났는지**를 같이 적는다.
+  const staleDays = data?.latest_release_date
+    ? Math.round(
+        (Date.now() - new Date(data.latest_release_date).getTime()) / 86_400_000,
+      )
+    : null;
 
   const nvidiaShare = useMemo(() => {
     if (!data || data.total_accelerators === 0) return null;
@@ -129,10 +143,19 @@ export default function AiKeyDataPage() {
             }
             loading={ai.isLoading}
           />
+          {/* ⚠️"최신"은 **이 데이터셋이 아는 최신**이다. Epoch 갱신이 몇 달
+              늦을 수 있어, 그냥 "최신 출시"라고만 적으면 앱이 고장 난 줄 안다.
+              얼마나 지났는지를 같이 적는다. */}
           <StatTile
-            label="최신 출시"
+            label="데이터셋 최신 출시"
             value={newest ? flops(newest.fp16_flops) : null}
-            hint={newest ? `${newest.name} · ${newest.release_date}` : "FP16 성능"}
+            hint={
+              newest
+                ? `${newest.name} · ${newest.release_date}${
+                    staleDays != null ? ` (${staleDays}일 전)` : ""
+                  }`
+                : "FP16 성능"
+            }
             loading={ai.isLoading}
           />
           <StatTile

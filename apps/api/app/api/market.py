@@ -414,6 +414,15 @@ def _build_ai_data() -> "AiDataOut":
     accelerators = ai_source.fetch_accelerators()
     downloads = ai_source.fetch_downloads(_AI_PACKAGES)
 
+    # ⚠️두 수집 함수는 실패해도 **빈 목록**을 돌려준다. 그대로 두면 화면이
+    #   "0종"이라고 말하는데 그건 데이터가 없다는 뜻이 아니라 못 받았다는
+    #   뜻이다. 평소 176종·6패키지가 오므로 비어 있으면 실패로 본다.
+    missing: list[str] = []
+    if not accelerators:
+        missing.append("Epoch AI 가속기")
+    if not downloads:
+        missing.append("npm 다운로드")
+
     dated = [a for a in accelerators if a.release_date is not None]
     dated.sort(key=lambda a: a.release_date, reverse=True)
 
@@ -423,6 +432,9 @@ def _build_ai_data() -> "AiDataOut":
         by_maker[a.manufacturer] = by_maker.get(a.manufacturer, 0) + 1
 
     return AiDataOut(
+        missing=missing,
+        # ⚠️"시장의 최신"이 아니라 **이 데이터셋이 아는 최신**이다.
+        latest_release_date=(dated[0].release_date if dated else None),
         accelerators=[
             AcceleratorOut(
                 name=a.name,

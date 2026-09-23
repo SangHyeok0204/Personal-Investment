@@ -1096,11 +1096,24 @@ class PackageDownloadsOut(BaseModel):
 
 
 class AiDataOut(BaseModel):
+    """AI 생태계 지표.
+
+    ⚠️원천이 내려가면 두 수집 함수가 **빈 목록**을 돌려준다. 그대로 두면 화면이
+      "가속기 0종"이라고 말하는데, 그건 **데이터가 없다는 뜻이 아니라 못 받았다는
+      뜻**이다. 평소 176종이 오는 데이터셋이 비어 오는 일은 없으므로, 비면
+      실패로 보고 `missing` 에 담는다.
+    """
+
     accelerators: list[AcceleratorOut]
     manufacturers: list[ManufacturerCountOut]
     total_accelerators: int
     downloads: list[PackageDownloadsOut]
     sources: list[str]
+    #: 못 받은 원천 이름. 비어 있으면 둘 다 받았다는 뜻이다.
+    missing: list[str] = []
+    #: 가속기 데이터셋의 **가장 최근 출시일**. ⚠️"시장의 최신"이 아니라
+    #  **이 데이터셋이 아는 최신**이다 — Epoch 는 갱신이 몇 달 늦을 수 있다.
+    latest_release_date: date | None = None
 
 
 # ── 환노출 ───────────────────────────────────────────────────────────────────
