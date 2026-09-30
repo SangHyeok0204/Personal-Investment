@@ -133,56 +133,54 @@ export function ReportView({
         note={`${rep.date} 상장 · ${rep.rows.length}종목 · KRX`}
       />
       <div className="grid grid-cols-3 gap-2.5 p-2.5">
-        {rep.rows.map((r) => {
-          return (
-            <div
-              key={`${r.rank}-${r.name}`}
-              className="flex flex-col gap-2 rounded-2xl border-2 border-hairline bg-canvas p-3 text-left shadow-card"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-[13px] font-extrabold text-ge-navy">
-                  {r.name}
-                </div>
-                <div className="text-[11px] font-semibold tabular-nums text-ink-muted">
-                  {r.ticker || EMDASH}
-                  {day && (
-                    <span className="ml-1 font-medium text-ink-faint">
-                      · {day} 상장
-                    </span>
-                  )}
-                </div>
+        {rep.rows.map((r) => (
+          <div
+            key={`${r.rank}-${r.name}`}
+            className="flex flex-col gap-2 rounded-2xl border-2 border-hairline bg-canvas p-3 text-left shadow-card"
+          >
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-extrabold text-ge-navy">
+                {r.name}
               </div>
-
-              {/* 헤드라인 = 개인 순매수(상장일). 오른쪽은 상장일 등락률. */}
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={cn(
-                    "text-[21px] font-extrabold leading-none tabular-nums",
-                    tone(r.net_buy),
-                  )}
-                >
-                  {fmtEok(r.net_buy)}
-                </span>
-                <ChangeChip pct={r.ret == null ? null : r.ret * 100} />
+              <div className="text-[11px] font-semibold tabular-nums text-ink-muted">
+                {r.ticker || EMDASH}
+                {day && (
+                  <span className="ml-1 font-medium text-ink-faint">
+                    · {day} 상장
+                  </span>
+                )}
               </div>
-              <div className="-mt-1 text-[10px] font-semibold text-ink-faint">
-                개인 순매수 · {day} 상장일
-              </div>
-
-              <dl className="grid gap-y-1 border-t border-hairline pt-2">
-                <MiniMetric label={`수익률 ${day}`}>
-                  <span className={tone(r.ret)}>{fmtPct(r.ret, 1)}</span>
-                </MiniMetric>
-                <MiniMetric label={`거래대금 ${day}`}>
-                  {fmtEok(r.trade_value, false)}
-                </MiniMetric>
-                <MiniMetric label="보수율">
-                  {r.fee == null ? EMDASH : `${Number(r.fee.toFixed(3))}%`}
-                </MiniMetric>
-              </dl>
             </div>
-          );
-        })}
+
+            {/* 헤드라인 = 개인 순매수(상장일). 오른쪽은 상장일 등락률. */}
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "text-[21px] font-extrabold leading-none tabular-nums",
+                  tone(r.net_buy),
+                )}
+              >
+                {fmtEok(r.net_buy)}
+              </span>
+              <ChangeChip pct={r.ret == null ? null : r.ret * 100} />
+            </div>
+            <div className="-mt-1 text-[10px] font-semibold text-ink-faint">
+              개인 순매수 · {day} 상장일
+            </div>
+
+            <dl className="grid gap-y-1 border-t border-hairline pt-2">
+              <MiniMetric label={`수익률 ${day}`}>
+                <span className={tone(r.ret)}>{fmtPct(r.ret, 1)}</span>
+              </MiniMetric>
+              <MiniMetric label={`거래대금 ${day}`}>
+                {fmtEok(r.trade_value, false)}
+              </MiniMetric>
+              <MiniMetric label="보수율">
+                {r.fee == null ? EMDASH : `${Number(r.fee.toFixed(3))}%`}
+              </MiniMetric>
+            </dl>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -193,12 +191,10 @@ function Stat({
   label,
   value,
   toneClass,
-  note,
 }: {
   label: string;
   value: string;
   toneClass?: string;
-  note?: string;
 }) {
   return (
     <div className="flex min-w-0 flex-col items-center justify-center rounded-lg border border-hairline bg-canvas-soft px-2 py-2">
@@ -213,11 +209,6 @@ function Stat({
       >
         {value}
       </span>
-      {note && (
-        <span className="mt-1 text-[10px] font-semibold leading-none text-ink-faint">
-          {note}
-        </span>
-      )}
     </div>
   );
 }
@@ -395,7 +386,6 @@ export function ListingView({
           </div>
         </>
       )}
-
     </div>
   );
 }

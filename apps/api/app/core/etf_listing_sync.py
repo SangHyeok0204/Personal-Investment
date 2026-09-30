@@ -48,6 +48,7 @@ import re
 import time
 import zipfile
 from datetime import date, datetime, time as dtime, timedelta, timezone
+
 import httpx
 
 from app.core.ai_snapshot_sync import record_error, record_ok, today_kst
@@ -55,17 +56,11 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
+# httpx 는 INFO 에서 요청 URL 을 통째로 찍는다 — DART 키(crtfc_key)가 쿼리에 있으므로 INFO 를 막아 둔다.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 CHECK_INTERVAL_SECONDS = 30 * 60
 RETRY_AFTER_SECONDS = 60 * 60
-
-# 오류 문구에 새면 안 되는 값 — DART 키는 쿼리(crtfc_key)로 가서 httpx 오류 문구의 URL 에 그대로 찍힌다.
-_SECRET_RE = re.compile(r"\b(crtfc_key|mbrId|pw)=[^&'\"\s]+")
-
-
-def redact(text: str) -> str:
-    """`crtfc_key=…`·KRX `mbrId=…`/`pw=…` 값을 *** 로 가린다(source_status·로그로 가는 문구용)."""
-    return _SECRET_RE.sub(r"\1=***", text)
 STARTUP_DELAY_SECONDS = 60
 UPCOMING_LIMIT = 8
 DART_LOOKBACK_DAYS = 90       # list.json 은 회사 지정 없이 3개월까지만 검색된다
@@ -84,6 +79,15 @@ KRX_HEADERS = {
 KRX_TIMEOUT = 60
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 DART_DOC_URL = "https://opendart.fss.or.kr/api/document.xml"
+
+# 오류 문구에 새면 안 되는 값 — DART 키는 쿼리(crtfc_key)로 가서 httpx 오류 문구의 URL 에 그대로 찍힌다.
+_SECRET_RE = re.compile(r"\b(crtfc_key|mbrId|pw)=[^&'\"\s]+")
+
+
+def redact(text: str) -> str:
+    """`crtfc_key=…`·KRX `mbrId=…`/`pw=…` 값을 *** 로 가린다(source_status·로그로 가는 문구용)."""
+    return _SECRET_RE.sub(r"\1=***", text)
+
 
 # 캐시 — 새 표를 만들지 않는다(원천이 전부 다시 받을 수 있다).
 _state: dict = {
@@ -319,7 +323,7 @@ def upcoming_candidates(filings: list[dict], krx_rows: list[dict]) -> list[dict]
         if kind is None or not fn:
             continue
         key = _norm_name(fn)
-        g = funds.setdefault(key, {"name": fn, "filings": [], "company": f.get("corp_name") or ""})
+        g = funds.setdefault(key, {"name": fn, "filings": []})
         g["filings"].append((f.get("rcept_no") or "", f.get("rcept_dt") or "", kind, amend, f.get("corp_name") or ""))
 
     out = []
@@ -363,14 +367,11 @@ def finalize_upcoming(cands: list[dict], ranges: dict[str, tuple[str | None, str
             "est_to": est_to,
             "is_amend": c["is_amend"],
         })
-    # 범위가 있는 건 이른 순, 없는 건 최근 공시 순.
-    out.sort(key=lambda x: (x["est_from"] is None, x["est_from"] or "", "" if x["est_from"] else _neg(x["filed"])))
-    return out[:limit]
-
-
-def _neg(iso: str | None) -> str:
-    t = re.sub(r"\D", "", iso or "")
-    return "".join(str(9 - int(ch)) for ch in t)
+    # 범위가 있는 건 이른 순, 없는 건 최근 공시 순(공시일 없는 건 맨 앞).
+    dated = sorted((x for x in out if x["est_from"]), key=lambda x: x["est_from"])
+    undated = sorted((x for x in out if not x["est_from"]),
+                     key=lambda x: (x["filed"] is None, x["filed"] or ""), reverse=True)
+    return (dated + undated)[:limit]
 
 
 # ── 네트워크 (collector krx_fetch 에서 옮김, verify=True) ────────────────────
@@ -379,10 +380,11 @@ def _client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
     return httpx.Client(transport=transport, verify=True, timeout=KRX_TIMEOUT, follow_redirects=True)
 
 
-def post_krx_json(client: httpx.Client, payload: dict) -> dict:
-    response = client.post(KRX_URL, headers=KRX_HEADERS, data=payload)
+def krx_output(client: httpx.Client, stat: str, **params: str) -> list[dict]:
+    """MDCSTAT 조회 한 번 → `output` 행(없으면 [])."""
+    response = client.post(KRX_URL, headers=KRX_HEADERS, data={"bld": f"dbms/MDC/STAT/standard/{stat}", **params})
     response.raise_for_status()
-    return response.json()
+    return response.json().get("output") or []
 
 
 def login_krx(client: httpx.Client, user: str, pw: str) -> None:
@@ -421,7 +423,7 @@ def krx_session(transport: httpx.BaseTransport | None = None) -> httpx.Client:
 
 def fetch_krx(client: httpx.Client, today: date) -> dict:
     """목록 → 상장일 → 그 종목들의 구성종목·거래·개인순매수."""
-    rows = post_krx_json(client, {"bld": "dbms/MDC/STAT/standard/MDCSTAT04601"}).get("output") or []
+    rows = krx_output(client, "MDCSTAT04601")
     if not rows:
         raise RuntimeError("KRX MDCSTAT04601 빈 응답")
     day = listing_day(rows, today)
@@ -430,20 +432,12 @@ def fetch_krx(client: httpx.Client, today: date) -> dict:
     if day is not None:
         trd = day.strftime("%Y%m%d")
         meta = listed_on(rows, day)
-        prices = {
-            (p.get("ISU_SRT_CD") or "").strip(): p
-            for p in post_krx_json(client, {"bld": "dbms/MDC/STAT/standard/MDCSTAT04301", "trdDd": trd}).get("output") or []
-        }
+        prices = {(p.get("ISU_SRT_CD") or "").strip(): p for p in krx_output(client, "MDCSTAT04301", trdDd=trd)}
         stats: dict[str, dict] = {}
         for r in meta:
-            pdf = post_krx_json(
-                client, {"bld": "dbms/MDC/STAT/standard/MDCSTAT05001", "trdDd": trd, "isuCd": r["isin"]}
-            ).get("output") or []
-            r["holdings"] = holdings_rows(pdf)
-            inv = post_krx_json(client, {
-                "bld": "dbms/MDC/STAT/standard/MDCSTAT04901", "strtDd": trd, "endDd": trd,
-                "isuCd": r["isin"], "inqTpCd": "1", "trdVolVal": "2", "askBid": "3",
-            }).get("output") or []
+            r["holdings"] = holdings_rows(krx_output(client, "MDCSTAT05001", trdDd=trd, isuCd=r["isin"]))
+            inv = krx_output(client, "MDCSTAT04901", strtDd=trd, endDd=trd, isuCd=r["isin"],
+                             inqTpCd="1", trdVolVal="2", askBid="3")
             p = prices.get(r["ticker"]) or {}
             fluc = _num(p.get("FLUC_RT"))
             stats[r["ticker"]] = {
@@ -561,6 +555,10 @@ def sync(db, now: datetime | None = None, *, transport: httpx.BaseTransport | No
                     rc = c.get("doc_rcept_no")
                     if rc and rc not in _doc_ranges:
                         _doc_ranges[rc] = listing_range(fetch_dart_doc_text(client, key, rc))
+            # 지금 후보가 아닌 문서는 버린다 — 캐시가 끝없이 자라지 않게.
+            wanted = {c.get("doc_rcept_no") for c in cands}
+            for rc in _doc_ranges.keys() - wanted:
+                del _doc_ranges[rc]
             ups = finalize_upcoming(cands, _doc_ranges, today)
             _state.update(dart_day=today, upcoming=ups, dart_error=None)
             record_ok(db, "etf_dart", {

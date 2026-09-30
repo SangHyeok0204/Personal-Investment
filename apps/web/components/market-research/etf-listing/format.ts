@@ -1,6 +1,6 @@
-// [국내상장 ETF] 표기 헬퍼. 페이지와 카드 넷이 같이 쓴다.
+// [국내 ETF 신규상장] 표기 헬퍼.
 //
-// ★원천(워크북)의 금액 단위는 **억원**이다 — 종목 모니터의 fmtWon(원 단위)과 짝이
+// ★금액 단위는 **억원**이다 — 종목 모니터의 fmtWon(원 단위)과 짝이
 //   맞지 않으니 섞어 쓰지 말 것. 여기 함수들은 전부 "값이 이미 억"이라고 가정한다.
 
 export const EMDASH = "−";
@@ -29,25 +29,8 @@ export function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${p > 0 ? "+" : ""}${txt}%`;
 }
 
-/** 이미 % 단위인 값(시총 대비 강도) → "+7.73%". */
-export function fmtRatio(v: number | null | undefined, digits = 2): string {
-  if (v == null || !Number.isFinite(v)) return EMDASH;
-  return `${v > 0 ? "+" : ""}${v.toFixed(digits)}%`;
-}
-
 /** 한국 관례 — 순매수·상승 빨강 / 순매도·하락 파랑. 종목 모니터와 같은 규약. */
 export function tone(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v) || v === 0) return "text-ink-muted";
   return v > 0 ? "text-rose-600" : "text-blue-600";
-}
-
-/** 막대·점 채우기용 원색(SVG fill). tone() 의 CSS 색과 같은 계열. */
-export function toneHex(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v) || v === 0) return "#c3cad4";
-  return v > 0 ? "#e11d48" : "#2563eb";
-}
-
-/** 날짜 'YYYY-MM-DD' → 'MM/DD'. 축 라벨이 길면 겹친다. */
-export function mmdd(d: string): string {
-  return d.length >= 10 ? `${d.slice(5, 7)}/${d.slice(8, 10)}` : d;
 }

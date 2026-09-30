@@ -166,6 +166,23 @@ def test_dart_listing_range_regex_hit_and_miss():
     assert up[0]["est_from"] is None and up[0]["est_to"] is None
 
 
+def test_finalize_upcoming_orders_dated_first_then_latest_filed():
+    def c(no, filed):
+        return {"rcept_no": no, "name": no, "company": "c", "filed": filed, "is_amend": False,
+                "doc_rcept_no": no}
+    cands = [c("old", "2026-09-01"), c("late", "2026-09-10"), c("new", "2026-09-20"),
+             c("early", "2026-09-05"), c("nodate", None)]
+    ranges = {"late": ("2026-10-20", "2026-10-24"), "early": ("2026-10-06", "2026-10-10")}
+    up = m.finalize_upcoming(cands, ranges, date(2026, 9, 30))
+    assert [u["name"] for u in up] == ["early", "late", "nodate", "new", "old"]
+
+
+def test_sync_drops_doc_ranges_no_longer_candidates(db):
+    m._doc_ranges["stale-rcept"] = ("2026-01-01", "2026-01-02")
+    assert m.sync(db, NOW, transport=_transport())["dart"] == "ok"
+    assert "stale-rcept" not in m._doc_ranges
+
+
 def test_num_dash_is_none_and_missing_fee_stays_none():
     assert m._num("-") is None and m._num("") is None and m._num(None) is None
     assert m._num("1,234") == 1234.0
