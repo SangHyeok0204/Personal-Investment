@@ -117,7 +117,7 @@ export default function GuruPage() {
         }
       />
       <PageContainer fit>
-        <CoveragePanel kind="guru" />
+        <CoveragePanel kind="guru" fit />
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label={latest ? `${latest.label} 제출 ${latest.n_filed}/${latest.n_gurus}` : "이번 분기 제출"}

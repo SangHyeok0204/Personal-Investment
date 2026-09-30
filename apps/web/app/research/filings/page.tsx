@@ -127,7 +127,7 @@ export default function FilingsPage() {
     <>
       <Topbar title="종목 공시" />
       <PageContainer fit>
-        <CoveragePanel kind="filings" />
+        <CoveragePanel kind="filings" fit />
         {!connected && !filings.isLoading && <NotConnectedBanner what="보유 종목" />}
         {sourceDown && connected && (
           <SourceDownBanner

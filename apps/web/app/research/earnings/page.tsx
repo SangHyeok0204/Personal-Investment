@@ -94,7 +94,7 @@ export default function EarningsMonitorPage() {
         }
       />
       <PageContainer fit>
-        <CoveragePanel kind="earnings" />
+        <CoveragePanel kind="earnings" fit />
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
             label="이번 주 발표"

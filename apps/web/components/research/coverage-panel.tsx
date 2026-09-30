@@ -44,12 +44,16 @@ function CellValue({ value }: { value: CoverageCell }) {
 export function CoveragePanel({
   kind,
   defaultOpen = true,
+  fit = false,
 }: {
   kind: CoverageKind;
   /** 기본으로 펼쳐 둘지. 화면의 주 콘텐츠면 true(예: /research/stocks). */
   defaultOpen?: boolean;
+  /** `PageContainer fit`(한 화면 맞춤) 위에 얹을 때 — 기본 접힘, 펼쳐도 본문 높이를 제한해
+   *  아래 카드들이 0 높이로 눌리지 않게 한다. */
+  fit?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(fit ? false : defaultOpen);
   const q = useQuery({
     queryKey: ["coverage", kind],
     queryFn: () => getCoverage(kind),
@@ -58,7 +62,7 @@ export function CoveragePanel({
   });
 
   return (
-    <section className="mb-4 overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
+    <section className="mb-4 shrink-0 overflow-hidden rounded-2xl border border-hairline bg-canvas shadow-card">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -84,7 +88,7 @@ export function CoveragePanel({
       </button>
 
       {open && (
-        <div className="p-3.5">
+        <div className={cn("p-3.5", fit && "max-h-[40vh] overflow-y-auto")}>
           {q.isError ? (
             <ApiErrorBanner error={q.error} />
           ) : q.isLoading || !q.data ? (
