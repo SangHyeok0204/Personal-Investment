@@ -103,7 +103,7 @@ services:
       # 파일 드롭 다리(2026-08-11) — n8n 이 ./storage/trigger 에 {job}.request.json 을
       # 떨어뜨리면 윈도우의 trigger_watch 가 실행하고 {job}.result.json 으로 답한다.
       # SSH 를 놓으려다 그 PC 샌드박스 ACL(StrictModes)에 막혀 파일 드롭으로 선회했다.
-      # ★ 트리거 폴더가 S: 가 아니라 여기인 이유. 처음엔 공유 드라이브의 _trigger 였는데 n8n 이
+      # ★ 트리거 폴더가 S: 가 아니라 여기인 이유. 처음엔 사내 경로의 _trigger 였는데 n8n 이
       #   "... is not writable" 로 거부했다. S: 마운트(9p/drvfs) 탓이라 짐작하고 ext4 인
       #   ./storage 로 옮겼지만 **거기서도 같은 오류**가 났다 — 짐작은 틀렸다.
       #   진짜 원인은 위 N8N_RESTRICT_FILE_ACCESS_TO 하나뿐이었다(2026-08-12 확정).

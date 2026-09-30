@@ -1,7 +1,7 @@
 """국내 ETF 신규상장 따라잡기 — KRX(상장·구성종목·거래) + OpenDART(상장 예정), 메모리 캐시.
 
 collector `etf_new_listing.py`·`krx_fetch.py` 에서 순수 로직만 옮겼다(계획 personal-dashboard-scope
-§5 2.3). 회사 드라이브·CHECK 호가(실시간)는 없다 — 실시간 필드는 뺐다.
+§5 2.3). 사내 경로·CHECK 호가(실시간)는 없다 — 실시간 필드는 뺐다.
 
 [따라잡기] `ai_snapshot_sync` 와 같은 방식 — 60초 쉬고, 30분마다 "오늘(KST) 받은 KRX 목록이
 없으면 지금 받는다". 실패하면 1시간 뒤 다시, **마지막 성공 캐시는 그대로 둔다**.

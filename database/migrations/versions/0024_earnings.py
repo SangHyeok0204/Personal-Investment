@@ -5,7 +5,7 @@ Revises: 0023
 Create Date: 2026-09-27
 
 원본 `어닝모니터`는 엑셀(`보유종목정리.xlsx`)이 정본이고 SQLite(`EARNINGS_MONITOR.db`)는 그 미러였다
-(`earnings_store.mirror_master_to_db` — "DB 는 조회용 미러"). 회사 공유 드라이브의 DB 는 이 맥에 없고
+(`earnings_store.mirror_master_to_db` — "DB 는 조회용 미러"). 사내 경로의 DB 는 이 맥에 없고
 zip 에도 없다 → 정본인 엑셀에서 옮긴다(B1 이관 스크립트).
 
 바꾼 것:

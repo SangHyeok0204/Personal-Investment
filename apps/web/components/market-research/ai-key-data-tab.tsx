@@ -199,9 +199,19 @@ export function AiKeyDataTab() {
     ramp: ramp.data,
     epoch: epoch.data,
   };
+  const pending: Partial<Record<AiSourceKey, boolean>> = {
+    npm: npm.isPending,
+    vscode: vscode.isPending,
+    pypi: pypi.isPending,
+    openrouter: openrouter.isPending,
+    tool_calling: toolCalling.isPending,
+    ramp: ramp.isPending,
+    epoch: epoch.isPending,
+  };
   const merged = (status.data?.items ?? []).map((s): AiSourceStatus => {
     const p = payloads[s.source];
-    if (!p) return s;
+    // 콜드 서버: 본문 조회가 아직 도는 중이면 "미확인"이 아니라 "조회 중"(첫 조회는 수십 초 걸린다).
+    if (!p) return s.status === "unknown" && pending[s.source] ? { ...s, status: "fetching" } : s;
     return {
       ...s,
       status: p.status,
@@ -319,6 +329,7 @@ const STATE_META: Record<string, { label: string; dot: string; text: string }> =
   key_missing: { label: "키 없음", dot: "bg-rose-500", text: "text-rose-700" },
   error: { label: "오류", dot: "bg-rose-500", text: "text-rose-700" },
   empty: { label: "비어 있음", dot: "bg-amber-500", text: "text-amber-800" },
+  fetching: { label: "조회 중", dot: "bg-[#A6A6A6] animate-pulse", text: "text-ink-muted" },
 };
 const UNKNOWN_META = { label: "미확인", dot: "bg-[#A6A6A6]", text: "text-ink-muted" };
 const meta = (s: string | undefined) => (s && STATE_META[s]) || UNKNOWN_META;

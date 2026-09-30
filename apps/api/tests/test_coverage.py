@@ -113,8 +113,7 @@ def test_earnings_coverage(api, db):
     assert kpi["결과 보유율"] == "1/2"
     assert kpi["워치포인트"] == "2건"
     assert "import 1" in next(k["hint"] for k in d["kpis"] if k["label"] == "워치포인트")
-    assert kpi["콜 트랜스크립트"] == "0건"
-    assert "미수집" in [k["hint"] for k in d["kpis"] if k["label"] == "콜 트랜스크립트"][0]
+    assert "콜 트랜스크립트" not in kpi  # 무료 원천 없음 → 카드 자체를 두지 않는다(0 으로 채우지 않음)
     row = next(row for row in d["table"]["rows"] if row["key"] == "NVDA")
     assert row["cells"] == ["결과", "이벤트"]  # 2026Q1(결과), 2026Q2(이벤트만)
 

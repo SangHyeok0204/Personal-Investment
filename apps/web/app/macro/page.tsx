@@ -53,6 +53,8 @@ function fmtValue(k: Kind, n: number): string {
   if (k.transform === "mom_diff") {
     // 천명 단위는 만명으로 바꿔 적는다 — "+162천명"보다 "+16.2만명"이 읽힌다.
     if (k.unit === "천명") return `${n > 0 ? "+" : ""}${(n / 10).toFixed(1)}만명`;
+    // ADP 는 **명** 단위로 온다(38,000) — 같은 만명 표기로 맞춘다.
+    if (k.unit === "명") return `${n > 0 ? "+" : ""}${(n / 10_000).toFixed(1)}만명`;
     return `${n > 0 ? "+" : ""}${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
   }
   const digits = k.unit === "건" ? 0 : 2;
@@ -67,6 +69,7 @@ function fmtAxis(k: Kind, n: number): string {
   const trim = (v: number, d: number) => String(Number(v.toFixed(d)));
   if (k.transform === "yoy") return `${trim(n * 100, 1)}%`;
   if (k.transform === "mom_diff" && k.unit === "천명") return `${trim(n / 10, 0)}만`;
+  if (k.transform === "mom_diff" && k.unit === "명") return `${trim(n / 10_000, 1)}만`;
   if (k.unit === "건") return `${trim(n / 10_000, 0)}만`;
   if (k.unit === "%" || k.unit === "%p") return `${trim(n, 2)}%`;
   return trim(n, 1);
@@ -82,6 +85,7 @@ function delta(r: MacroRow, period: string): string {
   if (r.transform === "yoy") return `${sign}${(n * 100).toFixed(2)}%p`;
   if (r.transform === "mom_diff") {
     if (r.unit === "천명") return `${sign}${(n / 10).toFixed(1)}만`;
+    if (r.unit === "명") return `${sign}${(n / 10_000).toFixed(1)}만`;
     return `${sign}${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
   }
   if (r.unit === "%" || r.unit === "%p") return `${sign}${(n * 100).toFixed(0)}bp`;

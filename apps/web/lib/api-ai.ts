@@ -21,7 +21,7 @@ export const AI_SOURCES = [
 export type AiSourceKey = (typeof AI_SOURCES)[number];
 
 /** ok | stale(갱신 실패, 마지막 정상값) | key_missing | error | empty | unknown */
-export type AiSourceState = "ok" | "stale" | "key_missing" | "error" | "empty" | (string & {});
+export type AiSourceState = "ok" | "stale" | "key_missing" | "error" | "empty" | "fetching" | (string & {});
 
 /** [["YYYY-MM-DD", 값]] 오름차순. 결측일은 점이 없다(0 이 아니다). */
 export type AiPoint = [string, number];

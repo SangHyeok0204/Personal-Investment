@@ -655,7 +655,7 @@
   상태 `ok`/`failed` · 원천) · `earnings_results`(실적 · 서프라이즈 · 판정 · 8-K · 발표 후 반응 · 원본 반응 요약) ·
   `earnings_guidance` · `earnings_watchpoints`(ticker·quarter·rank 고유). 모델 추가 · API 시험 DB 비우기 목록에 추가.
   ⚠️`quarter` 는 원본 `derive_fiscal_quarter` 규칙의 **발표일 기준 달력 분기 라벨** — 회사 회계분기 아님(NVDA 8월 = 2026Q2).
-- ⚠️**원천 변경**: `EARNINGS_MONITOR.db` 는 zip 에 **없다**(zip 의 .db 는 Thumbs.db 뿐) — 원본 경로는 회사 공유 드라이브
+- ⚠️**원천 변경**: `EARNINGS_MONITOR.db` 는 zip 에 **없다**(zip 의 .db 는 Thumbs.db 뿐) — 원본 경로는 사내 경로(비공개)
   (`raw\data\_데이터베이스\`, `segment_store.py:21`). 그런데 원본에서 **엑셀이 정본, DB 는 미러**였다
   (`earnings_store.mirror_master_to_db`) → zip 안 `input/processed/보유종목정리.xlsx` 에서 옮긴다(잃는 것 없음).
 - **이관** `scripts/import_earnings_workbook.py`(파싱은 `app/core/earnings_import.py`): 대상 = 내 미국 보유 + 관심종목

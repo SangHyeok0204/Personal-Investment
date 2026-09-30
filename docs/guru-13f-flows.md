@@ -12,10 +12,10 @@
 >
 > | | 경로 |
 > |---|---|
-> | 원본 | 원본: 사내 공유 드라이브(경로 비공개) |
+> | 원본 | 원본: 사내 경로(비공개) |
 > | 벤더 사본 | `apps/collector/collector/guru_flows.py` |
 > | 리포트 생성기 | `…\13F기관내부자\scripts\build_flows_report.py` + `make_report.bat` |
-> | 산출 | 원본: 사내 공유 드라이브(경로 비공개) |
+> | 산출 | 원본: 사내 경로(비공개) |
 >
 > **고칠 일이 생기면 13F 쪽을 고치고 이쪽으로 복사한다.** 두 파일의 차이는 import 경로
 > (`.guru_queries` ↔ `src.storage`/`src.gurus`/`src.normalize`)와 섹터 맵 경로뿐이다.

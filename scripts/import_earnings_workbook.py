@@ -3,7 +3,7 @@
     .venv/bin/python scripts/import_earnings_workbook.py [--xlsx 보유종목정리.xlsx] [--zip 어닝모니터-….zip] [--dry-run]
 
 - 대상 = 내 미국 보유 + 관심종목(GOOG → GOOGL). 펀드 열·시트는 버린다.
-- 원본 DB(`EARNINGS_MONITOR.db`)는 회사 공유 드라이브에만 있고 zip 에 없다 — 정본인 엑셀에서 옮긴다
+- 원본 DB(`EARNINGS_MONITOR.db`)는 사내 경로에만 있고 zip 에 없다 — 정본인 엑셀에서 옮긴다
   (원본에서 DB 는 엑셀의 미러였다).
 - 다시 돌려도 안전: (ticker, quarter) · (ticker, quarter, rank) 로 덮어쓴다. 이미 파이프라인이 채운 값
   (source ≠ 'import')은 건드리지 않는다.

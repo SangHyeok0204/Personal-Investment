@@ -189,7 +189,6 @@ def earnings_coverage(db: Session) -> dict:
         {"label": "워치포인트", "value": f"{n_wp}건",
          "hint": f"import {n_wp_import} · LLM {n_wp_llm} · 결과 채움 {n_wp_result}"},
         {"label": "가이던스", "value": f"{n_guidance}건", "hint": None},
-        {"label": "콜 트랜스크립트", "value": "0건", "hint": "미수집 — 범위 밖(S: 드라이브 임포트 별도)"},
     ]
 
     quarters = [q for (q,) in db.execute(text(
@@ -216,7 +215,7 @@ def earnings_coverage(db: Session) -> dict:
         "kpis": kpis,
         "table": {"columns": quarters, "rows": rows},
         "anomalies": [],
-        "notes": ["콜 트랜스크립트는 수집하지 않습니다(0건, 범위 밖)."],
+        "notes": [],
     }
 
 

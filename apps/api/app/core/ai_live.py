@@ -397,6 +397,9 @@ def status(db) -> list[dict]:
         ss = rows.get(f"ai_{source}")
         payload = slot.payload
         st = payload["status"] if payload else ("key_missing" if key_missing and source in ("openrouter", "tool_calling") else "unknown")
+        # 콜드 스타트: 첫 조회가 원천을 받는 중이면(락 보유) "미확인"이 아니라 "조회 중"이다.
+        if st == "unknown" and not slot.error and slot.lock.locked():
+            st = "fetching"
         if slot.error and payload is not None:
             st = "stale"
         elif slot.error:

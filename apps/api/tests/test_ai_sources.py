@@ -241,6 +241,21 @@ def test_live_cache_falls_back_to_last_good(monkeypatch):
     assert "구조 변경" in stale["note"]
 
 
+def test_status_cold_slot_in_flight_is_fetching_not_degraded(db, monkeypatch):
+    """콜드 API: tool_calling 첫 조회가 도는 동안 상태 띠가 '미확인'(unknown)으로 보이면 안 된다."""
+    monkeypatch.setattr(ai_live.settings, "OPENROUTER_API_KEY", "k")
+    slot = ai_live._Slot()
+    monkeypatch.setitem(ai_live._slots, "tool_calling", slot)
+    by = lambda: {i["source"]: i for i in ai_live.status(db)}  # noqa: E731
+    assert by()["tool_calling"]["status"] == "unknown"  # 아무도 안 물었다
+    with slot.lock:  # get() 이 원천을 받는 중
+        item = by()["tool_calling"]
+        assert item["status"] == "fetching" and not item["ok"]
+    slot.error = "ReadTimeout"
+    with slot.lock:  # 실패 뒤 재시도 중이면 오류가 우선
+        assert by()["tool_calling"]["status"] == "error"
+
+
 # ── 스냅샷 업서트 멱등 ───────────────────────────────────────────────────────
 
 def test_snapshot_upsert_is_idempotent(db):

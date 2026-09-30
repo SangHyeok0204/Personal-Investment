@@ -18,8 +18,8 @@ Next.js 화면에서 작업 실행
 - **n8n** — 스케줄 자동화. `POST /internal/jobs` 로 작업을 만들기도 하고, 파일 드롭으로 일을
   넘기기도 한다(`storage/trigger`). 자세한 건 `workflows/n8n/README.md`.
 
-> 2026-09-30: 사내 공유 드라이브·LAN 에 묶여 있던 `collector` 서비스는 폐기했다. 남은 화면의 원천은
-> 무료 공개 데이터(FRED · KRX · OpenDART 등)를 api 가 직접 읽는다 — 회사 드라이브·LAN 의존 0.
+> 2026-09-30: 사내 경로·LAN 에 묶여 있던 `collector` 서비스는 폐기했다. 남은 화면의 원천은
+> 무료 공개 데이터(FRED · KRX · OpenDART 등)를 api 가 직접 읽는다 — 사내 경로·LAN 의존 0.
 
 ## 1. 목적
 
