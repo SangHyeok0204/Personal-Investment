@@ -172,7 +172,7 @@ export const navItems: NavItem[] = [
         label: "시장 리서치",
         href: "/research/market",
         status: "live",
-        hint: "관심종목 · 시장지표 · 계절성 · AI Key Data",
+        hint: "관심종목 · 시장지표 · 계절성 · AI Key Data · 국내 ETF 신규상장",
       },
       {
         // 대분류 → 중분류 → 기업 카드 뷰. 데이터: storage/valuechain/*.ttl.

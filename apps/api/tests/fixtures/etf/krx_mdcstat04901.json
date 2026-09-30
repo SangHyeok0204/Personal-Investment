@@ -1,0 +1,134 @@
+{
+ "output": [
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "금융투자",
+   "ASK_TRDVOL": "8,994",
+   "BID_TRDVOL": "7,387",
+   "NETBID_TRDVOL": "-1,607",
+   "ASK_TRDVAL": "91,350,849",
+   "BID_TRDVAL": "74,966,210",
+   "NETBID_TRDVAL": "-16,384,639"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "보험",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "투신",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "사모",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "은행",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "기타금융",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "연기금 등",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "TS",
+   "INVST_TP_NM": "기관합계",
+   "ASK_TRDVOL": "8,994",
+   "BID_TRDVOL": "7,387",
+   "NETBID_TRDVOL": "-1,607",
+   "ASK_TRDVAL": "91,350,849",
+   "BID_TRDVAL": "74,966,210",
+   "NETBID_TRDVAL": "-16,384,639"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "기타법인",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "개인",
+   "ASK_TRDVOL": "315",
+   "BID_TRDVOL": "1,922",
+   "NETBID_TRDVOL": "1,607",
+   "ASK_TRDVAL": "3,200,800",
+   "BID_TRDVAL": "19,585,439",
+   "NETBID_TRDVAL": "16,384,639"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "외국인",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "",
+   "INVST_TP_NM": "기타외국인",
+   "ASK_TRDVOL": "0",
+   "BID_TRDVOL": "0",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "0",
+   "BID_TRDVAL": "0",
+   "NETBID_TRDVAL": "0"
+  },
+  {
+   "CONV_OBJ_TP_CD": "TS",
+   "INVST_TP_NM": "전체",
+   "ASK_TRDVOL": "9,309",
+   "BID_TRDVOL": "9,309",
+   "NETBID_TRDVOL": "0",
+   "ASK_TRDVAL": "94,551,649",
+   "BID_TRDVAL": "94,551,649",
+   "NETBID_TRDVAL": "0"
+  }
+ ]
+}

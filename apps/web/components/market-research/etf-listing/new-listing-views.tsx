@@ -2,22 +2,16 @@
 
 import type { EtfNewListingPayload } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { RollingText } from "@/components/rolling-text";
 import { EMDASH, fmtEok, fmtPct, tone } from "./format";
 
-// ★성적표의 실시간 값은 10분마다 새로 받는다(사용자 지시 2026-09-02). 값이 바뀌면
-//   기존 숫자가 아래로 빠지고 새 숫자가 내려온다. 길이는 **1.5초** — 전역 CSS(0.35s)를
-//   고치면 iNAV·WRAP·전광판이 같이 느려지므로 이 화면에서만 준다.
-const ROLL_MS = 1500;
-
-// [국내상장 ETF] 왼쪽 박스 ①②가 가운데에 띄우는 두 화면.
+// [국내 ETF 신규상장] 시장 리서치 `etf` 탭의 두 화면.
 //
 // ★★두 화면이 답하는 게 다르다.
-//   ① 성적표(확정·사후)  = 이미 상장한 종목이 그날 얼마를 끌어모았나.
-//        원천은 daily_analysis/YYYYMMDD_신규상장.txt (장 마감 뒤 워크북 매크로가 굽는다).
-//        수익률은 txt 에 없어 워크북 등락률을 이름으로 붙였다.
-//   ② 상장 정보(확정+예정) = 오늘 상장하는/할 종목의 총보수·구성종목·실시간 시세.
-//        확정 상장일은 **KRX** 만 준다. DART 예비투자설명서는 예상 **범위**라 따로 둔다.
+//   ① 성적표(확정·사후)  = 가장 최근 상장일에 상장한 종목이 그날 얼마를 끌어모았나.
+//        원천은 KRX(거래대금·등락률 MDCSTAT04301, 개인 순매수 MDCSTAT04901) — 상장일 하루치.
+//   ② 상장 정보(확정+예정) = 오늘 상장한 종목의 총보수·구성종목, 그리고 DART 에 올라온 예정 건.
+//        확정 상장일은 **KRX** 만 준다. DART 는 예상 범위조차 표지에 없어 대부분 '미정'이다.
+//   ⚠️실시간 시세(CHECK 호가)는 회사 PC 원천이라 없앴다(2026-09-30).
 //
 // ★★2026-09-02 사용자 지시로 표기를 바꿨다.
 //   · "금일 신규 상장된 ETF가 없습니다. 아래는 최근…" **안내 배너를 뺐다**. 대신 종목명
@@ -72,15 +66,8 @@ function mmdd(d: string | null | undefined): string {
 }
 
 /* ── ① 신규 상장 ETF 성적표 ───────────────────────────────────────────────
-   ★★2026-09-02 사용자 지시로 **iNAV 모니터의 ETF 카드**와 같은 꼴로 맞췄다. 한 줄에 3장.
-     iNAV 카드가 [현재가 크게 + 등락률 칩 + 미니지표 표]인데, 여기는 호가를 못 보여주므로
-     **현재가 자리에 개인 순매수**를 놓는다. 이 화면이 묻는 게 "얼마나 붙었나" 라서
-     그 숫자가 헤드라인이어야 한다.
-   ★★한 카드 안에 시점이 둘 섞인다. 헤드라인 순매수·수익률·거래대금은 **상장일** 값이고
-     (워크북이 그날 굽고 끝난다), 등락률 칩·거래대금(현재)·거래량은 **지금** 값이다
-     (CHECK, 10초마다 새로 받고 바뀌면 1.5초에 걸쳐 굴러 내려온다).
-     그래서 미니지표 라벨에 시점을 박아 둔다 — '거래대금' 이 두 번 나오는데 상장일 18억과
-     지금 5억이 라벨 없이 나란히 있으면 모순으로 읽힌다. */
+   한 줄에 3장. 헤드라인은 **개인 순매수** — 이 화면이 묻는 게 "얼마나 붙었나" 라서.
+   값은 전부 **상장일** 하루치다(라벨에 날짜를 박는다). */
 
 function MiniMetric({
   label,
@@ -99,7 +86,7 @@ function MiniMetric({
   );
 }
 
-/** 등락률 칩 — iNAV 카드와 같은 규칙(상승 빨강 / 하락 파랑). 값이 바뀌면 구른다. */
+/** 등락률 칩 — 상승 빨강 / 하락 파랑. 값은 % 단위. */
 function ChangeChip({ pct }: { pct: number | null | undefined }) {
   if (pct == null) {
     return <span className="text-[12px] text-ink-faint">{EMDASH}</span>;
@@ -115,10 +102,7 @@ function ChangeChip({ pct }: { pct: number | null | undefined }) {
         !up && !down && "text-ink-secondary",
       )}
     >
-      <RollingText
-        text={`${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
-        durationMs={ROLL_MS}
-      />
+      {`${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
     </span>
   );
 }
@@ -136,25 +120,20 @@ export function ReportView({
     return (
       <Empty
         text="금일 신규 상장된 ETF가 없습니다"
-        sub="상장은 보통 주 1회(화요일)입니다. 장 마감 뒤 성적표가 만들어집니다."
+        sub={data?.note ?? "상장은 보통 주 1회(화요일)입니다. KRX 상장 목록 기준입니다."}
       />
     );
   }
   const day = mmdd(rep.date);
-  const stale = data?.realtime_stale ?? true;
-  const rtWhen = data?.realtime_asof ? data.realtime_asof.slice(11, 16) : null;
 
   return (
     <div className="h-full overflow-y-auto">
       <ViewHead
         title="신규 상장 ETF 성적표"
-        note={`${rep.date} · ${rep.rows.length}종목${
-          stale ? ` · 시세 ${rtWhen ?? "?"} 기준(실시간 아님)` : " · 10초 갱신"
-        }`}
+        note={`${rep.date} 상장 · ${rep.rows.length}종목 · KRX`}
       />
       <div className="grid grid-cols-3 gap-2.5 p-2.5">
         {rep.rows.map((r) => {
-          const rt = r.realtime;
           return (
             <div
               key={`${r.rank}-${r.name}`}
@@ -174,7 +153,7 @@ export function ReportView({
                 </div>
               </div>
 
-              {/* iNAV 카드의 현재가 자리 = 개인 순매수(상장일). 오른쪽은 지금 등락률. */}
+              {/* 헤드라인 = 개인 순매수(상장일). 오른쪽은 상장일 등락률. */}
               <div className="flex items-center gap-1.5">
                 <span
                   className={cn(
@@ -184,7 +163,7 @@ export function ReportView({
                 >
                   {fmtEok(r.net_buy)}
                 </span>
-                <ChangeChip pct={rt?.change} />
+                <ChangeChip pct={r.ret == null ? null : r.ret * 100} />
               </div>
               <div className="-mt-1 text-[10px] font-semibold text-ink-faint">
                 개인 순매수 · {day} 상장일
@@ -200,29 +179,7 @@ export function ReportView({
                 <MiniMetric label="보수율">
                   {r.fee == null ? EMDASH : `${Number(r.fee.toFixed(3))}%`}
                 </MiniMetric>
-                <MiniMetric label="거래대금 현재">
-                  <RollingText
-                    text={fmtEok(rt?.trade_value, false)}
-                    durationMs={ROLL_MS}
-                  />
-                </MiniMetric>
-                <MiniMetric label="거래량 현재">
-                  <RollingText
-                    text={
-                      rt?.volume == null
-                        ? EMDASH
-                        : `${Math.round(rt.volume).toLocaleString("en-US")}주`
-                    }
-                    durationMs={ROLL_MS}
-                  />
-                </MiniMetric>
               </dl>
-
-              {!rt && (
-                <p className="text-[10.5px] font-semibold text-ink-faint">
-                  실시간 시세 없음. CHECK 관심목록 밖입니다.
-                </p>
-              )}
             </div>
           );
         })}
@@ -237,14 +194,11 @@ function Stat({
   value,
   toneClass,
   note,
-  live,
 }: {
   label: string;
   value: string;
   toneClass?: string;
   note?: string;
-  /** true 면 값이 바뀔 때 굴러 내려온다(10분마다 새로 받는 값). */
-  live?: boolean;
 }) {
   return (
     <div className="flex min-w-0 flex-col items-center justify-center rounded-lg border border-hairline bg-canvas-soft px-2 py-2">
@@ -257,7 +211,7 @@ function Stat({
           toneClass ?? "text-ge-navy",
         )}
       >
-        {live ? <RollingText text={value} durationMs={ROLL_MS} /> : value}
+        {value}
       </span>
       {note && (
         <span className="mt-1 text-[10px] font-semibold leading-none text-ink-faint">
@@ -285,17 +239,15 @@ export function ListingView({
   //   '상장 임박' 으로 올라온다.
   const todayRows = listing?.is_today ? listing.rows : [];
   const has = todayRows.length > 0;
-  // ★낡은 envelope 을 "실시간" 이라 부르지 않는다. 장 마감 뒤·CHECK PC 정지 뒤의 마지막
-  //   값이 그대로 남는데, 그걸 실시간이라 쓰면 그 자체가 틀린 말이 된다.
-  const stale = data?.realtime_stale ?? true;
-  const rtWhen = data?.realtime_asof ? data.realtime_asof.slice(11, 16) : null;
   const day = mmdd(listing?.date);
+  // 상장일 거래 수치는 성적표 행에 있다 — 종목코드로 잇는다(서버가 한 번 계산한 값).
+  const stats = new Map((data?.report.rows ?? []).map((r) => [r.ticker, r]));
 
   if (!has && upcoming.length === 0) {
     return (
       <Empty
         text="상장 예정인 ETF가 없습니다"
-        sub="금일 상장도, DART 예비투자설명서에 잡힌 예정 건도 없습니다."
+        sub={data?.note ?? "금일 상장도, DART 펀드공시에 잡힌 예정 건도 없습니다."}
       />
     );
   }
@@ -306,16 +258,14 @@ export function ListingView({
         title={has ? "금일 상장 ETF" : "상장 예정 ETF"}
         note={
           has
-            ? `${listing!.date} · ${todayRows.length}종목${
-                stale ? ` · 시세 ${rtWhen ?? "?"} 기준(실시간 아님)` : " · 실시간"
-              }`
+            ? `${listing!.date} · ${todayRows.length}종목 · 장중 값은 16시 이후 확정`
             : `상장 예정 ${upcoming.length}건`
         }
       />
 
       <div className={has ? "space-y-2.5 p-3" : "hidden"}>
         {todayRows.map((e) => {
-          const rt = e.realtime;
+          const st = stats.get(e.ticker);
           return (
             <div
               key={e.ticker || e.name}
@@ -357,37 +307,16 @@ export function ListingView({
                 />
                 <Stat
                   label="등락률"
-                  value={
-                    rt?.change == null
-                      ? EMDASH
-                      : `${rt.change > 0 ? "+" : ""}${rt.change.toFixed(2)}%`
-                  }
-                  toneClass={tone(rt?.change)}
-                  note={stale && rt ? "실시간 아님" : undefined}
-                  live
+                  value={fmtPct(st?.ret)}
+                  toneClass={tone(st?.ret)}
                 />
+                <Stat label="거래대금" value={fmtEok(st?.trade_value, false)} />
                 <Stat
-                  label="거래대금"
-                  value={fmtEok(rt?.trade_value, false)}
-                  note={stale && rt ? `${rtWhen ?? ""} 기준` : undefined}
-                  live
-                />
-                <Stat
-                  label="거래량"
-                  value={
-                    rt?.volume == null
-                      ? EMDASH
-                      : `${Math.round(rt.volume).toLocaleString("en-US")}주`
-                  }
-                  live
+                  label="개인 순매수"
+                  value={fmtEok(st?.net_buy)}
+                  toneClass={tone(st?.net_buy)}
                 />
               </div>
-
-              {!rt && (
-                <p className="mt-2 text-[11.5px] font-semibold text-ink-faint">
-                  실시간 시세 없음. CHECK 관심목록 밖의 종목입니다.
-                </p>
-              )}
 
               <div className="mt-2 flex items-baseline gap-2">
                 <span className="shrink-0 text-[11.5px] font-bold text-ink-secondary">
@@ -429,7 +358,7 @@ export function ListingView({
               상장 예정
             </span>
             <span className="text-[10.5px] font-semibold text-ink-faint">
-              DART 예비투자설명서 · 날짜는 범위 · 이미 상장한 건은 제외
+              DART 펀드공시(일괄신고서·투자설명서) · 이미 상장한 건은 제외
             </span>
           </div>
           <div className="space-y-2 p-3">
@@ -452,23 +381,13 @@ export function ListingView({
                       예상 상장
                     </div>
                     <div className="mt-1 text-[13px] font-extrabold leading-none tabular-nums text-ge-point">
-                      {mmdd(u.est_from)}~{mmdd(u.est_to)}
+                      {u.est_from ? `${mmdd(u.est_from)}~${mmdd(u.est_to)}` : "미정"}
                     </div>
                   </div>
                 </div>
-                {u.holdings.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
-                    {u.holdings.slice(0, 4).map((h) => (
-                      <span
-                        key={h.name}
-                        className="rounded bg-canvas-soft px-1.5 py-0.5 text-[11px] font-semibold text-ink-secondary"
-                      >
-                        {h.name}{" "}
-                        <span className="tabular-nums">
-                          {h.weight == null ? EMDASH : `${h.weight}%`}
-                        </span>
-                      </span>
-                    ))}
+                {u.filed && (
+                  <div className="mt-1 text-[11px] text-ink-faint">
+                    {u.is_amend ? "정정 " : ""}공시 {u.filed}
                   </div>
                 )}
               </div>

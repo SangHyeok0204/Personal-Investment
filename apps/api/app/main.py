@@ -23,11 +23,13 @@ from app.api import (
     earnings_monitor,
     valuechain,
     coverage,
+    etf,
 )
 from app.core.daily_sync import daily_sync_loop
 from app.core.seasonality_sync import seasonality_sync_loop
 from app.core.ai_snapshot_sync import ai_snapshot_sync_loop
 from app.core.sec_sync import sec_sync_loop
+from app.core.etf_listing_sync import etf_listing_sync_loop
 from app.core.errors import register_exception_handlers
 
 
@@ -43,6 +45,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(sec_sync_loop()),
         # AI Key Data: VS Code·PyPI 는 현재값만 준다 — 오늘(KST) 스냅샷이 없으면 찍는다.
         asyncio.create_task(ai_snapshot_sync_loop()),
+        # 국내 ETF 신규상장: 오늘(KST) KRX 목록이 없으면 받는다(+DART 상장 예정). 메모리 캐시.
+        asyncio.create_task(etf_listing_sync_loop()),
     ]
     try:
         yield
@@ -91,3 +95,4 @@ app.include_router(insiders.router)
 app.include_router(earnings_monitor.router)
 app.include_router(valuechain.router)
 app.include_router(coverage.router)
+app.include_router(etf.router)

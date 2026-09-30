@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { AiLineChart, type ChartSeries } from "@/components/ai-key-data/ai-line-chart";
+import { MacroChart } from "@/components/charts/macro-chart";
 import { EMDASH } from "@/components/format";
 import {
   CardEmpty,
@@ -22,6 +23,7 @@ import {
   type AiSourcePayload,
   type AiSourceStatus,
 } from "@/lib/api-ai";
+import { getMacroSeries, type MacroHistorySeries } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // AI Key Data — 모니터링 전용(입력 없음). 계획 §3.4 · §11 "화면" · §12-3.
@@ -301,6 +303,9 @@ export function AiKeyDataTab() {
         >
           <EpochBlock payload={epoch.data} loading={epoch.isLoading} />
         </Section>
+
+        {/* ⑤ ─────────────────────────────────────────────────────────── */}
+        <RateMacroSection />
       </div>
     </div>
   );
@@ -1266,3 +1271,63 @@ function EpochBlock({ payload, loading }: { payload: AiSourcePayload | undefined
   );
 }
 
+
+// ── ⑤ 금리·매크로 연계 ──────────────────────────────────────────────────────
+// ★구 collector 금리 카드(정책금리·기대인플레·WTI·ADP)를 FRED 행으로 옮겼다(계획 2.1·2.2).
+//   새 API 없이 /macro 와 같은 `/market/macro/series` 를 같은 queryKey 로 읽는다.
+
+const RATE_IDS = ["DFEDTARU", "EXPINF1YR", "DCOILWTICO", "ADPMNUSNERSA"];
+
+function fmtRate(s: MacroHistorySeries, v: number): string {
+  if (s.transform === "mom_diff") return `${v > 0 ? "+" : ""}${Math.round(v).toLocaleString("en-US")}${s.unit}`;
+  if (s.unit === "$") return `$${v.toFixed(2)}`;
+  return `${v.toFixed(2)}${s.unit}`;
+}
+
+function RateMacroSection() {
+  const q = useQuery({
+    queryKey: ["macro-series", "5y"],
+    queryFn: () => getMacroSeries("5y"),
+    staleTime: 10 * 60_000,
+  });
+  const series = RATE_IDS.map((id) => q.data?.series.find((s) => s.series_id === id)).filter(
+    (s): s is MacroHistorySeries => s != null,
+  );
+  return (
+    <section className="flex flex-col gap-2.5">
+      <header className="flex flex-wrap items-end gap-x-3 gap-y-1 border-b border-ink/80 pb-1.5">
+        <h2 className="text-[15px] font-extrabold tracking-tight text-ge-navy">
+          <span className="mr-1.5 text-ge-point">⑤</span>금리·매크로 연계
+        </h2>
+        <span className="pb-px text-[11.5px] font-medium text-ink-muted">
+          FRED 월말 값 · 5년 · 전체 지표는 매크로 화면
+        </span>
+      </header>
+      {q.isError && <SourceDownBanner source="FRED 매크로" detail="/market/macro/series 조회에 실패했습니다." />}
+      {q.isLoading && <CardEmpty text="불러오는 중" />}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {series.map((s) => {
+          const lastPt = s.points[s.points.length - 1];
+          return (
+            <StubCard key={s.series_id} title={s.name}>
+              <div className="flex items-baseline justify-between px-1 text-[12px]">
+                <b className="tabular-nums text-ink">{lastPt ? fmtRate(s, lastPt[1]) : EMDASH}</b>
+                <span className="text-ink-muted">{lastPt ? `${lastPt[0]} · ${s.note ?? ""}` : s.note}</span>
+              </div>
+              <MacroChart
+                points={s.points}
+                start={q.data!.start}
+                end={q.data!.end}
+                bands={q.data!.recessions}
+                height={110}
+                zeroLine={s.transform === "mom_diff"}
+                axisFormat={(v) => fmtRate(s, v)}
+                tooltipFormat={(v) => fmtRate(s, v)}
+              />
+            </StubCard>
+          );
+        })}
+      </div>
+    </section>
+  );
+}

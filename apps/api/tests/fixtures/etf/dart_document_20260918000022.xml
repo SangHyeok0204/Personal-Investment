@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+
+<DOCUMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="dart4.xsd">
+
+<DOCUMENT-NAME ACODE="10611">투자설명서(집합투자증권)</DOCUMENT-NAME>
+<FORMULA-VERSION ADATE="20231020">6.0</FORMULA-VERSION>
+<COMPANY-NAME AREGCIK="00243553">신한자산운용(주)</COMPANY-NAME>
+
+
+<BODY ATOCID="2">
+
+<COVER>
+
+<TABLE ACLASS="NORMAL" AFIXTABLE="N" WIDTH="626" BORDER="1">
+
+<COLGROUP WIDTH="626">
+<COL WIDTH="42"></COL>
+<COL WIDTH="42"></COL>
+<COL WIDTH="42"></COL>
+<COL WIDTH="42"></COL>
+<COL WIDTH="42"></COL>
+<COL WIDTH="41"></COL>
+<COL WIDTH="375"></COL>
+</COLGROUP>
+
+<TBODY>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="107">
+<TD VALIGN="MIDDLE" WIDTH="242" HEIGHT="100" USERMARK="F-13 B 0XFFFFFF BC0X28BFFF" COLSPAN="6"> 투자위험등급 2등급[높은 위험 ]</TD>
+
+<TD WIDTH="366" HEIGHT="206" VALIGN="MIDDLE" ROWSPAN="3">
+<SPAN USERMARK="F-13 B">신한자산운용㈜</SPAN>
+<SPAN USERMARK="F-13 ">는 이 투자신탁의 </SPAN>
+<SPAN USERMARK="F-15 BU">투자대상 자산의 종류 및 위험도</SPAN>
+<SPAN USERMARK="F-13 ">를 감안하여 </SPAN>
+<SPAN USERMARK="F-14 BU">2등급으로 분류</SPAN>
+<SPAN USERMARK="F-13 ">하였습니다. </SPAN>
+<SPAN USERMARK="F-13 BU">펀드의 위험 등급은 운용실적, 시장 상황 등에 따라 변경될 수 있다는 점을 유의하여 투자판단을 하시기 바랍니다.</SPAN>
+</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="23" USERMARK="B 0XFFFFFF BC0X1814FF">1</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="23" USERMARK="B 0XFFFFFF BC0X28BFFF">2</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="23" USERMARK="B 0XFFFFFF BC0X57CF8A">3</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="23" USERMARK="0XFFFFFF BC0XEEAE00">4</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="23" USERMARK="0XFFFFFF BC0XBD6F00">5</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="32" HEIGHT="23" USERMARK="0XFFFFFF BC0X9D3272">6</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="76">
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="69" USERMARK="0X0000FF">매우높은위험</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="69" USERMARK="B 0XFFFFFF BC0X28BFFF">높은위험</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="69" USERMARK="0X57CF8A">다소높은위험</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="69" USERMARK="0XEEAE00">보통위험</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="33" HEIGHT="69" USERMARK="0XBD6F00">낮은위험</TD>
+<TD ALIGN="CENTER" VALIGN="MIDDLE" WIDTH="32" HEIGHT="69" USERMARK="0X9D3272">매우낮은위험</TD>
+</TR>
+</TBODY>
+</TABLE>
+<P></P>
+<COVER-TITLE ATOC="Y" AASSOCNOTE="COVER" ATOCID="1" ENG="Prospectus">투 자 설 명 서</COVER-TITLE>
+<P>이 투자설명서는 신한SOL글로벌DRAM반도체플러스증권상장지수투자신탁[주식]에 대한 자세한 내용을 담고 있습니다. 따라서 신한SOL글로벌DRAM반도체플러스증권상장지수투자신탁[주식]의 수익증권을 매입하기 전에 반드시 증권신고서 또는 이 투자설명서를 읽어보시기 바랍니다.</P>
+
+<TABLE-GROUP ACLASS="_FUND_MAIN_" ADELETETABLE="N">
+
+<TABLE ACLASS="EXTRACTION" AFIXTABLE="Y" WIDTH="600" BORDER="0">
+
+<COLGROUP WIDTH="600">
+<COL WIDTH="171"></COL>
+<COL WIDTH="224"></COL>
+<COL WIDTH="92"></COL>
+<COL WIDTH="85"></COL>
+<COL WIDTH="28"></COL>
+</COLGROUP>
+
+<TBODY>
+
+<TR ACOPY="N" ADELETE="N" HEIGHT="76">
+<TD WIDTH="162" HEIGHT="69" AUPDATECONT="N" ENG="1. Name of the collective investment scheme:">1. 집합투자기구 명칭 :</TD>
+<TE WIDTH="215" HEIGHT="69" ACODE="FUND_NAME">신한SOL글로벌DRAM반도체플러스증권상장지수투자신탁[주식]</TE>
+<TD WIDTH="83" HEIGHT="69" AUPDATECONT="N" ENG="(Fund code:">(펀드코드 :</TD>
+<TE WIDTH="76" HEIGHT="69" ACODE="FUND_CODE" ALIGN="CENTER">EY520</TE>
+<TD WIDTH="19" HEIGHT="69" AUPDATECONT="N">)</TD>
+</TR>
+
+<TR ACOPY="N" ADELETE="N" HEIGHT="30">
+<TD COLSPAN="5" WIDTH="591" HEIGHT="23"></TD>
+</TR>
+
+<TR ACOPY="N" ADELETE="N" HEIGHT="30">
+<TD WIDTH="162" HEIGHT="23" AUPDATECONT="N" ENG="2. Name of collective investment business entity">2. 집합투자업자 명칭 :</TD>
+<TE COLSPAN="4" WIDTH="420" HEIGHT="23" ACODE="FUND_TRD">신한자산운용(주)</TE>
+</TR>
+</TBODY>
+</TABLE>
+</TABLE-GROUP>
+<P></P>
+
+<TABLE ACLASS="NORMAL" AFIXTABLE="N" WIDTH="600" BORDER="0">
+
+<COLGROUP WIDTH="600">
+<COL WIDTH="240"></COL>
+<COL WIDTH="360"></COL>
+</COLGROUP>
+
+<TBODY>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="99">
+<TD WIDTH="231" HEIGHT="92">3. 판   매   회   사 :</TD>
+<TD WIDTH="351" HEIGHT="92">각 판매회사 본.지점[판매회사에 대한 자세한 내용은 집합투자업자(www. shinhanfund.com)의 인터넷홈페이지를 참고하여 주시기 바랍니다.]</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="53">
+<TD WIDTH="231" HEIGHT="46">4. 작 성 기 준 일 :</TD>
+<TD WIDTH="351" HEIGHT="46">2026년 09월 02일</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="53">
+<TD WIDTH="231" HEIGHT="46">5. 증권신고서 효력발생일 :</TD>
+<TD WIDTH="351" HEIGHT="46">2026년 09월 18일</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD WIDTH="231" HEIGHT="23">6. 모집(매출) 증권의 종류 및 수 :</TD>
+<TD WIDTH="351" HEIGHT="23">투자신탁의 수익증권(10조좌)</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="53">
+<TD WIDTH="231" HEIGHT="46">[모집(매출) 총액 :          ]</TD>
+<TD WIDTH="351" HEIGHT="46"></TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="53">
+<TD WIDTH="231" HEIGHT="46">7. 모집(매출) 기간(판매기간) : </TD>
+<TD WIDTH="351" HEIGHT="46">2026년 09월 18일(예정)부터 투자신탁 해지일까지 </TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD WIDTH="231" HEIGHT="23"></TD>
+<TD WIDTH="351" HEIGHT="23"></TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">8. 집합투자증권신고서 및 투자설명서의 열람장소</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">   가. 집합투자증권신고서</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">          전자문서 : 금융위(금감원) 전자공시시스템 →  http://dart.fss.or.kr</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">   나. 투자설명서</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">          전자문서 : 금융위(금감원) 전자공시시스템 →  http://dart.fss.or.kr</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="53">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="46">          서면문서 : 집합투자업자(www.shinhanfund.com), 판매회사 및 한국금융투자협회                         (www.kofia.or.kr)의 인터넷홈페이지를참고하여주시기바랍니다.</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23">9. (안정조작 또는 시장조성 관련)</TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="30">
+<TD COLSPAN="2" WIDTH="591" HEIGHT="23"></TD>
+</TR>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="76">
+
+<TD COLSPAN="2" WIDTH="591" HEIGHT="69">
+<P>※ 이 투자설명서는 효력발생일 이후에도 기재사항 중 일부가 변경될 수 있습니다. </P>
+<P>ㅇ발생일까지 증권신고서의 기재사항 중 일부가 변경될 수 있으며, 개방형 집합투자증권인 경우 효력발생일 이후에도 변경될 수 있습니다.</P>
+</TD>
+</TR>
+</TBODY>
+</TABLE>
+
+<TABLE ACLASS="NORMAL" AFIXTABLE="N" WIDTH="600" BORDER="1">
+
+<COLGROUP WIDTH="600">
+<COL WIDTH="600"></COL>
+</COLGROUP>
+
+<TBODY>
+
+<TR ACOPY="Y" ADELETE="Y" HEIGHT="157">
+<TD WIDTH="591" HEIGHT="150" AUPDATECONT="N" USERMARK="F-BT13 B 0X0000FF" ENG="Please note that the Financial Services Commission does not verify the accuracy or truthfulness of the information presented in the prospectus, nor does it guarantee or endorse the value of the securities. Additionally, these collective investment securities are performance-based dividend products not covered by the Depositor Protection Act. Therefore, investing in them carries the risk of potential loss of principal investment. Please exercise caution when considering these investments.">금융위원회가 투자설명서의 기재사항이 진실 또는 정확하다는 것을 인정하거나 그 증권의 가치를 보증 또는 승인하지 아니함을 유의하시기 바랍니다.또한 이 집합투자증권은「예금자보호법」에 의한 보호를 받지 않는 실적배당상품으로 투자원금의 손실이 발생할 수 있으므로 투자에 신중을 기하여 주시기 바랍니다. </TD>
+</TR>
+</TBODY>
+</TABLE>
+<PGBRK></PGBRK>
+</COVER>
+
+<LIBRARY>
+<SECTION-1 ACLASS="MANDATORY" APARTSOURCE="SOURCE">
+<TITLE ATOC="Y" ATOCID="2" ENG="[Main Text]">[ 본 문 ]</TITLE>
+
+</SECTION-1></LIBRARY></BODY></DOCUMENT>

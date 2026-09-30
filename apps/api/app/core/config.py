@@ -57,5 +57,11 @@ class Settings(BaseSettings):
     # AI Key Data — OpenRouter rankings-daily(토큰·tool_calling). 비어 있으면 호출하지 않고 "키 미설정".
     OPENROUTER_API_KEY: str = ""
 
+    # 국내 ETF 신규상장(core/etf_listing_sync) — **개인** 무료 계정. 비어 있으면 호출하지 않고
+    # source_status 에 "키 미설정"을 남긴다. ⚠️값은 저장소에 두지 않는다(.env.local·.env).
+    KRX_USER: str = ""
+    KRX_PW: str = ""
+    OPENDART_API_KEY: str = ""
+
 
 settings = Settings()

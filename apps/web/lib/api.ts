@@ -95,77 +95,59 @@ export function getJobs(
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
-/* ── [국내상장 ETF] 신규상장 세 갈래 ────────────────────────────────────────
-   원천이 넷이고 주인이 달라 collector 가 가져다 붙인다(etf_new_listing.py 주석 참조).
-   ★DART 는 확정 상장일을 주지 않는다 — 예상 **범위**만 준다. 그래서 확정(`listing`,
-     KRX LIST_DD)과 예정(`upcoming`, DART est_listing)이 따로 온다. 섞으면 "오늘 상장"
-     이라 써 놓고 다음 주에 상장하는 일이 생긴다. */
+/* ── [국내 ETF 신규상장] `core/etf_listing_sync` (KRX·OpenDART, 개인 무료 키) ──────────
+   ★DART 는 확정 상장일을 주지 않는다. 그래서 확정(`listing`, KRX LIST_DD)과
+     예정(`upcoming`, DART 펀드공시)이 따로 온다. 섞으면 "오늘 상장"이라 써 놓고
+     다음 주에 상장하는 일이 생긴다. ⚠️실시간 시세 필드는 없다(원천이 회사 PC 였다). */
 export interface EtfListingHolding {
   name: string;
+  /** % — KRX 비중이 '-' 면 평가금액 비중. 둘 다 없으면 null. */
   weight: number | null;
 }
-/** 성적표 한 줄 — daily_analysis/YYYYMMDD_신규상장.txt. 금액 단위는 억원.
- *  `ret` 는 txt 에 없어 워크북 등락률을 이름으로 붙인 값(소수)이다. */
+/** 성적표 한 줄 — 상장일 하루치 KRX 값. 금액 단위는 **억원**, `ret` 는 소수(0.0153 = 1.53%). */
 export interface EtfListingReportRow {
   rank: number;
   name: string;
-  /** 상장일 기준(txt). 아래 realtime 의 같은 이름 값과 **시점이 다르다**. */
-  trade_value: number | null;
-  net_buy: number | null;
-  ret: number | null;
-  /** 아래 셋은 서버가 이름으로 이어 붙인 KRX·CHECK 값. 못 찾으면 빈 값/null. */
   ticker: string;
   fee: number | null;
-  realtime: EtfListingRealtime | null;
-}
-/** CHECK 호가 envelope 의 newEtfs. ⚠️단위가 섞여 있다 —
- *  trade_value·market_cap·indiv_net 은 **억원**, volume 은 **주**, change 는 **%**. */
-export interface EtfListingRealtime {
-  price: number | null;
-  change: number | null;
   trade_value: number | null;
-  volume: number | null;
-  market_cap: number | null;
-  indiv_net: number | null;
-  listed: string;
+  /** 개인 순매수(억원, KRX MDCSTAT04901). 못 받으면 null — 0 이 아니다. */
+  net_buy: number | null;
+  ret: number | null;
 }
 export interface EtfListingRow {
   name: string;
   ticker: string;
   isin: string;
   company: string;
-  /** 총보수(%) — KRX ETF_TOT_FEE. 펀드공시모니터 캐시의 fee 는 비어 있어 KRX 에서 받는다. */
+  /** 총보수(%) — KRX ETF_TOT_FEE. */
   fee: number | null;
   benchmark: string;
   asset_class: string;
   holdings: EtfListingHolding[];
-  /** CHECK 관심목록 밖의 종목은 null (실측: MIDAS 머니마켓액티브). */
-  realtime: EtfListingRealtime | null;
 }
 export interface EtfUpcomingRow {
   rcept_no: string;
   name: string;
   company: string;
-  est_from: string;
-  est_to: string;
+  /** 마지막 공시일(YYYY-MM-DD). */
+  filed: string | null;
+  /** 예상 상장 범위. DART 표지에 없으면 null → 화면은 '미정'. */
+  est_from: string | null;
+  est_to: string | null;
   is_amend: boolean;
-  holdings: EtfListingHolding[];
-  holdings_src: string;
 }
 export interface EtfNewListingPayload {
   generated_at: string;
   today: string;
+  /** 캐시가 비었거나(기동 직후) 원천 오류일 때의 설명. 정상이면 null. */
   note: string | null;
-  /** CHECK envelope 이 언제 것인가. 낡으면(5분 초과) 화면이 '실시간' 이라 쓰지 않는다 —
-   *  장 마감·CHECK PC 정지 뒤의 마지막 값을 실시간이라 보여주면 그 자체가 틀린 말이다. */
-  realtime_asof: string | null;
-  realtime_stale: boolean;
   report: { date: string | null; is_today: boolean; rows: EtfListingReportRow[] };
   listing: { date: string | null; is_today: boolean; rows: EtfListingRow[] };
   upcoming: EtfUpcomingRow[];
 }
 export function getEtfNewListing(): Promise<EtfNewListingPayload> {
-  return request<EtfNewListingPayload>("/api/v1/etf-class/new-listing");
+  return request<EtfNewListingPayload>("/api/v1/etf/new-listing");
 }
 
 // ── 개인 계좌 포트폴리오 ──────────────────────────────────────────────────────

@@ -1,0 +1,114 @@
+{
+ "output": [
+  {
+   "COMPST_ISU_CD": "005930",
+   "COMPST_ISU_CD2": "KR7005930003",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "ST",
+   "COMPST_ISU_NM": "삼성전자",
+   "COMPST_ISU_CU1_SHRS": "460.00",
+   "VALU_AMT": "126,040,000",
+   "COMPST_AMT": "127,190,000",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "190620",
+   "COMPST_ISU_CD2": "KR7190620005",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "EF",
+   "COMPST_ISU_NM": "ACE 단기통안채",
+   "COMPST_ISU_CU1_SHRS": "222.00",
+   "VALU_AMT": "22,662,870",
+   "COMPST_AMT": "22,669,530",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "196230",
+   "COMPST_ISU_CD2": "KR7196230007",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "EF",
+   "COMPST_ISU_NM": "RISE 단기통안채",
+   "COMPST_ISU_CU1_SHRS": "193.00",
+   "VALU_AMT": "22,583,895",
+   "COMPST_AMT": "22,588,720",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "363510",
+   "COMPST_ISU_CD2": "KR7363510009",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "EF",
+   "COMPST_ISU_NM": "SOL KIS단기통안채",
+   "COMPST_ISU_CU1_SHRS": "201.00",
+   "VALU_AMT": "22,567,275",
+   "COMPST_AMT": "22,573,305",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "157450",
+   "COMPST_ISU_CD2": "KR7157450008",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "EF",
+   "COMPST_ISU_NM": "TIGER 단기통안채",
+   "COMPST_ISU_CU1_SHRS": "200.00",
+   "VALU_AMT": "22,534,000",
+   "COMPST_AMT": "22,542,000",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "122260",
+   "COMPST_ISU_CD2": "KR7122260003",
+   "MKT_ID": "STK",
+   "SECUGRP_ID": "EF",
+   "COMPST_ISU_NM": "KIWOOM 통안채1년",
+   "COMPST_ISU_CU1_SHRS": "215.00",
+   "VALU_AMT": "22,403,000",
+   "COMPST_AMT": "22,408,375",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "US67066G1040",
+   "COMPST_ISU_CD2": "US67066G1040",
+   "MKT_ID": "",
+   "SECUGRP_ID": "",
+   "COMPST_ISU_NM": "NVIDIA CORP",
+   "COMPST_ISU_CU1_SHRS": "390.00",
+   "VALU_AMT": "-",
+   "COMPST_AMT": "-",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "KR103501GDC8",
+   "COMPST_ISU_CD2": "KR103501GDC8",
+   "MKT_ID": "KTS",
+   "SECUGRP_ID": "BN",
+   "COMPST_ISU_NM": "국고채권03875-2612(23-10)",
+   "COMPST_ISU_CU1_SHRS": "-",
+   "VALU_AMT": "126,532,625",
+   "COMPST_AMT": "-",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "KRD010010001",
+   "COMPST_ISU_CD2": "KRD010010001",
+   "MKT_ID": "",
+   "SECUGRP_ID": "",
+   "COMPST_ISU_NM": "원화현금",
+   "COMPST_ISU_CU1_SHRS": "-",
+   "VALU_AMT": "-",
+   "COMPST_AMT": "20,862,575",
+   "COMPST_RTO": "-"
+  },
+  {
+   "COMPST_ISU_CD": "CASH00000001",
+   "COMPST_ISU_CD2": "CASH00000001",
+   "MKT_ID": "",
+   "SECUGRP_ID": "",
+   "COMPST_ISU_NM": "설정현금액",
+   "COMPST_ISU_CU1_SHRS": "-",
+   "VALU_AMT": "-",
+   "COMPST_AMT": "505,898,639",
+   "COMPST_RTO": "-"
+  }
+ ]
+}

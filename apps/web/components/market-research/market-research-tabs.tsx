@@ -6,11 +6,12 @@ import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { TabChips } from "@/components/ai-key-data/tab-chips";
 import { AiKeyDataTab } from "./ai-key-data-tab";
+import { EtfTab } from "./etf-listing/etf-tab";
 import { MarketTab } from "./market-tab";
 import { SeasonalityTab } from "./seasonality-tab";
 import { WatchlistTab } from "./watchlist-tab";
 
-// 시장 리서치 — 관심종목 · 시장지표 · 계절성 · AI Key Data 를 한 화면(탭)으로.
+// 시장 리서치 — 관심종목 · 시장지표 · 계절성 · AI Key Data · 국내 ETF 신규상장을 한 화면(탭)으로.
 //
 // ★2026-09-27 계획 S2: 탭은 `?tab=` 로 딥링크된다(구 경로 redirect 대상).
 //   ⚠️탭 값은 page.tsx 가 `searchParams` 로 읽어 넘긴다 — 여기서 useSearchParams
@@ -21,6 +22,7 @@ export const MARKET_TABS = [
   { key: "market", label: "시장지표" },
   { key: "seasonality", label: "계절성" },
   { key: "ai", label: "AI Key Data" },
+  { key: "etf", label: "국내 ETF 신규상장" },
 ] as const;
 
 export type MarketTabKey = (typeof MARKET_TABS)[number]["key"];
@@ -41,7 +43,7 @@ export function MarketResearchTabs({ initialTab }: { initialTab: MarketTabKey })
     <>
       <Topbar
         title="시장 리서치"
-        subtitle="관심종목 · 시장지표 · 계절성 · AI Key Data"
+        subtitle="관심종목 · 시장지표 · 계절성 · AI Key Data · 국내 ETF 신규상장"
         showAccountContext={false}
       />
       <PageContainer fit>
@@ -53,6 +55,7 @@ export function MarketResearchTabs({ initialTab }: { initialTab: MarketTabKey })
           {tab === "market" && <MarketTab />}
           {tab === "seasonality" && <SeasonalityTab />}
           {tab === "ai" && <AiKeyDataTab />}
+          {tab === "etf" && <EtfTab />}
         </div>
       </PageContainer>
     </>
