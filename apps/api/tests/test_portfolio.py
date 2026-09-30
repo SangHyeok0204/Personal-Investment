@@ -488,7 +488,7 @@ def _add_trade(db, account_id, **kw):
     defaults = dict(
         id=uuid.uuid4(), account_id=account_id, ticker="SCHD",
         asset_name="미국배당주슈왑ETF", trade_date=_date(2026, 9, 16),
-        trade_no="000000001", side="BUY", quantity=Decimal("10"),
+        trade_no="000000001", market="US", side="BUY", quantity=Decimal("10"),
         price=Decimal("30.00"), currency="USD", amount_local=Decimal("300.00"),
         settlement_amount_local=Decimal("300.75"),
         commission_local=Decimal("0.75"), tax_local=Decimal("0.00"),

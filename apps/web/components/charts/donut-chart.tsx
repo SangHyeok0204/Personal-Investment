@@ -72,7 +72,11 @@ export function DonutChart({
   centerLabel,
   centerValue,
   onSliceClick,
+  onCenterClick,
+  centerHint,
   maxLegend = 8,
+  compactLegend = false,
+  legendColumns = 1,
 }: {
   slices: DonutSlice[];
   size?: number;
@@ -81,9 +85,22 @@ export function DonutChart({
   centerLabel?: string;
   centerValue?: string;
   onSliceClick?: (slice: DonutSlice) => void;
+  /** 가운데 빈 원을 눌렀을 때. 조각 클릭과 뜻이 다르다 — 조각은 '그 하나',
+   *  가운데는 '전부'다. */
+  onCenterClick?: () => void;
+  /** 가운데에 떠 있는 안내 문구(호버 시). `onCenterClick` 과 같이 쓴다. */
+  centerHint?: string;
+  /** 범례에 보여 줄 조각 수. 나머지는 "외 N개" 한 줄로 접는다. */
   maxLegend?: number;
+  /** 범례를 **도넛 높이 안에** 가둔다(금액 줄 없이 한 줄씩, 넘치면 자름).
+   *  ⚠️기본값은 false 다 — 배당 화면은 금액 줄과 9줄 범례를 그대로 쓴다. */
+  compactLegend?: boolean;
+  /** 범례 열 수. 2 이상이면 **위→아래, 왼→오른** 순으로 채운다(큰 조각이 왼쪽
+   *  위에서 시작해 한 열을 먼저 다 읽게). 도넛 높이 안에 더 많은 조각을 넣을 때 쓴다. */
+  legendColumns?: number;
 }) {
   const [hover, setHover] = useState<string | null>(null);
+  const [centerHover, setCenterHover] = useState(false);
 
   const total = slices.reduce((sum, s) => sum + Math.max(s.value, 0), 0);
   if (total <= 0) {
@@ -110,6 +127,7 @@ export function DonutChart({
   });
 
   const legend = drawn.slice(0, maxLegend);
+  const legendRows = Math.ceil(legend.length / legendColumns);
 
   return (
     // 좁으면 범례가 도넛 아래로 내려간다(@container 없이 flex-wrap 으로).
@@ -134,6 +152,20 @@ export function DonutChart({
               }}
             />
           ))}
+          {/* 가운데 빈 원. 도넛 조각이 아니라 **구멍**이 클릭 대상이라, 겹치지
+              않게 SVG 안에 따로 둔다(위의 글자 레이어는 pointer-events-none). */}
+          {onCenterClick && (
+            <circle
+              cx={r}
+              cy={r}
+              r={inner}
+              fill="transparent"
+              onMouseEnter={() => setCenterHover(true)}
+              onMouseLeave={() => setCenterHover(false)}
+              onClick={onCenterClick}
+              style={{ cursor: "pointer" }}
+            />
+          )}
         </svg>
         {/* 가운데 — 호버 중이면 그 조각을, 아니면 전체 요약을 보여준다. */}
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
@@ -158,49 +190,91 @@ export function DonutChart({
                   {centerValue}
                 </span>
               )}
+              {/* 누를 수 있다는 걸 **누르기 전에** 알려 준다. 자리를 늘 차지하면
+                  가운데가 빽빽해지므로 호버할 때만 띄운다. */}
+              {centerHint && (
+                <span
+                  className={cn(
+                    "mt-0.5 max-w-[86%] text-center text-[9px] font-bold leading-tight text-ge-point transition-opacity",
+                    centerHover ? "opacity-100" : "opacity-0",
+                  )}
+                >
+                  {centerHint}
+                </span>
+              )}
             </>
           )}
         </div>
       </div>
 
-      <ul className="min-w-[150px] flex-1 space-y-1">
-        {legend.map((s) => (
-          <li key={s.key}>
-            <button
-              type="button"
-              onClick={() => onSliceClick?.(s)}
-              onMouseEnter={() => setHover(s.key)}
-              onMouseLeave={() => setHover(null)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors",
-                onSliceClick ? "hover:bg-canvas-soft" : "cursor-default",
-                hover === s.key && "bg-canvas-soft",
+      {/* ⚠️compactLegend 면 **도넛보다 세로로 길어지지 않게** 높이를 묶는다.
+          범례가 도넛보다 길면 카드가 범례 높이로 자라 한 화면 배치가 깨진다. */}
+      <div className={cn("flex-1", legendColumns > 1 ? "min-w-[220px]" : "min-w-[150px]")}>
+        <ul
+          className={cn(
+            compactLegend ? "overflow-hidden" : "",
+            legendColumns > 1
+              ? "grid grid-flow-col gap-x-2 gap-y-0.5"
+              : compactLegend
+                ? "space-y-0.5"
+                : "space-y-1",
+          )}
+          style={{
+            ...(compactLegend ? { maxHeight: size } : {}),
+            ...(legendColumns > 1
+              ? {
+                  gridTemplateColumns: `repeat(${legendColumns}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${legendRows}, auto)`,
+                }
+              : {}),
+          }}
+        >
+          {legend.map((s) => (
+            <li key={s.key}>
+              <button
+                type="button"
+                onClick={() => onSliceClick?.(s)}
+                onMouseEnter={() => setHover(s.key)}
+                onMouseLeave={() => setHover(null)}
+                // 금액 줄을 접었으니 값 자체는 버리지 않는다 — 호버로 남긴다.
+                title={s.caption ? `${s.label} · ${s.caption}` : s.label}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors",
+                  onSliceClick ? "hover:bg-canvas-soft" : "cursor-default",
+                  hover === s.key && "bg-canvas-soft",
+                )}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: s.color }}
+                />
+                <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-ge-navy">
+                  {s.label}
+                </span>
+                <span className="shrink-0 text-[11px] font-bold tabular-nums text-ink-secondary">
+                  {s.pct.toFixed(1)}%
+                </span>
+              </button>
+              {!compactLegend && s.caption && (
+                <span className="ml-[26px] block text-[10px] font-semibold text-ink-muted">
+                  {s.caption}
+                </span>
               )}
-            >
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ background: s.color }}
-              />
-              <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-ge-navy">
-                {s.label}
-              </span>
-              <span className="shrink-0 text-[11px] font-bold tabular-nums text-ink-secondary">
-                {s.pct.toFixed(1)}%
-              </span>
-            </button>
-            {s.caption && (
-              <span className="ml-[26px] block text-[10px] font-semibold text-ink-muted">
-                {s.caption}
-              </span>
-            )}
-          </li>
-        ))}
-        {drawn.length > maxLegend && (
-          <li className="px-2 text-[11px] font-semibold text-ink-faint">
-            외 {drawn.length - maxLegend}종목
-          </li>
+            </li>
+          ))}
+          {legendColumns === 1 && drawn.length > maxLegend && (
+            <li className="px-2 text-[11px] font-semibold text-ink-faint">
+              외 {drawn.length - maxLegend}개
+            </li>
+          )}
+        </ul>
+        {/* 여러 열이면 격자 칸 하나로 넣을 수 없다(열 흐름이라 엉뚱한 열에 붙는다). */}
+        {legendColumns > 1 && drawn.length > maxLegend && (
+          <p className="mt-0.5 px-2 text-[11px] font-semibold text-ink-faint">
+            외 {drawn.length - maxLegend}개
+          </p>
         )}
-      </ul>
+      </div>
     </div>
   );
 }

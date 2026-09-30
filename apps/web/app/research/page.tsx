@@ -10,7 +10,6 @@ import {
   Cell,
   DataTable,
   Emphasized,
-  PlannedList,
   StatRow,
   StatTile,
   StubCard,
@@ -30,7 +29,7 @@ const SHELVES = [
   { id: "insight", label: "인사이트", desc: "시장 코멘터리 덱", icon: Presentation },
   { id: "fund", label: "공모펀드/ETF", desc: "사모재간접 · 액티브ETF", icon: FileText },
   { id: "macro", label: "매크로/MP 회의", desc: "시장 전망 · 하우스뷰", icon: FileText },
-  { id: "video", label: "영상", desc: "YouTube 자막 · 요약", icon: Film, href: "/research/video" },
+  { id: "video", label: "영상", desc: "YouTube 자막 · 요약", icon: Film, href: "/news/video" },
 ];
 
 function Empty({ text }: { text: string }) {
@@ -182,7 +181,7 @@ export default function ResearchLibraryPage() {
               <>
                 {library.data.truncated && (
                   <p className="mb-2 rounded-lg bg-ask-soft px-2.5 py-1.5 text-[11px] font-semibold text-ask">
-                    자료가 많아 앞쪽만 실었습니다 — 이게 전부가 아닙니다.
+                    일부만 표시 · 전체 아님
                   </p>
                 )}
                 <DataTable
@@ -206,18 +205,6 @@ export default function ResearchLibraryPage() {
                 </DataTable>
               </>
             )}
-          </StubCard>
-
-          <StubCard title="이 화면이 하는 일 · 안 하는 일">
-            <PlannedList
-              items={[
-                "지정 폴더를 훑어 pdf·pptx·docx·xlsx·md 의 **이름·크기·수정시각**을 읽는다",
-                "파일 **이름**에 보유 종목이 있으면 표시한다 — 내용은 열지 않으므로 놓칠 수 있다",
-                "**원문은 옮기지도 고치지도 않는다.** 경로만 들고 있는다",
-                "지정한 폴더 밖으로 나가지 않는다 — 링크를 따라가도 실경로가 밖이면 버린다",
-                "아직 안 하는 것: 문서 내용에서 키워드 뽑기 · 읽음 표시 · 한 줄 메모",
-              ]}
-            />
           </StubCard>
         </div>
 

@@ -1,0 +1,13 @@
+{"isin": "US2193501051", "ticker": "GLW", "layer1": "통신·미디어", "layer2": "신호전송 부품·소재", "layer3_candidate": "후보: 광섬유·광케이블", "status": "x", "basis": "광통신 매출이 가장 큰 사업부.", "source_url": "https://investor.corning.com/q"}
+{"isin": "US98422T1007", "ticker": "XLO", "layer1": "헬스케어", "layer2": "", "layer3_candidate": "", "status": "x", "basis": "L1 만 검증됨.", "source_url": "https://ir.example.com/xlo"}
+{"isin": "US02079K3059", "ticker": "GOOGL", "layer1": "통신·미디어", "layer2": "광고·소셜플랫폼", "layer3_candidate": "후보: 검색광고", "status": "x", "basis": "검색 광고가 매출 1위.", "source_url": "https://abc.xyz/investor/a"}
+{"isin": "US02079K1079", "ticker": "GOOG", "layer1": "통신·미디어", "layer2": "광고·소셜플랫폼", "layer3_candidate": "후보: 검색광고", "status": "x", "basis": "검색 광고가 매출 1위.", "source_url": "https://abc.xyz/investor/c"}
+{"isin": "US0846701086", "ticker": "BRK/A", "layer1": "금융", "layer2": "보험 위험인수", "layer3_candidate": "후보: 손해", "status": "x", "basis": "보험 부문 플로트가 핵심.", "source_url": "https://www.berkshirehathaway.com/a"}
+{"isin": "US6153942023", "ticker": "MOGa", "layer1": "산업재·건설", "layer2": "항공우주·방산제조", "layer3_candidate": "", "status": "x", "basis": "항공기 비행제어 부품.", "source_url": "https://www.moog.com/ir"}
+{"isin": "US4385161066", "ticker": "HON", "layer1": "산업재·건설", "layer2": "", "layer3_candidate": "", "status": "x", "basis": "복합기업, L2 판정 보류.", "source_url": "https://investor.honeywell.com/1"}
+{"isin": "US4385162056", "ticker": "HON", "layer1": "산업재·건설", "layer2": "", "layer3_candidate": "", "status": "x", "basis": "중복 증권.", "source_url": "https://investor.honeywell.com/2"}
+{"isin": "US44891N2080", "ticker": "PPLI", "layer1": "통신·미디어", "layer2": "콘텐츠·방송·스트리밍", "layer3_candidate": "후보: 디지털·인쇄 출판", "status": "x", "basis": "디지털 출판 매체 중심.", "source_url": "https://www.sec.gov/ppli"}
+{"isin": "US0000000011", "ticker": "NEWF", "layer1": "금융", "layer2": "가상 신규 L2", "layer3_candidate": "", "status": "x", "basis": "레지스트리에 없는 L2.", "source_url": "https://example.com/newf"}
+{"isin": "US46625H1005", "ticker": "JPM", "layer1": "금융", "layer2": "예금·대출 은행", "layer3_candidate": "소매은행", "status": "x", "basis": "근거 \"따옴표\"와 백슬래시 \\ 포함.\n둘째 줄.", "source_url": "https://jpmorganchase.com/ir"}
+{"isin": "US88023B1035", "ticker": "TEM", "layer1": "헬스케어", "layer2": "진단·검사서비스", "layer3_candidate": "후보: 분자진단", "status": "x", "basis": "유전체 검사 매출 중심.", "source_url": "https://investors.tempus.com/q"}
+{"isin": "US0970231058", "ticker": "BA", "layer1": "산업재·건설", "layer2": "항공우주·방산제조", "layer3_candidate": "후보: 항공기·부품", "status": "x", "basis": "상용기 인도 매출.", "source_url": "https://investors.boeing.com/q"}

@@ -1,0 +1,106 @@
+@prefix vc:   <http://ge.local/valuechain#> .
+@prefix cat:  <http://ge.local/valuechain/catalog#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+#############################################################################
+# 섹터 카탈로그 — `/research/valuechain` 첫 화면(섹터 허브)의 목록.
+#
+# · 묶음(vc:SectorGroup, IRI cat:g-…) = 종목 분류체계의 L1 12개(레지스트리 순). ⚠️카드와 IRI 가 겹치면 속성이 섞인다.
+#   카드(vc:SectorEntry) = 밸류체인 지도 하나.
+# · 묶음마다 첫 카드(order 1)는 **분류 섹터**(cat:tx-…, generated/tx-….ttl — 자동 생성, vc:kind "taxonomy"),
+#   이어서 **테마 카드**(손으로 쓰는 밸류체인 — bio 등, 미작성 자리표시 포함).
+# · 카드의 vc:code 와 같은 vc:code 를 가진 섹터 파일(예: bio.ttl → "bio")이 있으면
+#   카드가 열린다. 없으면 "미작성"으로 자리만 보인다 — 여기 한 줄 + 섹터 파일 하나가
+#   새 섹터 추가의 전부다(README.md).
+# · 카탈로그에 없는 섹터 파일도 허브에 "미분류"로 보인다(빠뜨려도 숨지 않는다).
+#############################################################################
+
+# ── 묶음(= 분류 L1, 레지스트리 순) ─────────────────────────────────────────
+cat:g-industrials    a vc:SectorGroup ; vc:order 1  ; rdfs:label "산업재·건설"@ko .
+cat:g-financials     a vc:SectorGroup ; vc:order 2  ; rdfs:label "금융"@ko .
+cat:g-discretionary  a vc:SectorGroup ; vc:order 3  ; rdfs:label "재량소비"@ko .
+cat:g-healthcare     a vc:SectorGroup ; vc:order 4  ; rdfs:label "헬스케어"@ko .
+cat:g-materials      a vc:SectorGroup ; vc:order 5  ; rdfs:label "자원·기초소재"@ko .
+cat:g-digital        a vc:SectorGroup ; vc:order 6  ; rdfs:label "디지털·컴퓨팅"@ko .
+cat:g-communications a vc:SectorGroup ; vc:order 7  ; rdfs:label "통신·미디어"@ko .
+cat:g-energy         a vc:SectorGroup ; vc:order 8  ; rdfs:label "에너지"@ko .
+cat:g-staples        a vc:SectorGroup ; vc:order 9  ; rdfs:label "필수·반복소비"@ko .
+cat:g-realestate     a vc:SectorGroup ; vc:order 10 ; rdfs:label "부동산"@ko .
+cat:g-utilities      a vc:SectorGroup ; vc:order 11 ; rdfs:label "공공유틸리티"@ko .
+cat:g-bizservices    a vc:SectorGroup ; vc:order 12 ; rdfs:label "기업서비스"@ko .
+
+# ── 분류 카드(자동 생성 섹터, 묶음마다 첫 카드) ────────────────────────────
+cat:tx-industrials a vc:SectorEntry ; vc:inGroup cat:g-industrials ; vc:order 1 ; vc:code "tx-industrials" ;
+    rdfs:label "산업재·건설"@ko , "Industrials & Construction"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 기계·전력기기·항공방산·운송·물류."@ko .
+cat:tx-financials a vc:SectorEntry ; vc:inGroup cat:g-financials ; vc:order 1 ; vc:code "tx-financials" ;
+    rdfs:label "금융"@ko , "Financials"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 은행·보험·증권·자산운용·거래소."@ko .
+cat:tx-discretionary a vc:SectorEntry ; vc:inGroup cat:g-discretionary ; vc:order 1 ; vc:code "tx-discretionary" ;
+    rdfs:label "재량소비"@ko , "Consumer Discretionary"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 자동차·의류·전문유통·외식·여행."@ko .
+cat:tx-healthcare a vc:SectorEntry ; vc:inGroup cat:g-healthcare ; vc:order 1 ; vc:code "tx-healthcare" ;
+    rdfs:label "헬스케어"@ko , "Health Care"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 신약·도구·기기·진단·의료서비스."@ko .
+cat:tx-materials a vc:SectorEntry ; vc:inGroup cat:g-materials ; vc:order 1 ; vc:code "tx-materials" ;
+    rdfs:label "자원·기초소재"@ko , "Resources & Basic Materials"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 채굴·철강·화학·건자재·포장재."@ko .
+cat:tx-digital a vc:SectorEntry ; vc:inGroup cat:g-digital ; vc:order 1 ; vc:code "tx-digital" ;
+    rdfs:label "디지털·컴퓨팅"@ko , "Digital & Computing"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 반도체·하드웨어·소프트웨어·클라우드."@ko .
+cat:tx-communications a vc:SectorEntry ; vc:inGroup cat:g-communications ; vc:order 1 ; vc:code "tx-communications" ;
+    rdfs:label "통신·미디어"@ko , "Communications & Media"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 통신망·네트워크 장비·광고플랫폼·콘텐츠."@ko .
+cat:tx-energy a vc:SectorEntry ; vc:inGroup cat:g-energy ; vc:order 1 ; vc:code "tx-energy" ;
+    rdfs:label "에너지"@ko , "Energy"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 탐사생산·정제·미드스트림·유전서비스."@ko .
+cat:tx-staples a vc:SectorEntry ; vc:inGroup cat:g-staples ; vc:order 1 ; vc:code "tx-staples" ;
+    rdfs:label "필수·반복소비"@ko , "Consumer Staples"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 식품·음료·생활용품·필수품 유통."@ko .
+cat:tx-realestate a vc:SectorEntry ; vc:inGroup cat:g-realestate ; vc:order 1 ; vc:code "tx-realestate" ;
+    rdfs:label "부동산"@ko , "Real Estate"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 보유·임대·개발·운영·중개."@ko .
+cat:tx-utilities a vc:SectorEntry ; vc:inGroup cat:g-utilities ; vc:order 1 ; vc:code "tx-utilities" ;
+    rdfs:label "공공유틸리티"@ko , "Utilities"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — 발전·송배전·가스·상하수도."@ko .
+cat:tx-bizservices a vc:SectorEntry ; vc:inGroup cat:g-bizservices ; vc:order 1 ; vc:code "tx-bizservices" ;
+    rdfs:label "기업서비스"@ko , "Business Services"@en ;
+    rdfs:comment "미국 상장사 분류 지도 — IT 서비스·인사대행·컨설팅·시설서비스."@ko .
+
+# ── 테마 카드(손으로 쓰는 밸류체인 — 파일 없으면 "미작성") ─────────────────
+cat:semi a vc:SectorEntry ; vc:inGroup cat:g-digital ; vc:order 2 ; vc:code "semi" ;
+    rdfs:label "반도체"@ko , "Semiconductors"@en ;
+    rdfs:comment "설계·IP → 장비·소재 → 파운드리·메모리 → 패키징·테스트."@ko .
+cat:software a vc:SectorEntry ; vc:inGroup cat:g-digital ; vc:order 3 ; vc:code "software" ;
+    rdfs:label "소프트웨어·AI"@ko , "Software & AI"@en ;
+    rdfs:comment "클라우드·데이터 인프라 → 모델 → 애플리케이션."@ko .
+cat:bio a vc:SectorEntry ; vc:inGroup cat:g-healthcare ; vc:order 2 ; vc:code "bio" ;
+    rdfs:label "바이오"@ko , "Bio"@en ;
+    rdfs:comment "AI 바이오 밸류체인: 인프라 → 신약·진단·기기 → 임상·생산."@ko .
+cat:media a vc:SectorEntry ; vc:inGroup cat:g-communications ; vc:order 2 ; vc:code "media" ;
+    rdfs:label "미디어·플랫폼"@ko , "Media & Platforms"@en ;
+    rdfs:comment "콘텐츠 제작 → 유통 플랫폼 → 광고."@ko .
+cat:consumer a vc:SectorEntry ; vc:inGroup cat:g-discretionary ; vc:order 2 ; vc:code "consumer" ;
+    rdfs:label "경기소비재"@ko , "Consumer Discretionary"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 브랜드·리테일·이커머스·여행."@ko .
+cat:ev a vc:SectorEntry ; vc:inGroup cat:g-discretionary ; vc:order 3 ; vc:code "ev" ;
+    rdfs:label "자동차·EV"@ko , "Autos & EV"@en ;
+    rdfs:comment "배터리 소재 → 셀 → 완성차 → 충전."@ko .
+cat:food a vc:SectorEntry ; vc:inGroup cat:g-staples ; vc:order 2 ; vc:code "staples" ;
+    rdfs:label "필수소비재"@ko , "Consumer Staples"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 식음료·생활용품·유통."@ko .
+cat:energy a vc:SectorEntry ; vc:inGroup cat:g-energy ; vc:order 2 ; vc:code "energy" ;
+    rdfs:label "에너지"@ko , "Energy"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 업스트림 → 미드스트림 → 다운스트림, 원전·재생에너지."@ko .
+cat:power a vc:SectorEntry ; vc:inGroup cat:g-industrials ; vc:order 3 ; vc:code "power" ;
+    rdfs:label "전력 인프라"@ko , "Power Infrastructure"@en ;
+    rdfs:comment "발전 → 송배전·변압기 → 데이터센터 전력."@ko .
+cat:industrials a vc:SectorEntry ; vc:inGroup cat:g-industrials ; vc:order 2 ; vc:code "industrials" ;
+    rdfs:label "산업재"@ko , "Industrials"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 기계·방산·조선·항공우주."@ko .
+cat:materials a vc:SectorEntry ; vc:inGroup cat:g-materials ; vc:order 2 ; vc:code "materials" ;
+    rdfs:label "소재"@ko , "Materials"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 화학·금속·광물."@ko .
+cat:financials a vc:SectorEntry ; vc:inGroup cat:g-financials ; vc:order 2 ; vc:code "financials" ;
+    rdfs:label "금융"@ko , "Financials"@en ;
+    rdfs:comment "테마 밸류체인(미작성) — 은행·보험·자산운용·결제."@ko .

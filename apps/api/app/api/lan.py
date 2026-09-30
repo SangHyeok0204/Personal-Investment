@@ -43,17 +43,7 @@ _file_lock = asyncio.Lock()
 # 최초 실행 시드 — 원본 lan-dashboard/config.json 스냅샷(2026-07-21).
 _SEED: dict[str, Any] = {
     "checkIntervalMs": 30000,
-    "servers": [
-        {"id": "taco", "name": "TACO", "host": "192.168.194.121", "port": 8501, "protocol": "http", "description": "TACO", "group": "Server-P"},
-        {"id": "192_168_199_120-4000-1776907079564", "name": "LAN Server Monitor", "host": "192.168.199.120", "port": 4000, "protocol": "http", "description": "", "group": "Developer_PT1"},
-        {"id": "192_168_199_120-8002-1776907140735", "name": "펀드 공시 모니터", "host": "192.168.194.121", "port": 8002, "protocol": "http", "description": "", "group": "Server-P"},
-        {"id": "192_168_199_120-8765-1776907420711", "name": "종토방 모니터", "host": "192.168.199.120", "port": 8765, "protocol": "http", "description": "", "group": "Developer_PT1"},
-        {"id": "192_168_199_120-8002-1776907498233", "name": "AI Model 사용량 모니터", "host": "192.168.199.120", "port": 8002, "protocol": "http", "description": "", "group": "Developer_PT1"},
-        {"id": "192_168_194_121-8000-1778021821273", "name": "월초보고서", "host": "192.168.194.121", "port": 8000, "protocol": "http", "description": "", "group": "Server-P"},
-        {"id": "192_168_194_121-8100-1779318444202", "name": "ETF Peer 비교 대시보드", "host": "192.168.194.121", "port": 8100, "protocol": "http", "description": "", "group": "Server-P"},
-        {"id": "192_168_199_120-8770-1783646167949", "name": "내부자 거래 추적", "host": "192.168.199.120", "port": 8770, "protocol": "tcp", "description": "", "group": "Developer_PT1"},
-        {"id": "192_168_199_63-3000-1784180450682", "name": "통합 대시보드", "host": "192.168.199.63", "port": 3000, "protocol": "tcp", "description": "GE_ DASHBOARD", "group": ""},
-    ],
+    "servers": [],
     "groups": ["Developer_PT1", "Server-P", "Developer_PT2"],
 }
 

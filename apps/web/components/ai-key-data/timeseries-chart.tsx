@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { EMDASH } from "@/components/stock-monitor/format";
+import { EMDASH } from "@/components/format";
 import type { AiSeries } from "@/lib/api";
 
 // [AI Key Data] AI 사용량·Epoch 카드 공용 저수준 차트.

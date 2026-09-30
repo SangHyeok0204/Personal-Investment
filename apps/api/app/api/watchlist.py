@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import quote_cache
+from app.core.naming import display_names, lookup_name
 from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import RebalanceTarget, Asset, CurrentPosition, WatchlistItem
@@ -158,11 +159,17 @@ def add_watchlist(
         raise AppError(409, "ALREADY_EXISTS", f"{ticker} 는 이미 관심종목에 있습니다.")
 
     # 새 항목은 맨 뒤로. 기존 순서를 흔들지 않는다.
+    # ★티커만 넣어도 이름이 붙게 한다: 우리 표(자산·실현손익) → 네이버 순.
+    #   둘 다 못 찾으면 비워 두고 화면이 티커로 떨어진다.
+    name = (payload.asset_name or "").strip() or None
+    if name is None:
+        name = display_names(db, [ticker]).get(ticker) or lookup_name(ticker)
+
     last = db.execute(select(func.max(WatchlistItem.sort_order))).scalar() or 0
     db.add(
         WatchlistItem(
             ticker=ticker,
-            asset_name=payload.asset_name,
+            asset_name=name,
             memo=payload.memo,
             target_price=payload.target_price,
             stop_price=payload.stop_price,

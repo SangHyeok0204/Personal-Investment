@@ -6,7 +6,6 @@ export const API_BASE_URL =
 export const APP_VERSION = "0.1.0";
 
 export type JobStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED";
-export type LogLevel = "INFO" | "WARNING" | "ERROR";
 
 export interface Job {
   id: string;
@@ -21,43 +20,11 @@ export interface Job {
   updated_at: string;
 }
 
-export interface JobLog {
-  id: string;
-  level: LogLevel;
-  step: string | null;
-  message: string;
-  metadata: unknown | null;
-  created_at: string;
-}
-
-export interface JobDetail extends Job {
-  logs: JobLog[];
-}
-
 export interface JobListResponse {
   items: Job[];
   total: number;
   limit: number;
   offset: number;
-}
-
-export interface JobStats {
-  total: number;
-  pending: number;
-  running: number;
-  success: number;
-  failed: number;
-}
-
-export interface HealthResponse {
-  status: "ok" | "error";
-  database: "connected" | "disconnected";
-}
-
-export interface CsvImportResponse {
-  job_id: string;
-  import_id: string;
-  original_filename: string;
 }
 
 export interface AiUsageMeter {
@@ -227,24 +194,6 @@ export interface WrapPayload {
   } | null;
 }
 
-// 성과 비교(track record): 자사(AI코어테크랩) vs TORUS(BM) 누적수익률% 시계열.
-// points = [날짜 "YYYY-MM-DD", 누적수익률%(각 시트 인셉션 기준)] 배열.
-export interface WrapPerfSeries {
-  label: string;
-  base_date: string;
-  last_date: string;
-  points: [string, number][];
-}
-
-export interface WrapPerformance {
-  generatedAt: string;
-  series: Record<string, WrapPerfSeries>; // "aicoretech" | "torus"
-}
-
-export function getInavWrapPerformance(): Promise<WrapPerformance> {
-  return request<WrapPerformance>("/api/v1/inav/wrap-performance");
-}
-
 // [누적 수익률 비교] 등록된 펀드 시계열. S: 의 build_funds.py 가 만든 표준 스키마를 그대로
 // 받는다. 엑셀 레이아웃 편차(시트명·헤더 위치·단위)는 전부 S: 에서 흡수되므로 여기서부터는
 // 펀드가 2개든 20개든 같은 모양이다.
@@ -339,441 +288,6 @@ export interface WrapRebalancing {
 
 export function getInavWrapRebalancing(): Promise<WrapRebalancing> {
   return request<WrapRebalancing>("/api/v1/inav/wrap-rebalancing");
-}
-
-// ── GURU[13F] track record — 13F 기관/거장 포트폴리오 (collector + api proxy) ──
-// 백엔드가 최신 스냅샷 리프레시 완료 전까지 503 을 던진다 → 페이지는 degraded 처리.
-export interface Guru13fRosterEntry {
-  cik: string;
-  guru: string;
-  firm: string;
-  latest: string; // 해당 거장의 최신 분기
-  quarters: string[];
-  aum_usd: number;
-}
-export interface Guru13fRoster {
-  generatedAt: string;
-  dbVersion: string;
-  latest_period: string;
-  gurus: Guru13fRosterEntry[]; // aum_usd 내림차순 정렬
-}
-
-export interface Guru13fHolding {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  weight_pct: number;
-  value_usd: number;
-  shares: number;
-}
-export interface Guru13fPortfolio {
-  generatedAt: string;
-  dbVersion: string;
-  cik: string;
-  guru: string;
-  firm: string;
-  period: string;
-  filingDate: string | null;
-  aum_usd: number;
-  n_holdings: number;
-  priced_n: number;
-  total_n: number;
-  top5_pct: number;
-  top10_pct: number;
-  holdings: Guru13fHolding[]; // 비중 내림차순 top-15
-}
-
-export interface Guru13fChangeItem {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  weight_pct: number;
-  delta_ppt: number;
-}
-export interface Guru13fExitItem {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  prev_weight_pct: number;
-  delta_ppt: number;
-}
-export interface Guru13fChanges {
-  generatedAt: string;
-  dbVersion: string;
-  cik: string;
-  period: string;
-  prevPeriod: string | null;
-  isFirst: boolean;
-  amended: boolean; // 정정본(13F-HR/A)
-  new: Guru13fChangeItem[];
-  increased: Guru13fChangeItem[];
-  decreased: Guru13fChangeItem[];
-  exited: Guru13fExitItem[];
-}
-
-export interface Guru13fTimelineSeries {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  weights: number[]; // periods 정렬, PERCENT
-}
-export interface Guru13fTimeline {
-  generatedAt: string;
-  dbVersion: string;
-  cik: string;
-  periods: string[];
-  series: Guru13fTimelineSeries[]; // top-8 holdings
-}
-
-export interface Guru13fConsensusHolding {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  holders_n: number;
-  conviction_pct: number;
-}
-export interface Guru13fConsensusFlow {
-  cusip: string;
-  name: string;
-  ticker: string | null;
-  buyers: number;
-  sellers: number;
-  net: number;
-}
-export interface Guru13fConsensus {
-  generatedAt: string;
-  dbVersion: string;
-  period: string;
-  prev_period: string | null;
-  gurus_n: number;
-  holdings: Guru13fConsensusHolding[];
-  buys: Guru13fConsensusFlow[];
-  sells: Guru13fConsensusFlow[];
-}
-
-export interface Guru13fTurnoverRow {
-  cik: string;
-  guru: string;
-  firm: string;
-  turnover_pct: number;
-  new_n: number;
-  exited_n: number;
-  partial: boolean;
-  aum_usd: number;
-}
-export interface Guru13fTurnover {
-  generatedAt: string;
-  dbVersion: string;
-  period: string;
-  rows: Guru13fTurnoverRow[];
-}
-
-export function getGuru13fRoster(): Promise<Guru13fRoster> {
-  return request<Guru13fRoster>("/api/v1/inav/guru-13f/roster");
-}
-export function getGuru13fPortfolio(
-  cik: string,
-  period: string,
-): Promise<Guru13fPortfolio> {
-  const q = new URLSearchParams({ cik, period });
-  return request<Guru13fPortfolio>(`/api/v1/inav/guru-13f/portfolio?${q.toString()}`);
-}
-export function getGuru13fChanges(
-  cik: string,
-  period: string,
-): Promise<Guru13fChanges> {
-  const q = new URLSearchParams({ cik, period });
-  return request<Guru13fChanges>(`/api/v1/inav/guru-13f/changes?${q.toString()}`);
-}
-export function getGuru13fTimeline(cik: string): Promise<Guru13fTimeline> {
-  const q = new URLSearchParams({ cik });
-  return request<Guru13fTimeline>(`/api/v1/inav/guru-13f/timeline?${q.toString()}`);
-}
-export function getGuru13fConsensus(): Promise<Guru13fConsensus> {
-  return request<Guru13fConsensus>("/api/v1/inav/guru-13f/consensus");
-}
-export function getGuru13fTurnover(): Promise<Guru13fTurnover> {
-  return request<Guru13fTurnover>("/api/v1/inav/guru-13f/turnover");
-}
-
-// ── [GURU 13F] 변동 분석: 동시 리밸런싱 / 편입·방출 / 섹터 ──────────
-export interface Guru13fFlowGuru {
-  cik: string;
-  guru: string;
-  firm: string;
-}
-export interface Guru13fPeriodMeta {
-  period: string;
-  n_filed: number;
-  filed_pct: number;
-  usable: boolean; // 제출률이 낮아 비교에서 제외된 분기는 false
-}
-export interface Guru13fRebalanceRow {
-  cusip: string;
-  name: string;
-  ticker: string;
-  movers: number; // 비중을 min_bp 이상 조정한 거장 수
-  buyers: number;
-  sellers: number;
-  gross_bp: number; // Σ|Δwgt| 총 조정량 (방향 상쇄 없음)
-  net_bp: number; // ΣΔwgt 순방향
-  agreement: number; // |net|/gross · 1=전원 동일방향, 0=정확히 갈림
-  holders_prev: number;
-  holders_curr: number;
-  by_guru: (Guru13fFlowGuru & {
-    prev_bp: number;
-    curr_bp: number;
-    delta_bp: number;
-    action: "new" | "exited" | "increased" | "decreased";
-  })[];
-  // 평소 대비 이례성. 표본(movers_n_obs)이 부족하면 전부 null 이다.
-  movers_n_obs: number;
-  movers_baseline: number | null;
-  movers_pctile: number | null;
-  is_unusual: boolean | null;
-}
-export interface Guru13fEntryExitRow {
-  cusip: string;
-  name: string;
-  ticker: string;
-  n_gurus: number;
-  total_bp: number;
-  avg_bp: number;
-  gurus: (Guru13fFlowGuru & { bp: number })[];
-}
-export interface Guru13fSectorRow {
-  sector: string;
-  movers: number;
-  up: number;
-  down: number;
-  gross_bp: number;
-  net_bp: number;
-  agreement: number;
-  prev_wgt_bp: number; // 거장 평균 비중 (합산 아님)
-  curr_wgt_bp: number;
-  top_contributors: { cusip: string; name: string; ticker: string; delta_bp: number }[];
-}
-interface Guru13fFlowBase {
-  kind: string;
-  curr_period: string | null;
-  prev_period: string | null;
-  n_participants: number;
-  participants: Guru13fFlowGuru[];
-  excluded: string[];
-  period_meta: Guru13fPeriodMeta[];
-  insufficient_history?: boolean;
-}
-export interface Guru13fRebalance extends Guru13fFlowBase {
-  min_bp: number;
-  baseline: { quarters_used: number; min_obs: number };
-  rows: Guru13fRebalanceRow[];
-  total_rows: number;
-}
-export interface Guru13fEntriesExits extends Guru13fFlowBase {
-  entries: Guru13fEntryExitRow[];
-  exits: Guru13fEntryExitRow[];
-  total_entries: number;
-  total_exits: number;
-}
-export interface Guru13fSectorFlow extends Guru13fFlowBase {
-  coverage: number | null; // 최신분기 비중 기준 섹터 매핑률(%)
-  coverage_curr: number;
-  coverage_prev: number;
-  coverage_gap: number;
-  // 분기 간 매핑률 격차가 크면 '미분류' 행의 net 은 실제 이동이 아니라 결손 아티팩트다.
-  unclassified_unreliable: boolean;
-  mapped_cusips: number;
-  min_bp: number;
-  rows: Guru13fSectorRow[];
-}
-export interface Guru13fFlows {
-  generatedAt: string;
-  dbVersion: string;
-  rebalance: Guru13fRebalance;
-  entries_exits: Guru13fEntriesExits;
-  sector: Guru13fSectorFlow;
-}
-
-export function getGuru13fFlows(): Promise<Guru13fFlows> {
-  return request<Guru13fFlows>("/api/v1/inav/guru-13f/flows");
-}
-
-// ── [매크로] 물가·고용·유동성 패널 ───────────────────────────────────
-// 근거는 S: 매크로모니터가 구운 macro_panels.json(FRED/BLS/CME). 계산은 전부 S: 소관이라
-// 프론트는 그대로 그리기만 한다 — 여기서 YoY 를 다시 구하면 리포트와 갈라진다.
-export interface MacroPriceRow {
-  label: string;
-  date: string; // 관측 기간 시작일 YYYY-MM-DD
-  index: number;
-  yoy: number | null;
-  yoy_prev: number | null;
-  mom: number | null;
-  ann3: number | null;
-  ann6: number | null;
-  basis: "NSA" | "SA"; // YoY 산출 근거 — PCE 는 FRED 가 SA 만 준다
-  spark: number[];
-  series_id_sa: string;
-  series_id_nsa: string | null;
-}
-export interface MacroLaborRow {
-  label: string;
-  date: string;
-  value: number;
-  unit: string;
-  chg_1m: number | null;
-  chg_12m: number | null;
-  spark: number[];
-  series_id: string;
-}
-export interface MacroLiquidityRow {
-  label: string;
-  date: string;
-  value: number;
-  unit: string;
-  chg_short: number | null;
-  chg_long: number | null;
-  short_label: string; // "4주" | "1개월" — 주간·월간 시리즈가 섞여 있다
-  long_label: string;
-  spark: number[];
-  series_id: string;
-}
-export interface MacroFomcBucket {
-  lower: number;
-  upper: number;
-  prob: number; // 0~1
-}
-export interface MacroFomcBand {
-  lower: number;
-  upper: number;
-  label: string; // "350-375"
-}
-export interface MacroFomcCell {
-  prob: number | null; // 0~1
-  rank: number; // 1=회의 내 최고확률, 2=차순위, 0=그 외(0% 는 순위 제외)
-}
-export interface MacroFomcMeeting {
-  date: string;
-  cells: MacroFomcCell[]; // bands 와 같은 순서
-}
-export interface MacroFomc {
-  snapshot_date?: string;
-  fomc_date?: string;
-  bands?: MacroFomcBand[];
-  meetings?: MacroFomcMeeting[];
-  buckets?: MacroFomcBucket[]; // 리포트 페이지4(다음 회의 막대)가 쓰는 값
-}
-
-// 대시보드 선그래프용 — x=시간, y=%. 발표가 이산적이라 점이 듬성하지만 추세로 읽는다.
-export interface MacroSeriesPoint {
-  d: string; // 관측 기간 시작일
-  v: number; // %
-}
-export interface MacroSeries {
-  label: string;
-  series_id: string;
-  color: string;
-  unit: string;
-  basis?: "NSA" | "SA"; // 물가 YoY 산출 근거
-  mode?: string; // 고용·유동성: "수준" | "YoY"
-  // 스케일이 다른 계열을 한 그래프에 놓기 위한 축 지정.
-  // 실업률(3.5~4.5%)과 지급준비금 YoY(-13~+21%)를 한 축에 두면 실업률이 직선이 된다.
-  axis?: "left" | "right";
-  latest: number;
-  latest_date: string;
-  points: MacroSeriesPoint[];
-}
-// CPI 세부품목 — BLS flat file(cu.data.0.Current) JOIN 결과.
-// 가중치가 flat file 에 없어 기여도(bp)는 만들 수 없다 — 품목별 상승률까지다.
-export interface MacroCpiItemRow {
-  label: string;
-  item_code: string;
-  name_en: string; // BLS 품목 마스터 원명 — 한글 라벨이 무엇을 가리키는지 대조용
-  date: string;
-  yoy: number | null;
-  mom: number | null;
-  ann3: number | null;
-  basis: "SA" | "NSA"; // MoM·3M 산출 근거
-  spark: number[];
-}
-export interface MacroCpiDetail {
-  groups: MacroCpiItemRow[]; // 품목 그룹 8종
-  cuts: MacroCpiItemRow[]; // 에너지·주거비·서비스·근원상품
-  note: string;
-}
-// 최근 '처음 들어온' 관측치 = 새 발표. 표는 최신값만 보여줘서 무엇이 새로 반영됐는지
-// 알 수 없다. 월간 지표라 대부분의 날은 빈 배열이다.
-export interface MacroRelease {
-  series_id: string;
-  name_ko: string | null;
-  unit: string | null;
-  observation_date: string;
-  value: number | null;
-  first_seen_at: string;
-}
-// PPI 상품군(제조 투입원가) 15군. 그룹 총지수는 BLS flat file 에 NSA 만 있어 YoY 만 낸다
-// — NSA 로 MoM 을 내면 농산물·연료처럼 계절성 큰 군에서 거짓 신호가 된다.
-export interface MacroPpiGroupRow {
-  label: string;
-  group_code: string;
-  series_id: string;
-  name_en: string;
-  date: string;
-  index: number;
-  yoy: number | null;
-  yoy_prev: number | null;
-  spark: number[];
-}
-export interface MacroPpiGroups {
-  rows: MacroPpiGroupRow[];
-  note: string;
-}
-// 수집이 조용히 멈추는 것이 이 파이프라인의 실제 실패 모드다. blocked(자격증명 미설정)는
-// 고장이 아니라 대기라서 경고로 올리지 않는다 — 매일 뜨는 경고는 진짜 장애를 가린다.
-export interface MacroCollection {
-  last_ok_at: string | null;
-  age_hours: number | null;
-  stale: boolean;
-  failed: string[];
-  blocked: string[];
-  reason: string;
-}
-// investing.com 스크랩 값 ↔ 원천기관(BLS/FRED) 값 대조. 일치하면 화면에 안 뜬다 —
-// 참조 월이 다르거나 파싱이 안 되면 '불일치'가 아니라 비교 대상에서 빠진다(오탐 금지).
-export interface MacroCrosscheck {
-  event_id: number;
-  label: string;
-  series_id: string;
-  date: string;
-  ref_month: number;
-  theirs: number;
-  ours: number;
-  ours_rounded: number;
-  match: boolean;
-  unit: string;
-}
-export interface MacroPanels {
-  collection: MacroCollection;
-  crosscheck: MacroCrosscheck[];
-  releases: MacroRelease[];
-  ppi_groups: MacroPpiGroups;
-  price_series: MacroSeries[]; // 근원 CPI · 근원 PPI · 근원 PCE (YoY %)
-  // 물가 툴팁의 세부내역 — 선으로 그리지 않고 커서 시점 값만 쓴다(선 7개는 못 읽는다)
-  price_detail_series: { label: string; item_code: string; unit: string; points: MacroSeriesPoint[] }[];
-  labor_liq_series: MacroSeries[]; // 실업률(수준) · M2 · 지급준비금 (YoY %)
-  // 금리 커브 — 10Y-2Y 스프레드(좌축 %p) + 10년·2년 금리(우축 %). FRED 일간을 주간으로 솎은 값.
-  rate_series: MacroSeries[];
-  prices: MacroPriceRow[];
-  labor: MacroLaborRow[];
-  liquidity: MacroLiquidityRow[];
-  cpi_detail: MacroCpiDetail;
-  ppi_detail: MacroCpiItemRow[]; // PPI 최종수요 분해(상품/서비스 · 식품/에너지/근원)
-  fomc: MacroFomc;
-  asof: string;
-  generatedAt: string;
-}
-
-export function getMacroPanels(): Promise<MacroPanels> {
-  return request<MacroPanels>("/api/v1/macro/panels");
 }
 
 // ── [회의] 회의자료 파일 탐색기 (PoC) ────────────────────────────────
@@ -883,138 +397,6 @@ export function getPerfReportFile(path: string): Promise<PerfReportFile> {
     `/api/v1/inav/perf-report/file?path=${encodeURIComponent(path)}`,
     { cache: "no-store" },
   );
-}
-
-// ── [성과보고] 데일리·위클리 성과 브리프 ──────────────────────────────
-// performance-brief 스킬이 만든 JSON 을 collector 가 요일 규칙(월=위클리 /
-// 화~금=데일리)으로 골라 내려준다. 본문 문자열은 인라인 마크업을 쓴다:
-//   **굵게** · {+양수 강조} · {-음수 강조}
-export type PerfTone = "pos" | "neg";
-
-export interface PerfScore {
-  label: string;
-  value: string; // 이미 서식된 값 ("−0.46%", "+35bp")
-  tone?: PerfTone | null;
-  variant?: "alpha" | "ytd" | null;
-  sub?: string | null;
-}
-export interface PerfBarRow {
-  label: string;
-  note?: string | null;
-  value: number; // 부호 있는 값. 바 폭은 프론트가 차트 최대값 기준으로 계산.
-  value2?: number | null; // dualBars 전용 — BM
-}
-export interface PerfPathDay {
-  label: string;
-  self: number; // %
-  bm: number; // %
-  spreadBp: number;
-}
-export type PerfBlock =
-  | {
-      type: "bars" | "dualBars";
-      title: string;
-      unit?: string | null;
-      valueUnit?: "bp" | "pct" | "pp" | null;
-      meta?: string | null; // 리밸런싱 블록 상단 한 줄
-      rows: PerfBarRow[];
-      caption?: string | null;
-    }
-  | {
-      type: "path";
-      title: string;
-      unit?: string | null;
-      legend?: string | null;
-      days: PerfPathDay[];
-      caption?: string | null;
-    }
-  | { type: "stories"; items: PerfStory[] };
-
-export interface PerfStory {
-  verdict: string;
-  tag?: string | null;
-  tagTone?: PerfTone | null;
-  body: string;
-  watch?: string | null;
-}
-export interface PerfSection {
-  id: string;
-  eyebrow: string;
-  title: string;
-  bm?: string | null;
-  scores: PerfScore[];
-  blocks: PerfBlock[];
-}
-export interface PerfMarketChip {
-  head: string;
-  value?: string | null;
-  tone?: PerfTone | null;
-  note: string;
-}
-export interface PerfReport {
-  schema: number;
-  kind: "daily" | "weekly";
-  asOf: string;
-  period?: { start: string; end: string } | null;
-  writtenOn: string;
-  eyebrow: string;
-  title: string;
-  dateLine: string;
-  dateNote?: string | null;
-  market: PerfMarketChip[];
-  sections: PerfSection[];
-  checkpoints?: { title: string; items: { head: string; note: string }[] } | null;
-  footnote?: string | null;
-}
-export interface PerfBriefResponse {
-  today: string;
-  weekday: number; // 0=월
-  expected: "daily" | "weekly" | null;
-  status: "ready" | "pending" | "off";
-  report: PerfReport | null;
-  latest: {
-    kind: "daily" | "weekly";
-    asOf: string;
-    label: string;
-    writtenOn: string | null;
-  } | null;
-  source?: string;
-  generatedAt: string;
-}
-export function getPerfBrief(): Promise<PerfBriefResponse> {
-  return request<PerfBriefResponse>("/api/v1/inav/perf-brief");
-}
-
-// [분석 시작] — 운용역 소스 엑셀을 그 자리에서 읽어 정량 분석만 만든 report.
-// 서사 블록(market/stories/checkpoints)은 비어 있다 — 뉴스 조사가 필요해 엑셀만으론 못 만든다.
-export interface PerfAnalysis extends PerfReport {
-  warnings: string[];
-  source: string; // 읽은 엑셀 파일명
-  sourceSavedAt: string; // 그 파일의 최종 저장 시각
-}
-export function getPerfAnalysis(mode: "daily" | "weekly"): Promise<PerfAnalysis> {
-  return request<PerfAnalysis>(`/api/v1/inav/perf-brief/analyze?mode=${mode}`);
-}
-
-// [보고서 생성] — Windows 러너의 claude 서브프로세스가 뉴스 조사 + 서사까지 붙인
-// 완성 보고서를 만들어 정기미팅 폴더에 저장한다. 수 분 걸리는 비동기 작업.
-export interface PerfGenerateJob {
-  status: "idle" | "running" | "done" | "failed";
-  mode: "daily" | "weekly" | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  elapsedSec?: number;
-  log: string[];
-  error: string | null;
-  savedAs: string | null;
-}
-export function startPerfGenerate(mode: "daily" | "weekly"): Promise<PerfGenerateJob> {
-  return request<PerfGenerateJob>(`/api/v1/inav/perf-brief/generate?mode=${mode}`, {
-    method: "POST",
-  });
-}
-export function getPerfGenerateStatus(): Promise<PerfGenerateJob> {
-  return request<PerfGenerateJob>("/api/v1/inav/perf-brief/generate/status");
 }
 
 export interface InavSnapshot {
@@ -1160,14 +542,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export function getHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/system/health");
-}
-
-export function getJobStats(): Promise<JobStats> {
-  return request<JobStats>("/api/v1/jobs/stats");
-}
-
 export function getJobs(
   params: { limit?: number; offset?: number; status?: JobStatus } = {},
 ): Promise<JobListResponse> {
@@ -1177,27 +551,6 @@ export function getJobs(
   if (params.status) q.set("status", params.status);
   const qs = q.toString();
   return request<JobListResponse>(`/api/v1/jobs${qs ? `?${qs}` : ""}`);
-}
-
-export function getJob(id: string): Promise<JobDetail> {
-  return request<JobDetail>(`/api/v1/jobs/${id}`);
-}
-
-export function createTestJob(payload?: unknown): Promise<Job> {
-  return request<Job>("/api/v1/jobs/test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload === undefined ? {} : { payload }),
-  });
-}
-
-export function uploadCsv(file: File): Promise<CsvImportResponse> {
-  const form = new FormData();
-  form.append("file", file);
-  return request<CsvImportResponse>("/api/v1/imports/csv", {
-    method: "POST",
-    body: form,
-  });
 }
 
 export function getAiTokenUsage(): Promise<AiTokenUsageResponse> {
@@ -1474,199 +827,6 @@ export function addLanGroup(name: string): Promise<{ name: string }> {
     headers: JSON_HEADERS,
     body: JSON.stringify({ name }),
   });
-}
-
-// ── [종목 모니터] KOSPI200 분봉 급등락·이상현상 ──────────────────────────────
-// 원천은 Toss_분봉_모니터가 쌓는 분봉 DB. 계산(등락률·σ·거래대금)은 전부 collector 쪽이다.
-// ★market_cap·industry·issue 는 원천이 없어 항상 null 이다 — 화면에 컬럼 자리는 두되
-//   값은 비워 둔다(사용자 확정 2026-08-21). 소스가 생기면 collector 만 고치면 된다.
-export interface StockMonitorRow {
-  rank: number;
-  symbol: string;
-  name: string;
-  price: number | null;
-  change_pct: number | null;
-  value: number | null;          // 분봉 Σ(volume×close) — 토스 '토스증권 거래대금'과 다름
-  volume: number | null;
-  market_cap: number | null;     // 원천 없음
-  industry: string | null;       // 원천 없음
-  issue: string | null;          // [실시간 이슈] — 원천 없음
-  cap_rank: number | null;
-  change_sigma: number | null;   // 등락률 / 그 종목의 sigma_daily
-  volume_z: number | null;       // (당일누적 − vol_mu) / vol_sigma
-}
-export interface StockMonitor {
-  asof: string | null;
-  day?: string;
-  sort?: string;
-  market?: string;         // "kr"(기본) | "us"
-  universe?: number;
-  value_basis?: string;
-  change_basis?: string;   // us: 등락률 앵커 정의(직전 정규장 마감 이전 마지막 체결)
-  feed_at?: string | null; // us: 수집기 마지막 flush 시각(status.last_flush_at)
-  note?: string;
-  rows: StockMonitorRow[];
-}
-
-// market=us 는 미장_실시간체결가.db lane — 토스 WS 틱 기반, 한글명 없음(name=symbol),
-// σ·z 통계 없음(전부 null). KR 과 payload 모양은 같다.
-export type StockMarket = "kr" | "us";
-
-export function getStockMonitor(
-  sort: "value" | "change" | "sigma" = "value",
-  limit = 30,
-  market: StockMarket = "kr",
-  day?: string,
-): Promise<StockMonitor> {
-  const qs = new URLSearchParams({ sort, limit: String(limit), market });
-  if (day) qs.set("day", day);
-  return request<StockMonitor>(`/api/v1/stock-monitor?${qs.toString()}`);
-}
-
-// ── [종목 모니터] 상단 지수 스트립 ───────────────────────────────────────────
-// 원천은 CHECK 에이전트가 분단위로 쌓는 INDEX_MONITOR.db. spark 는 최근 4시간을
-// 60점으로 솎은 가격 배열이다(원본 990틱을 그대로 나르지 않는다).
-export interface IndexStripItem {
-  code: string;
-  name: string;
-  price: number | null;
-  change: number | null;      // 절대 변화 — DB 컬럼 그대로(역산하지 않음)
-  change_pct: number | null;
-  at: string;
-  spark: number[];
-}
-export interface IndexStrip {
-  generated_at: string;
-  indices: IndexStripItem[];
-}
-
-export function getIndexStrip(): Promise<IndexStrip> {
-  return request<IndexStrip>("/api/v1/stock-monitor/index-strip");
-}
-
-// ── [종목 모니터] ETF 순매수 모니터 ──────────────────────────────────────────
-// 원천은 CHECK 에이전트가 적재하는 ETF_FLOW_MONITOR.db (관심 ETF 수급 스냅샷,
-// 계약은 시장모니터 폴더의 ETF_FLOW_MONITOR_DB_안내.md). 적재 시작 전에는
-// rows 가 빈 배열로 온다 — 카드가 대기 문구를 띄운다.
-export interface EtfFlowRow {
-  code: string;
-  name: string | null;
-  listing_date: string | null;  // 'YYYY-MM-DD'
-  trade_value: number | null;   // 당일 누적 거래대금(원)
-  trade_volume: number | null;  // 당일 누적 거래량(주)
-  indiv_net_buy: number | null; // 당일 누적 개인 순매수 대금(원, 매수우위 +)
-  indiv_net_lp_est: number | null; // LP기반 추정 개인 순매수(원) — 피드 vol3tick(억원)×1e8
-  trade_date: string | null;
-  observed_at: string;
-}
-export interface EtfFlows {
-  generated_at: string;
-  asof: string | null;
-  rows: EtfFlowRow[];
-}
-
-export function getEtfFlows(): Promise<EtfFlows> {
-  return request<EtfFlows>("/api/v1/stock-monitor/etf-flows");
-}
-
-// ── [시장 시그널] AI 판단 급등락 (ETF 순매수 카드 자리) ──────────────────────
-// 원천은 price_monitor.xlsx 하나. collector 가 3단으로 접는다:
-//   1단 결정론 룰(그 시장 자신의 분위수) → 2단 온톨로지 탐색(.ttl/rdflib) → 3단 뉴스.
-// ★`summary` 가 곧 사용자가 요구한 **15자 내외 요약**이다("암호화폐 전반 강세").
-//   LLM 을 부르지 않는다 — 판단은 1·2단이 끝냈고 문장도 거기서 나온다.
-// ★뉴스 근거가 확보된 카드가 앞으로 온다(news_supported). 근거가 없다고 버리지는
-//   않는다 — 뉴스가 늦게 붙는 사건이 많아서 버리면 카드가 자주 빈다.
-export interface MarketSignalArticle {
-  title: string;
-  link: string;
-  pub: string;
-  weight: number;
-}
-export interface MarketSignalCard {
-  asset_class: PriceCatKey;
-  asset_label: string;      // 주식 | 채권 | 원자재 | 환 | 비트코인
-  headline: string;
-  summary: string;          // 2단 가설 문장(정렬·뉴스 검색이 쓴다)
-  // ★카드 큰 글씨는 아래 3줄이다(사용자 지정 2026-09-01) — 수치 중심:
-  //     period   "26-08-31" 또는 "25-09-01 ~ 26-09-01"  (그 룰이 실제로 잰 구간)
-  //     line     "미국채 10Y 시장금리 4.75% 달성"
-  //     line_sub "29일 만의 돌파 · 1일째 지속"
-  period: string;
-  line: string;
-  line_sub: string;
-  hypothesis: string;       // BroadMove | Divergence | DriverLed | Transmission | ...
-  confidence: number;       // 0~1
-  severity: number;
-  evidence: string[];
-  markets: string[];
-  tickers: string[];
-  // 카드를 누르면 가운데 차트가 여기로 옮겨 간다. 좌표 정본은 collector price_board 분류.
-  // ★l2 는 **빈 문자열일 수 있다**(원자재·채권은 계층이 한 겹) — group 모드는 그래도 성립한다.
-  sel: {
-    cat: PriceCatKey;
-    kind: "leaf"; key: string;
-  } | {
-    cat: PriceCatKey;
-    kind: "group"; l1: string; l2: string; label: string;
-  } | null;
-  detail: string[];
-  repeat: boolean;          // 전일에도 떴던 건 — 순위가 내려가고 배지가 붙는다
-  news_supported: boolean;
-  news_score: number | null;
-  articles: MarketSignalArticle[];
-}
-export interface MarketSignal {
-  generated_at: string;
-  asof: string | null;
-  cards: MarketSignalCard[];
-  stats: {
-    markets?: number; signals?: number; hypotheses?: number;
-    collapsed?: number; news_checked?: number; news_supported?: number;
-    repeats?: number;
-  };
-  note?: string | null;
-  cached?: boolean;   // 이 응답이 그 시각의 캐시인가(매 정시 1회만 실제 계산)
-}
-
-export function getMarketSignal(): Promise<MarketSignal> {
-  return request<MarketSignal>("/api/v1/stock-monitor/market-signal");
-}
-
-// ── [종목 모니터] 수익률 모니터 ──────────────────────────────────────────────
-// 원천은 주간가격모니터 price_monitor.xlsx (S: 마운트) — collector price_returns.py
-// 가 계산까지 마친 값을 나른다(자산 목록 정본도 그쪽 ASSETS). unit="pct" 는 %수익률,
-// "bp" 는 금리 변화폭(bp). rebound 는 1주/1달/3달 저점 대비 중 √시간 정규화로 고른
-// 대표 1개(all 에 3종 전부 동봉). spark 는 최근 1년을 60점으로 솎은 값 배열.
-export interface PriceReturnAsset {
-  key: string;
-  name: string;
-  unit: "pct" | "bp";
-  asof: string;               // 'YYYY-MM-DD' — 그 자산의 마지막 관측일
-  last: number;
-  returns: {
-    ytd: number | null;
-    mtd: number | null;
-    wtd: number | null;
-    dtd: number | null;
-  };
-  rebound: {
-    window: "1w" | "1m" | "3m";
-    label: string;            // '1달 저점 대비' 등 — collector 가 정한다
-    value: number;
-    low: number;
-    low_date: string;
-    all: Record<string, number | null>;
-  } | null;
-  spark: number[];
-}
-export interface PriceReturns {
-  generated_at: string;
-  asof: string | null;
-  assets: PriceReturnAsset[];
-}
-
-export function getPriceReturns(): Promise<PriceReturns> {
-  return request<PriceReturns>("/api/v1/stock-monitor/price-returns");
 }
 
 // ── [AI Key Data] 컴퓨팅 지수 모니터링 ───────────────────────────────────────
@@ -2197,224 +1357,6 @@ export function getToolCalling(): Promise<ToolCalling> {
   return request<ToolCalling>("/api/v1/ai-key-data/tool-calling");
 }
 
-// ── [종목 모니터] 가격 모니터 (주간가격모니터 84개 시장) ──────────────────────
-// 원천은 price_monitor.xlsx — collector price_board.py 가 판독하고, 분류·라벨·지표
-// 정의는 회의자료 생성기(dashboard_html_writer.py)에서 이식한 것이다.
-// ★자산군 하나씩 받는다(cat) — 84개 전량 + 3년 주간 시계열을 한 번에 실으면 무겁다.
-// ★★채권(bond)은 **bp**, 나머지는 **%**. `is_yield`·`unit` 로 갈라 표기한다 —
-//   금리의 %변화율은 의미가 없고 마이너스 구간에서 부호가 뒤집힌다.
-export type PriceCatKey = "equity" | "bond" | "commodity" | "fx" | "crypto";
-
-// ★달력 앵커(mtd·ytd)와 롤링(r1m~r1y)이 **둘 다** 온다(2026-08-31). 달력 앵커는
-//   "이번 달 얼마"를 답하고, 롤링은 시장끼리 비교할 때 쓴다 — 월초에는 모든 시장의
-//   MtD 가 0 근처로 뭉쳐 비교가 안 되기 때문이다. 우하단 요약 표가 8개를 다 쓴다.
-export interface PriceBoardRow {
-  key: string;      // 블룸버그 티커 = 고유키
-  group: string;    // layer1 — 벤치마크/DM/EM · 미국/한국/… · 에너지/귀금속/… (없으면 "")
-  sub_group: string; // layer2 — DM·EM 안의 지역 묶음(없으면 "")
-  label: string;
-  sub: string;      // 보조 라벨(단위·출처)
-  asof: string;
-  price: number;
-  dtd: number | null;
-  wtd: number | null;
-  mtd: number | null;
-  ytd: number | null;
-  r1m: number | null;  // 롤링 30일
-  r3m: number | null;  // 롤링 91일 — 차트의 '롤링 3M' 과 같은 창
-  r6m: number | null;  // 롤링 182일
-  r1y: number | null;  // 롤링 365일
-  // ★3Y·5Y 는 성과표(표 모드) 전용이다 — 회의자료 리포트의 perf-table 과 같은 열을
-  //   갖기 위해 2026-09-01 에 붙였다. 우하단 요약 표는 여전히 1M~1Y 넷만 쓴다.
-  //   시트 시작(2021-01)보다 창이 길면 null 이다(IBIT 등 신규 상장 열).
-  r3y: number | null;  // 롤링 1,095일
-  r5y: number | null;  // 롤링 1,826일
-}
-
-// 좌측 목록의 계층 — 자산군(탭) → layer1 → layer2 → 실제 지수(leaf).
-// 그룹이 빈 자산군(환·비트코인)은 leaf 가 최상단에 바로 온다.
-export type PriceTreeNode =
-  | { type: "node"; label: string; children: PriceTreeNode[] }
-  | ({ type: "leaf" } & Omit<PriceBoardRow, "group" | "sub_group">);
-export interface PriceBoardSeries {
-  key: string;
-  label: string;
-  points: [string, number][]; // 3년 주간 마지막값
-}
-export interface PriceBoard {
-  generated_at: string;
-  note?: string | null;
-  cat: PriceCatKey;
-  cat_label: string;
-  unit: string;       // '%' | 'bp'
-  is_yield: boolean;
-  asof: string | null;
-  categories: { key: PriceCatKey; label: string }[];
-  rows: PriceBoardRow[];
-  tree: PriceTreeNode[];
-  series: PriceBoardSeries[];
-}
-
-export function getPriceBoard(cat: PriceCatKey): Promise<PriceBoard> {
-  return request<PriceBoard>(`/api/v1/stock-monitor/price-board?cat=${cat}`);
-}
-
-// ── 차트 계열 ────────────────────────────────────────────────────────────────
-// ★★2026-08-31 계약 교체. DtD·WtD·MtD·YtD **시계열**은 없어졌다 — 달력 앵커라
-//   월초·연초마다 0 으로 리셋되는 톱니여서 추세를 읽을 수 없고, 그 숫자는 요약
-//   표(PriceBoardRow)가 이미 준다. 차트는 2모드다:
-//     · cum (누적수익률) — **프론트가** 보는 구간 첫 점 기준으로 price 를 리베이스
-//     · r3m (롤링 3M)    — 서버가 계산해 준 그대로
-//   그래서 계열마다 price·r3m 을 **둘 다** 싣는다 — 모드를 바꿔도 재요청이 없다.
-// ★cum 을 서버가 못 만드는 이유: 리베이스 기준점이 사용자가 좁힌 구간의 첫 점이라
-//   서버가 모른다. 고정 시작점으로 계산하면 구간을 좁혀도 0% 가 안 따라온다.
-// ★'벤치마크 대비'(상대곡선) 모드는 만들었다가 같은 날 제거했다(사용자 지시) —
-//   payload 에 벤치마크 계열이 없는 이유다.
-export type PriceChartMode = "cum" | "r3m";
-export interface PriceChartSeries {
-  key: string;   // 티커
-  label: string;
-  sub: string;
-  price: [string, number][]; // 가격 원본(주간) — cum 의 재료
-  r3m: [string, number][];   // 롤링 91일 지표(주간). 앞 91일이 없어 price 보다 짧다
-}
-interface PriceChartCommon {
-  generated_at: string;
-  unit: string;      // '%' | 'bp'
-  is_yield: boolean;
-  modes: { key: PriceChartMode; label: string }[];
-  series: PriceChartSeries[];
-  note?: string | null;
-}
-export interface PriceMetricPayload extends PriceChartCommon {
-  key: string;
-  label: string;
-  sub: string;
-  cat: PriceCatKey | null;
-  asof?: string;
-  price?: number;
-}
-
-export function getPriceMetricSeries(key: string): Promise<PriceMetricPayload> {
-  return request<PriceMetricPayload>(
-    `/api/v1/stock-monitor/price-board/metric-series?key=${encodeURIComponent(key)}`,
-  );
-}
-
-// 묶음(예: DM/미국) 안 시장들의 차트 계열. metric-series 와 **payload 모양이 같다**
-// — 계열이 1개냐 N개냐만 다르다. 그래서 차트는 series 배열 하나만 그리면 양쪽을 다 그린다.
-export interface PriceGroupPayload extends PriceChartCommon {
-  kind: "group";
-  cat: PriceCatKey;
-  l1: string;
-  l2: string;
-  label: string;
-  sub: string;
-  asof: string | null;
-}
-
-export function getPriceGroupSeries(
-  cat: PriceCatKey,
-  l1: string,
-  l2: string,
-): Promise<PriceGroupPayload> {
-  const q = new URLSearchParams({ cat, l1, l2 });
-  return request<PriceGroupPayload>(
-    `/api/v1/stock-monitor/price-board/group-series?${q.toString()}`,
-  );
-}
-
-// ── [종목 모니터] 종목 상세(5대 축) ──────────────────────────────────────────
-// 원천이 S:\...\Toss_분봉_모니터\input\raw 의 이름-키 JSON 이라 name 으로 묻는다.
-// (차트 스크리닝·실시간 뉴스는 2026-08-25 은퇴 — chart 타입·클라이언트도 함께 삭제)
-export interface StockDetail {
-  name: string;
-  symbol: string | null;
-  sector: Record<string, string> | null;  // {L1..L5}
-  country: string | null;
-  currency: string | null;
-  news_axis: boolean;
-  axes: string[];                          // 5대 축 — 수기 입력, 화면에서 편집
-  has_axis_file: boolean;
-}
-export function getStockDetail(name: string): Promise<StockDetail> {
-  return request<StockDetail>(
-    `/api/v1/stock-monitor/stock-detail?name=${encodeURIComponent(name)}`,
-  );
-}
-
-export interface SaveStockAxisInput {
-  name: string;
-  symbol?: string | null;   // 있으면 서버가 파일과 대조한다(불일치 409)
-  news_axis: boolean;
-  axes: string[];           // 정확히 5개
-}
-export function saveStockAxis(body: SaveStockAxisInput): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>("/api/v1/stock-monitor/stock-axis", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(body),
-  });
-}
-
-// ── [종목 모니터링 · 미국] 어닝 ─────────────────────────────────────────────
-// 원천은 S: 어닝모니터 daily-server 가 ET 08:30(BMO)·17:30(AMC) 슬롯마다 굽는 마스터
-// 원장 `보유종목정리.xlsx` 한 장이다. 크롤(Investing.com) · 8-K 구조화(SEC EDGAR) ·
-// 관전포인트/시장반응 생성(claude CLI) · Slack 알림까지 전부 그쪽 서버 소관이고,
-// collector 는 mtime 이 바뀐 판만 다시 읽어 넘긴다.
-//
-// ★예정과 결과가 **다른 필드 집합**인 것은 마스터가 티커당 한 행에 두 분기를 같이 담기
-//   때문이다 — 예정 행의 결과 열은 아직 지난 분기 값이라 싣지 않는다(collector 주석 참조).
-export interface EarningsWatchpoint {
-  point: string;
-  result?: string | null; // 결과 행에만. LLM 분석이 하루 늦게 붙어 null 일 수 있다
-}
-interface EarningsRowBase {
-  ticker: string;
-  name: string;
-  active: boolean; // 관리상태 = 활성(어느 펀드든 보유 중)
-  funds: string[]; // 보유 펀드 코드
-  highlight: boolean; // 주간 리포트 하이라이트 종목
-  session: "AMC" | "BMO" | null; // 장 마감 후 / 장 개시 전
-  marketCap: string | null; // "211.64B" — 이미 사람이 읽는 꼴
-  date: string | null; // YYYY-MM-DD (예정=예정일 / 결과=발표일)
-  updatedAt: string | null; // 상류가 그 행을 만진 시각
-}
-export interface EarningsUpcoming extends EarningsRowBase {
-  epsEstimate: number | null;
-  revenueEstimate: string | null;
-  watchpoints: EarningsWatchpoint[]; // 발표 전 관전포인트 (결과 없음)
-}
-export interface EarningsResult extends EarningsRowBase {
-  quarter: string | null; // "2026Q2"
-  epsEstimate: number | null;
-  epsActual: number | null;
-  revenueEstimate: string | null;
-  revenueActual: string | null;
-  consensus: "상회" | "부합" | "하회" | null;
-  keyMetric: string | null; // 그 종목의 핵심 지표 이름
-  keyMetricResult: string | null;
-  watchpoints: EarningsWatchpoint[]; // 관전포인트 ↔ 그 결과
-  reaction: string | null; // 기타 시장반응 한 문단
-}
-export interface EarningsPayload {
-  generatedAt: string | null; // 마스터 원장 mtime
-  readAt: string; // collector 가 읽은 시각
-  available: boolean; // 마스터를 읽을 수 있었는가
-  stale: boolean; // 크롤링 서버 heartbeat 가 48h 넘게 조용한가
-  heartbeat: string | null; // 메타 시트 daily_server_* 중 최신
-  heartbeatKey: string | null;
-  asOfET: string; // 예정/결과를 가른 기준일(ET)
-  windowDays: number; // 결과 목록 창
-  masterPath: string;
-  note: string | null; // 판독 실패 등 — 있으면 화면에 띄운다
-  upcoming: EarningsUpcoming[];
-  results: EarningsResult[];
-}
-export function getUsEarnings(): Promise<EarningsPayload> {
-  return request<EarningsPayload>("/api/v1/earnings/us");
-}
-
 /* ── [국내상장 ETF] 분류별 개인순매수·수익률 ──────────────────────────────────
    collector 가 `국내상장ETF 모니터링.xlsm` value 시트를 읽어 만든 한 묶음.
    축(구분/대분류/중분류/소분류/국가) 5개 × 기간 9개를 **전부** 담고 온다 —
@@ -2665,6 +1607,8 @@ export interface PortfolioHolding {
   tech_l1: string | null;
   tech_l2: string | null;
   tech_l3: string | null;
+  // 배분 '섹터' 축(exposure)의 조각 키 — 서버가 ETF 대표 노출을 적용한 값.
+  exposure: string | null;
   quantity: string;
   average_purchase_price: string | null;
   current_price: string | null;
@@ -2682,19 +1626,6 @@ export interface PortfolioHoldingList {
   items: PortfolioHolding[];
   total_market_value_krw: string | null;
   as_of: string | null;
-}
-
-export interface PortfolioSnapshotPoint {
-  snapshot_at: string;
-  total_assets_krw: string | null;
-  securities_value_krw: string | null;
-  cash_value_krw: string | null;
-  total_unrealized_pnl_krw: string | null;
-}
-
-export interface PortfolioHistory {
-  items: PortfolioSnapshotPoint[];
-  days: number;
 }
 
 function accountQuery(accountId?: string | null): string {
@@ -2725,16 +1656,6 @@ export function getPortfolioHoldings(
 ): Promise<PortfolioHoldingList> {
   return request<PortfolioHoldingList>(
     `/api/v1/portfolio/holdings${accountQuery(accountId)}`,
-  );
-}
-
-export function getPortfolioHistory(
-  accountId?: string | null,
-  days = 90,
-): Promise<PortfolioHistory> {
-  const q = accountQuery(accountId);
-  return request<PortfolioHistory>(
-    `/api/v1/portfolio/history${q ? `${q}&` : "?"}days=${days}`,
   );
 }
 
@@ -2826,31 +1747,6 @@ export interface TradeStats {
   sell_amount: string;
   commission: string;
   tax: string;
-}
-
-export interface TradeList {
-  items: Trade[];
-  total: number;
-  // 통화별로 나뉜다 — USD 와 KRW 를 한 숫자로 더하지 않는다(환산 환율이 없다).
-  stats: TradeStats[];
-  first_trade_date: string | null;
-  last_trade_date: string | null;
-}
-
-export function getTrades(params: {
-  accountId?: string | null;
-  days?: number;
-  side?: "BUY" | "SELL" | null;
-  ticker?: string | null;
-}): Promise<TradeList> {
-  const q = new URLSearchParams();
-  if (params.accountId && params.accountId !== "all") {
-    q.set("account_id", params.accountId);
-  }
-  if (params.days) q.set("days", String(params.days));
-  if (params.side) q.set("side", params.side);
-  if (params.ticker) q.set("ticker", params.ticker);
-  return request<TradeList>(`/api/v1/portfolio/trades?${q.toString()}`);
 }
 
 // ── 일별 성과 / 실현손익 ─────────────────────────────────────────────────────
@@ -3262,127 +2158,6 @@ export function getMarketMonitor(): Promise<MarketMonitor> {
   return request<MarketMonitor>("/api/v1/market/monitor");
 }
 
-// ── 매매일지 ─────────────────────────────────────────────────────────────────
-
-export type JournalKind = "ENTRY" | "EXIT" | "REVIEW" | "IDEA";
-
-export interface JournalTrade {
-  trade_date: string;
-  side: string;
-  quantity: string;
-  price: string | null;
-  amount_local: string | null;
-  currency: string;
-}
-
-export interface PlanOutcome {
-  planned_side: "BUY" | "SELL";
-  planned_quantity: string;
-  planned_price_krw: string | null;
-  /** 체결 원장 기준. ⚠️주문 원장과 다를 수 있다. */
-  filled_quantity: string;
-  fill_rate: string | null;
-  avg_fill_price: string | null;
-  /** ⚠️**양수면 손해**다(매수는 비싸게, 매도는 싸게). 환율을 모르면 null. */
-  slippage_rate: string | null;
-  ordered_quantity: string;
-  order_filled_quantity: string;
-  unfilled_quantity: string;
-  cancelled_quantity: string;
-  /** 주문 자체가 없었나 — 미체결과 다른 복기다. */
-  no_order: boolean;
-  /** 두 원장이 서로 다른 말을 하나. 실측으로 실제 있는 일이다. */
-  sources_disagree: boolean;
-}
-
-export interface JournalEntry {
-  id: string;
-  ticker: string | null;
-  asset_name: string | null;
-  entry_date: string;
-  kind: JournalKind;
-  title: string;
-  body: string | null;
-  conviction: number | null;
-  created_at: string;
-  updated_at: string;
-  /** 메모 날짜 ±3일의 실제 체결. */
-  nearby_trades: JournalTrade[];
-  held: boolean;
-  /** 결과가 없으면 null — 0 이 아니다("본전"으로 읽히면 안 된다). */
-  unrealized_pnl_krw: string | null;
-  unrealized_return: string | null;
-  realized_pnl_krw: string | null;
-  /** 계획을 적어 둔 메모에만 붙는다. 없으면 null. */
-  plan: PlanOutcome | null;
-}
-
-export interface JournalList {
-  items: JournalEntry[];
-  total: number;
-  kinds: JournalKind[];
-}
-
-export function getJournal(params?: { ticker?: string; kind?: string }): Promise<JournalList> {
-  const q = new URLSearchParams();
-  if (params?.ticker) q.set("ticker", params.ticker);
-  if (params?.kind) q.set("kind", params.kind);
-  const qs = q.toString();
-  return request<JournalList>(`/api/v1/journal${qs ? `?${qs}` : ""}`);
-}
-
-export function addJournal(body: {
-  ticker?: string | null;
-  entry_date: string;
-  kind: JournalKind;
-  title: string;
-  body?: string | null;
-  conviction?: number | null;
-  // ⚠️방향과 수량이 **둘 다** 있어야 계획으로 인정된다.
-  planned_side?: "BUY" | "SELL" | null;
-  planned_quantity?: string | null;
-  planned_price_krw?: string | null;
-}): Promise<JournalList> {
-  return request<JournalList>("/api/v1/journal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-export function updateJournal(
-  id: string,
-  body: Partial<{
-    title: string;
-    body: string | null;
-    kind: JournalKind;
-    conviction: number | null;
-  }>,
-): Promise<JournalList> {
-  return request<JournalList>(`/api/v1/journal/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-export function removeJournal(id: string): Promise<JournalList> {
-  return request<JournalList>(`/api/v1/journal/${id}`, { method: "DELETE" });
-}
-
-export interface UntrackedHolding {
-  ticker: string;
-  name: string | null;
-  market_value_krw: string | null;
-  /** 분모는 **주식 평가액**이다(예수금 제외) — 자산 현황의 비중과 다른 숫자다. */
-  weight: string | null;
-}
-
-/** 일지가 하나도 없는 보유 종목 — "무엇을 안 적었는가". */
-export function getUntrackedTickers(): Promise<UntrackedHolding[]> {
-  return request<UntrackedHolding[]>("/api/v1/journal/untracked");
-}
-
 // ── 리서치 라이브러리 ────────────────────────────────────────────────────────
 
 export interface ResearchDocument {
@@ -3413,57 +2188,6 @@ export function getResearchLibrary(
   return request<ResearchLibrary>(
     `/api/v1/portfolio/research/library${accountQuery(accountId)}`,
   );
-}
-
-// ── 주문 내역 ────────────────────────────────────────────────────────────────
-
-export type OrderStatus = "FILLED" | "PARTIAL" | "UNFILLED" | "CANCELLED";
-
-export interface OrderItem {
-  id: string;
-  ticker: string;
-  asset_name: string | null;
-  order_date: string;
-  order_time: string | null;
-  order_no: string;
-  side: string;
-  order_type: string | null;
-  currency: string;
-  status: OrderStatus;
-  order_quantity: string | null;
-  filled_quantity: string | null;
-  cancelled_quantity: string | null;
-  remaining_quantity: string | null;
-  order_price: string | null;
-  filled_price: string | null;
-  filled_amount: string | null;
-  /** 지정가 대비 체결가가 얼마나 유리했나(양수 = 유리). 미체결이면 null. */
-  improvement: string | null;
-  channel: string | null;
-}
-
-export interface OrderList {
-  items: OrderItem[];
-  /** 아래 집계는 필터와 무관하게 **전체 기준**이다. */
-  total: number;
-  filled: number;
-  partial: number;
-  unfilled: number;
-  cancelled: number;
-  fill_rate: string | null;
-  avg_improvement: string | null;
-  first_order_date: string | null;
-  last_order_date: string | null;
-}
-
-export function getOrders(
-  accountId?: string | null,
-  days = 730,
-  status?: OrderStatus | null,
-): Promise<OrderList> {
-  const q = accountQuery(accountId);
-  const extra = `days=${days}${status ? `&status=${status}` : ""}`;
-  return request<OrderList>(`/api/v1/portfolio/orders${q ? `${q}&` : "?"}${extra}`);
 }
 
 // ── 입출금 ───────────────────────────────────────────────────────────────────
@@ -3534,6 +2258,35 @@ export interface MacroMonitor {
 
 export function getMacro(): Promise<MacroMonitor> {
   return request<MacroMonitor>("/api/v1/market/macro");
+}
+
+export type MacroRange = "5y" | "10y" | "20y" | "max";
+
+export interface MacroHistorySeries {
+  series_id: string;
+  name: string;
+  category: string;
+  transform: MacroRow["transform"];
+  unit: string;
+  note: string | null;
+  /** [["YYYY-MM", 값]] — 월말 값, transform 적용 후(yoy 는 비율). */
+  points: [string, number][];
+}
+
+export interface MacroHistory {
+  range: MacroRange;
+  /** 모든 차트가 같이 쓰는 x 축 구간(YYYY-MM). */
+  start: string;
+  end: string;
+  series: MacroHistorySeries[];
+  /** NBER 경기침체 구간(USREC) [시작월, 끝월] 양끝 포함. */
+  recessions: [string, string][];
+  categories: string[];
+  missing: string[];
+}
+
+export function getMacroSeries(range: MacroRange): Promise<MacroHistory> {
+  return request<MacroHistory>(`/api/v1/market/macro/series?range=${range}`);
 }
 
 // ── 벤치마크 비교 ────────────────────────────────────────────────────────────
@@ -3705,6 +2458,98 @@ export interface FxExposure {
   shocks: FxShock[];
   rate_as_of: string | null;
   note: string;
+}
+
+/** 현재 USD/KRW — 네이버(하나은행 고시)를 먼저, 못 받으면 증권사 환율. */
+export interface FxRate {
+  rate: string | null;
+  source: "naver" | "broker" | "none";
+  bank: string | null;
+  round: number | null;
+  traded_at: string | null;
+  fetched_at: string | null;
+  /** 네이버 재요청이 실패해 마지막 값을 그대로 쓰는 중. */
+  stale: boolean;
+  broker_rate: string | null;
+}
+
+/** 계절성(계획 C4). 예측이 아니라 "과거에 어땠나" — `evidence=false` 면 '상승'은 기본값일 뿐이다. */
+export type SeasonalityWindow = "전구간" | "10년" | "5년";
+
+export interface SeasonalityCell {
+  series: string;
+  month: number;
+  n: number;
+  mean: number | null;
+  win_rate: number | null;
+  t: number | null;
+  excess: number | null;
+  p: number | null;
+  fdr: boolean;
+  halves_agree: boolean | null;
+}
+
+export interface SeasonalitySignal {
+  series: string;
+  label: string;
+  /** direct | proxy(대용 ETF) | frozen(갱신 중단) */
+  continuation: string;
+  last_month: string;
+  signal: "상승" | "중립" | "하락";
+  evidence: boolean;
+  t: number | null;
+  n: number;
+  hist_mean: number | null;
+  hist_win_rate: number | null;
+  band: [number | null, number | null] | null;
+  fdr: boolean;
+}
+
+export interface SeasonalityGroup {
+  last_month: string;
+  signal_month: string | null;
+  series: { key: string; label: string; continuation: string; proxy: string | null }[];
+  cells: SeasonalityCell[];
+  signals: SeasonalitySignal[];
+  backtest: Record<"상승" | "중립" | "하락" | "항상상승", { n: number; hit: number | null }>;
+}
+
+export interface Seasonality {
+  window: SeasonalityWindow;
+  t_sig: number;
+  groups: Partial<Record<"index" | "sector", SeasonalityGroup>>;
+}
+
+export function getSeasonality(window: SeasonalityWindow): Promise<Seasonality> {
+  return request<Seasonality>(`/api/v1/market/seasonality?window=${encodeURIComponent(window)}`);
+}
+
+export function getSeasonalityCell(
+  series: string,
+  month: number,
+): Promise<{ series: string; label: string; month: number; years: { year: number; ret: number }[] }> {
+  return request(`/api/v1/market/seasonality/cell?series=${encodeURIComponent(series)}&month=${month}`);
+}
+
+/** 수집기(worker)·외부 원천의 마지막 성공/실패(0019). */
+export interface SourceStatus {
+  source: string;
+  kind: "worker" | "source";
+  /** worker: alive/down · source: ok / 403 / 429 / timeout / other / unknown */
+  state: string;
+  last_ok_at: string | null;
+  last_error_at: string | null;
+  last_error_kind: string | null;
+  last_error_message: string | null;
+  detail: Record<string, unknown> | null;
+}
+
+export function getJobSources(): Promise<{ items: SourceStatus[] }> {
+  return request<{ items: SourceStatus[] }>("/api/v1/jobs/sources");
+}
+
+export function getFxRate(accountId?: string | null): Promise<FxRate> {
+  return request<FxRate>(`/api/v1/portfolio/fx-rate${accountQuery(accountId)}`);
 }
 
 export function getFxExposure(accountId?: string | null): Promise<FxExposure> {
@@ -3920,16 +2765,6 @@ export interface Rebalance {
   notes: string[];
 }
 
-export function getRebalance(
-  accountId?: string | null,
-  band = 0.01,
-): Promise<Rebalance> {
-  const q = accountQuery(accountId);
-  return request<Rebalance>(
-    `/api/v1/portfolio/rebalance${q ? `${q}&` : "?"}band=${band}`,
-  );
-}
-
 /** 종목 하나의 목표 비중만 세운다 — **다른 목표를 건드리지 않는다.** */
 export function putRebalanceTarget(
   ticker: string,
@@ -3950,22 +2785,6 @@ export function deleteRebalanceTarget(ticker: string): Promise<Rebalance> {
   return request<Rebalance>(
     `/api/v1/portfolio/rebalance/targets/${encodeURIComponent(ticker)}`,
     { method: "DELETE" },
-  );
-}
-
-export function putRebalanceTargets(
-  targets: { ticker: string; target_weight: string; memo?: string | null }[],
-  accountId?: string | null,
-  band = 0.01,
-): Promise<Rebalance> {
-  const q = accountQuery(accountId);
-  return request<Rebalance>(
-    `/api/v1/portfolio/rebalance/targets${q ? `${q}&` : "?"}band=${band}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(targets),
-    },
   );
 }
 
@@ -4375,10 +3194,6 @@ export interface SyncResult {
   message: string | null;
 }
 
-export function getCredentialsStatus(): Promise<CredentialsStatus> {
-  return request<CredentialsStatus>("/api/v1/brokerage/credentials");
-}
-
 /** 등록된 키로 조회되는 계좌 목록 — 연결 확인까지 같이 한다(느릴 수 있다). */
 export function getBrokerAccounts(): Promise<CredentialsStatus> {
   return request<CredentialsStatus>("/api/v1/brokerage/accounts");
@@ -4453,4 +3268,320 @@ export function runQuickSync(): Promise<QuickSyncResult> {
   return request<QuickSyncResult>("/api/v1/brokerage/sync/quick", {
     method: "POST",
   });
+}
+
+// ── 거장 13F (계획 A5) ─────────────────────────────────────────────────────────
+// ⚠️기술 도구 — 예측이 아니다. 응답마다 `disclaimer`.
+
+export interface GuruQuarter {
+  period: string;
+  label: string;
+}
+
+export interface GuruRef {
+  cik: string;
+  guru: string;
+  firm: string;
+}
+
+export interface GuruStockMove {
+  key: string;
+  cusip: string;
+  name: string | null;
+  ticker: string | null;
+  n_gurus: number;
+  total_bp: number;
+  gurus: (GuruRef & { bp: number })[];
+}
+
+export interface GuruSectorRow {
+  sector: string;
+  net_bp: number;
+  curr_wgt_bp: number;
+  prev_wgt_bp: number;
+  up: number;
+  down: number;
+  top: { cusip: string; name: string | null; ticker: string | null; delta_bp: number }[];
+}
+
+export interface GuruSectorFlow extends GuruQuarter {
+  prev: GuruQuarter;
+  n_participants: number;
+  rows: GuruSectorRow[];
+  coverage_curr: number | null;
+  coverage_prev: number | null;
+  unclassified_unreliable: boolean;
+}
+
+export interface GuruMyHolding {
+  ticker: string;
+  name: string | null;
+  n_gurus: number;
+  avg_bp: number | null;
+  delta_bp: number | null;
+  holders: (GuruRef & { bp: number })[];
+}
+
+export interface GuruOverview {
+  disclaimer: string;
+  n_gurus: number;
+  latest: { period: string; label: string; n_filed: number; n_gurus: number; filed_pct: number; usable: boolean } | null;
+  quorum: number;
+  curr: GuruQuarter | null;
+  prev: GuruQuarter | null;
+  period_meta: { period: string; label: string; n_filed: number; filed_pct: number; usable: boolean }[];
+  roster: (GuruRef & { last_period: GuruQuarter | null; filed_latest: boolean })[];
+  n_participants: number;
+  multi_entries: GuruStockMove[];
+  multi_exits: GuruStockMove[];
+  my_holdings: GuruMyHolding[];
+  sector_history: GuruSectorFlow[];
+  warnings: string[];
+}
+
+export interface GuruRebalanceRow {
+  key: string;
+  name: string | null;
+  ticker: string | null;
+  movers: number;
+  buyers: number;
+  sellers: number;
+  gross_bp: number;
+  net_bp: number;
+  agreement: number;
+}
+
+export interface GuruQuarterDetail {
+  disclaimer: string;
+  curr: GuruQuarter;
+  prev: GuruQuarter;
+  n_participants: number;
+  entries: GuruStockMove[];
+  exits: GuruStockMove[];
+  total_entries: number;
+  total_exits: number;
+  rebalance: GuruRebalanceRow[];
+  sector: Omit<GuruSectorFlow, "period" | "label" | "prev">;
+}
+
+export interface GuruStockTrend {
+  disclaimer: string;
+  ticker: string;
+  periods: GuruQuarter[];
+  gurus: (GuruRef & { points: (number | null)[] })[];
+}
+
+export function getGuruOverview(): Promise<GuruOverview> {
+  return request("/api/v1/research/guru/overview");
+}
+
+export function getGuruQuarter(period: string): Promise<GuruQuarterDetail> {
+  return request(`/api/v1/research/guru/quarter?period=${encodeURIComponent(period)}`);
+}
+
+export function getGuruStock(ticker: string): Promise<GuruStockTrend> {
+  return request(`/api/v1/research/guru/stock?ticker=${encodeURIComponent(ticker)}`);
+}
+
+// ── 내부자 거래 (계획 A6) ──────────────────────────────────────────────────────
+// ★순매수 = 비파생 · 코드 P/S · 10b5-1 계획매매 제외 · 정정 대체분 제외. 나머지는 월 상세에 회색으로.
+
+export interface InsiderMonth {
+  month: string;
+  n_trades: number;
+  net_value: number | null; // 거래 없는 달은 null(막대 없음 — 0 과 다르다)
+  by_ticker: { ticker: string; net_value: number }[];
+}
+
+export interface InsiderOverview {
+  window_days: number;
+  rule: string;
+  targets: string[];
+  no_data: string[];
+  data_from: { ticker: string; from: string; to: string }[];
+  net_value_window: number;
+  buy_count_window: number;
+  sell_count_window: number;
+  multi_insider_buys: { ticker: string; n_insiders: number }[];
+  recent_13d: { filing_date: string; watch_name: string; issuer_name: string | null; headline: string; source_url: string }[];
+  monthly: InsiderMonth[];
+  future_dated: number;
+}
+
+export interface InsiderTrade {
+  ticker: string;
+  date: string;
+  code: string | null;
+  code_label: string | null;
+  insider: string | null;
+  role: string | null;
+  shares: number | null;
+  price: number | null;
+  value: number | null;
+  signed_value: number | null;
+  planned: boolean;
+  counted: boolean;
+  excluded_reason: string | null;
+  accession: string;
+}
+
+export interface InsiderMonthDetail {
+  month: string;
+  net_value: number | null;
+  n_counted: number;
+  n_excluded: number;
+  trades: InsiderTrade[];
+}
+
+export function getInsiderOverview(): Promise<InsiderOverview> {
+  return request("/api/v1/research/insiders/overview");
+}
+
+export function getInsiderMonth(month: string): Promise<InsiderMonthDetail> {
+  return request(`/api/v1/research/insiders/month?month=${encodeURIComponent(month)}`);
+}
+
+// ── 거장 명단 관리 (계획 A7) ─────────────────────────────────────────────────
+
+export interface GuruRosterItem {
+  cik: string;
+  guru_name: string | null;
+  firm: string;
+  filer_name: string;
+  kind: "guru" | "index";
+  active: boolean;
+  backfill_status: "pending" | "running" | "done" | "failed" | "skip";
+  backfill_from: string;
+  added_at: string;
+  note: string | null;
+  n_periods: number;
+  last_period: string | null;
+}
+
+export interface GuruSearchHit {
+  cik: string;
+  name: string;
+  in_roster: boolean;
+  kind: string | null;
+  active: boolean | null;
+}
+
+export function getGuruRoster(): Promise<{ items: GuruRosterItem[] }> {
+  return request("/api/v1/research/guru/roster");
+}
+
+export function searchGuru(q: string): Promise<{ query: string; items: GuruSearchHit[] }> {
+  return request(`/api/v1/research/guru/search?q=${encodeURIComponent(q)}`);
+}
+
+export function addGuru(body: { cik: string; filer_name: string; guru_name?: string; firm?: string }): Promise<GuruRosterItem> {
+  return request("/api/v1/research/guru/roster", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
+}
+
+export function setGuruActive(cik: string, active: boolean): Promise<GuruRosterItem> {
+  return request(`/api/v1/research/guru/roster/${cik}`, {
+    method: "PATCH",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ active }),
+  });
+}
+
+// ── 실적 모니터 (계획 B3a · B6) ─────────────────────────────────────────────────
+// 일정 · EPS 컨센 = Nasdaq, 매출 컨센 = Investing.com(B3b — 실패 시 "수집 실패"), 실적 · 반응 = B4, 관전포인트 = B2 · B5.
+
+export interface EarningsMonEvent {
+  id: number;
+  ticker: string;
+  quarter: string;
+  company: string | null;
+  report_date: string | null;
+  timing: "장전" | "장후" | "미정";
+  eps_forecast: number | null;
+  n_estimates: number | null;
+  revenue_forecast: number | null;
+  revenue_forecast_status: "ok" | "failed" | "unverified" | null;
+  eps_forecast_verified: boolean;
+  revenue_forecast_verified: boolean;
+  source: string;
+}
+
+export interface EarningsMonUpcoming extends EarningsMonEvent {
+  days_left: number;
+  within_4w: boolean;
+}
+
+export interface EarningsMonResult extends EarningsMonEvent {
+  eps_actual: number | null;
+  revenue_actual: number | null;
+  eps_surprise_pct: number | null;
+  revenue_surprise_pct: number | null;
+  verdict: "상회" | "부합" | "하회" | null;
+  reaction_pct: number | null;
+  reaction_window: string | null;
+  eps_actual_verified: boolean;
+  revenue_actual_verified: boolean;
+  verdict_verified: boolean;
+  verified: boolean; // compatibility alias for verdict_verified
+}
+
+export interface EarningsMonDay {
+  date: string;
+  week: number;
+  tickers: string[];
+  bmo: number;
+  amc: number;
+  tbd: number;
+}
+
+export interface EarningsMonOverview {
+  today: string;
+  targets: string[];
+  no_events: string[];
+  this_week_count: number;
+  last_week: { beat: number; miss: number; inline: number; n: number };
+  next: EarningsMonUpcoming | null;
+  max_reaction: EarningsMonResult | null;
+  days: EarningsMonDay[];
+  upcoming: EarningsMonUpcoming[];
+  recent: EarningsMonResult[];
+}
+
+export interface EarningsMonWatchpoint {
+  quarter: string;
+  rank: number;
+  point: string | null;
+  result: string | null;
+  source: "import" | "llm";
+  model: string | null;
+}
+
+export interface EarningsMonStockEvent extends EarningsMonResult {
+  filing_url: string | null;
+  overall: "서프라이즈" | "중립" | "쇼크" | "미확인" | null; // B5 LLM 결과 판정
+  reaction_note: string | null;
+  watchpoints: EarningsMonWatchpoint[];
+  guidance: {
+    metric: string;
+    period: string | null;
+    low: number | null;
+    high: number | null;
+    prior_low: number | null;
+    prior_high: number | null;
+    direction: string | null;
+    text: string | null;
+  }[];
+}
+
+export interface EarningsMonStock {
+  ticker: string;
+  company: string;
+  events: EarningsMonStockEvent[];
+}
+
+export function getEarningsMonitor(): Promise<EarningsMonOverview> {
+  return request("/api/v1/research/earnings/overview");
+}
+
+export function getEarningsMonitorStock(ticker: string): Promise<EarningsMonStock> {
+  return request(`/api/v1/research/earnings/stock/${encodeURIComponent(ticker)}`);
 }

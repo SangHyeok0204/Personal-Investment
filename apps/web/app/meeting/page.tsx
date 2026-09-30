@@ -356,15 +356,8 @@ function EmptyState() {
       <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-ge-main via-ge-point to-ge-navy shadow-[0_10px_30px_rgba(70,105,170,0.28)]">
         <FolderOpen className="h-9 w-9 text-white" strokeWidth={1.8} />
       </div>
-      <div>
-        <div className="text-[15px] font-extrabold text-ge-navy">
-          회의자료를 선택하세요
-        </div>
-        <div className="mt-1.5 text-[12.5px] leading-relaxed text-ink-muted">
-          왼쪽 파일 탐색기에서 폴더를 열고
-          <br />
-          HTML 파일을 클릭하면 이곳에 표시됩니다.
-        </div>
+      <div className="text-[15px] font-extrabold text-ge-navy">
+        회의자료를 선택하세요
       </div>
     </div>
   );

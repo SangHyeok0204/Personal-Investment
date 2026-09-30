@@ -19,6 +19,8 @@ const LINE = "#4C2C19"; // BROWN
 const FILL_TOP = "rgba(76,44,25,0.14)";
 const FILL_BOTTOM = "rgba(76,44,25,0.01)";
 const CROSS = "#A6A6A6";
+// 보조 계열(오른쪽 축). 팔레트의 BLUE — 메인 BROWN 과 명도·색상이 둘 다 갈린다.
+const LINE2 = "#6390BF";
 
 const PAD_L = 62;
 const PAD_R = 10;
@@ -26,6 +28,37 @@ const PAD_T = 8;
 const XAXIS_H = 20;
 
 export type SeriesPoint = { date: string; value: number | null };
+
+/** 오른쪽 축에 따로 눈금을 두는 두 번째 계열. `values` 는 `points` 와 같은 순서다. */
+export type SecondarySeries = {
+  label: string;
+  values: (number | null)[];
+  tooltipFormat?: (v: number) => string;
+};
+
+/** 1·2·2.5·5 × 10ⁿ 중 raw 이상인 가장 작은 값. */
+function niceStep(raw: number): number {
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+
+/** min~max 를 **정확히 segments 칸**의 딱 떨어지는 눈금으로 덮는다.
+ *  ⚠️칸 수를 두 축이 같이 쓰는 이유: 격자선은 한 벌이라, 칸 수가 다르면 오른쪽
+ *    눈금이 격자선과 어긋난 자리에 찍혀 읽을 수 없다. */
+function niceScale(min: number, max: number, segments: number) {
+  if (min === max) {
+    const pad = Math.abs(min) * 0.05 || 1;
+    min -= pad;
+    max += pad;
+  }
+  let step = niceStep((max - min) / segments);
+  for (;;) {
+    const lo = Math.floor(min / step) * step;
+    if (lo + step * segments >= max) return { min: lo, max: lo + step * segments };
+    step = niceStep(step * 1.01);
+  }
+}
 
 function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
@@ -56,15 +89,25 @@ export function SeriesChart({
   tooltipFormat,
   /** 0 을 축에 포함할지. 자산 곡선은 포함하면 변화가 안 보여 기본 false. */
   includeZero = false,
+  label,
+  secondary,
 }: {
   points: SeriesPoint[];
   height?: number;
   valueFormat?: (v: number) => string;
   tooltipFormat?: (p: SeriesPoint) => string;
   includeZero?: boolean;
+  /** 메인 계열 이름. `secondary` 와 같이 쓸 때 범례에 뜬다. */
+  label?: string;
+  /** 오른쪽 축 계열. 있으면 두 축 모두 딱 떨어지는 눈금으로 맞춘다. */
+  secondary?: SecondarySeries;
 }) {
   const { ref, width } = useWidth();
   const [hover, setHover] = useState<number | null>(null);
+
+  // 두 축일 때는 오른쪽 눈금 자리와 위쪽 범례 자리를 더 연다.
+  const padR = secondary ? PAD_L : PAD_R;
+  const padT = secondary ? 22 : PAD_T;
 
   const model = useMemo(() => {
     const valid = points.filter((p) => p.value != null) as { date: string; value: number }[];
@@ -76,17 +119,38 @@ export function SeriesChart({
       min = Math.min(min, 0);
       max = Math.max(max, 0);
     }
-    if (min === max) {
+    const innerW = Math.max(width - PAD_L - padR, 1);
+    const innerH = Math.max(height - padT - XAXIS_H, 1);
+    const x = (i: number) =>
+      PAD_L + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+
+    const values2 = (secondary?.values ?? []).filter((v): v is number => v != null);
+    let ticks: number[];
+    let ticks2: number[] = [];
+    let y2: ((v: number) => number) | null = null;
+    let path2 = "";
+    if (secondary && values2.length > 0) {
+      ({ min, max } = niceScale(min, max, 4));
+      const s2 = niceScale(Math.min(...values2), Math.max(...values2), 4);
+      y2 = (v: number) => padT + innerH - ((v - s2.min) / (s2.max - s2.min)) * innerH;
+      ticks2 = [0, 0.25, 0.5, 0.75, 1].map((t) => s2.min + (s2.max - s2.min) * t);
+      let open2 = false;
+      secondary.values.forEach((v, i) => {
+        if (v == null) {
+          open2 = false;
+          return;
+        }
+        path2 += `${open2 ? "L" : "M"}${x(i).toFixed(1)},${y2!(v).toFixed(1)}`;
+        open2 = true;
+      });
+    } else if (min === max) {
       // 평평한 계열 — 위아래로 여유를 줘야 선이 축에 붙지 않는다.
       const pad = Math.abs(min) * 0.05 || 1;
       min -= pad;
       max += pad;
     }
-    const innerW = Math.max(width - PAD_L - PAD_R, 1);
-    const innerH = Math.max(height - PAD_T - XAXIS_H, 1);
-    const x = (i: number) =>
-      PAD_L + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
-    const y = (v: number) => PAD_T + innerH - ((v - min) / (max - min)) * innerH;
+    ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => min + (max - min) * t);
+    const y = (v: number) => padT + innerH - ((v - min) / (max - min)) * innerH;
 
     // 결측을 만나면 선을 끊는다(M 으로 다시 시작).
     let path = "";
@@ -99,17 +163,17 @@ export function SeriesChart({
       }
       const cmd = open ? "L" : "M";
       path += `${cmd}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
-      if (!open) area += `${area ? "Z" : ""}M${x(i).toFixed(1)},${(PAD_T + innerH).toFixed(1)}`;
+      if (!open) area += `${area ? "Z" : ""}M${x(i).toFixed(1)},${(padT + innerH).toFixed(1)}`;
       area += `L${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
       open = true;
     });
-    if (area) area += `L${x(points.length - 1).toFixed(1)},${(PAD_T + innerH).toFixed(1)}Z`;
+    if (area) area += `L${x(points.length - 1).toFixed(1)},${(padT + innerH).toFixed(1)}Z`;
 
-    const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => min + (max - min) * t);
-    return { min, max, x, y, path, area, ticks, innerH };
-  }, [points, width, height, includeZero]);
+    return { min, max, x, y, path, area, ticks, innerH, y2, ticks2, path2 };
+  }, [points, width, height, includeZero, secondary, padR, padT]);
 
   const hovered = hover != null ? points[hover] : null;
+  const hovered2 = hover != null ? (secondary?.values[hover] ?? null) : null;
 
   return (
     <div ref={ref} className="relative w-full" style={{ height }}>
@@ -122,7 +186,7 @@ export function SeriesChart({
           onMouseMove={(e) => {
             const box = e.currentTarget.getBoundingClientRect();
             const rel = e.clientX - box.left - PAD_L;
-            const innerW = Math.max(width - PAD_L - PAD_R, 1);
+            const innerW = Math.max(width - PAD_L - padR, 1);
             const idx = Math.round((rel / innerW) * (points.length - 1));
             setHover(Math.min(Math.max(idx, 0), points.length - 1));
           }}
@@ -138,7 +202,7 @@ export function SeriesChart({
             <g key={i}>
               <line
                 x1={PAD_L}
-                x2={width - PAD_R}
+                x2={width - padR}
                 y1={model.y(t)}
                 y2={model.y(t)}
                 stroke={GRID}
@@ -148,27 +212,66 @@ export function SeriesChart({
                 y={model.y(t) + 4}
                 textAnchor="end"
                 fontSize="11"
-                fill={AXIS_TEXT}
+                fill={secondary ? LINE : AXIS_TEXT}
               >
                 {valueFormat(t)}
               </text>
+              {/* 오른쪽 눈금 — 같은 격자선에 찍는다(niceScale 이 칸 수를 맞춘다).
+                  글자색을 선 색과 맞춰 어느 축이 어느 선인지 읽히게 한다. */}
+              {model.y2 && model.ticks2[i] != null && (
+                <text
+                  x={width - padR + 8}
+                  y={model.y(t) + 4}
+                  textAnchor="start"
+                  fontSize="11"
+                  fill={LINE2}
+                >
+                  {valueFormat(model.ticks2[i])}
+                </text>
+              )}
             </g>
           ))}
 
+          {secondary && (
+            <g fontSize="11" fontWeight="700">
+              <line x1={PAD_L} x2={PAD_L + 14} y1={9} y2={9} stroke={LINE} strokeWidth="2" />
+              <text x={PAD_L + 18} y={13} fill={LINE}>
+                {label ?? "왼쪽 축"}
+              </text>
+              <line
+                x1={width - padR - 14}
+                x2={width - padR}
+                y1={9}
+                y2={9}
+                stroke={LINE2}
+                strokeWidth="2"
+              />
+              <text x={width - padR - 18} y={13} fill={LINE2} textAnchor="end">
+                {secondary.label}
+              </text>
+            </g>
+          )}
+
           <path d={model.area} fill="url(#seriesFill)" />
           <path d={model.path} fill="none" stroke={LINE} strokeWidth="1.8" />
+          {model.path2 && (
+            <path d={model.path2} fill="none" stroke={LINE2} strokeWidth="1.8" />
+          )}
 
           {hovered?.value != null && hover != null && (
             <>
               <line
                 x1={model.x(hover)}
                 x2={model.x(hover)}
-                y1={PAD_T}
-                y2={PAD_T + model.innerH}
+                y1={padT}
+                y2={padT + model.innerH}
                 stroke={CROSS}
                 strokeDasharray="3 3"
               />
               <circle cx={model.x(hover)} cy={model.y(hovered.value)} r="3.5" fill={LINE} />
+              {model.y2 && hovered2 != null && (
+                <circle cx={model.x(hover)} cy={model.y2(hovered2)} r="3.5" fill={LINE2} />
+              )}
             </>
           )}
 
@@ -200,6 +303,16 @@ export function SeriesChart({
                 ? tooltipFormat(hovered)
                 : valueFormat(hovered.value)}
           </span>
+          {secondary && (
+            <span className="ml-2 tabular-nums text-[#6390BF]">
+              {secondary.label}{" "}
+              {hovered2 == null
+                ? "—"
+                : secondary.tooltipFormat
+                  ? secondary.tooltipFormat(hovered2)
+                  : valueFormat(hovered2)}
+            </span>
+          )}
         </div>
       )}
     </div>

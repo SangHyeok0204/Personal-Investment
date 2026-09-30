@@ -68,6 +68,9 @@ class EarningsEvent:
     estimate_count: int | None
     last_year_eps: Decimal | None
     market_cap: Decimal | None
+    # 지난 날짜를 부르면 실적 · 서프라이즈(%)도 온다(계획 B3a — 실측 NVDA 2026-08-26 eps $2.22, surprise 6.22)
+    eps_actual: Decimal | None = None
+    eps_surprise_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +143,8 @@ def fetch_calendar(
                     estimate_count=_int(row.get("noOfEsts")),
                     last_year_eps=_money(row.get("lastYearEPS")),
                     market_cap=_money(row.get("marketCap")),
+                    eps_actual=_money(row.get("eps")),
+                    eps_surprise_pct=_money(row.get("surprise")),
                 )
             )
         return out

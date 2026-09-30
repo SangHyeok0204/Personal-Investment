@@ -20,7 +20,8 @@ import { cn } from "@/lib/utils";
 // ⚠️`prefers-reduced-motion` 이면 즉시 교체한다. 움직이는 숫자는 멀미를 유발할 수
 //   있고, 그건 취향이 아니라 접근성 문제다.
 
-const DURATION_MS = 420;
+// ★2026-09-25 사용자 요청: 0.75배속(420ms → 560ms). 5초 갱신 주기 안에 충분히 끝난다.
+const DURATION_MS = 560;
 
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -109,7 +110,9 @@ export function AnimatedNumber({
   }, []);
 
   const animate = ready && !reduced;
-  const chars = value.split("");
+  // ⚠️한 글자씩 inline-block 으로 나누면 **공백이 접혀 사라진다**("2/2 작동" → "2/2작동").
+  //   줄바꿈 없는 공백으로 바꿔 그린다(스크린리더용 sr-only 는 원문 그대로).
+  const chars = value.split("").map((ch) => (ch === " " ? "\u00A0" : ch));
 
   return (
     <span

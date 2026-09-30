@@ -12,10 +12,12 @@ from app.models import Base
 # All tables truncated between tests (FK-safe via CASCADE).
 # 포트폴리오 테이블도 포함한다 — 계좌/종목은 테스트마다 새로 만든다(2026-09-21).
 _ALL_TABLES = (
-    "job_logs, imports, jobs, trades, realized_pnl, account_daily_performance, dividends, "
+    "job_logs, imports, jobs, source_status, trades, realized_pnl, account_daily_performance, dividends, "
     "alert_rules, rebalance_targets, journal_entries, orders, "
     "portfolio_snapshots, current_positions, account_balances, "
-    "accounts, assets, brokerage_connections, brokers"
+    "accounts, assets, brokerage_connections, brokers, monthly_closes, seasonality_series, "
+    "guru_roster, sec_filings, holdings_13f, form4_transactions, ownership_events, cusip_map, watchlist_items, "
+    "earnings_watchpoints, earnings_guidance, earnings_results, earnings_events"
 )
 
 
@@ -40,7 +42,16 @@ def engine():
     admin_engine.dispose()
 
     test_engine = create_engine(test_url, future=True)
+    # 계절성 표는 키가 바뀐 적이 있다(0021) — 재사용 DB 에 옛 키가 남지 않게 새로 만든다.
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS monthly_closes, seasonality_series CASCADE"))
     Base.metadata.create_all(test_engine)
+    # ⚠️테스트 DB 는 재사용된다. create_all 은 **이미 있는 표에 열을 붙이지 않는다**
+    #   — 0019 에서 jobs 에 더한 열을 여기서 멱등하게 맞춘다(워커 테스트와 같은 DB).
+    with test_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS queue VARCHAR NOT NULL DEFAULT 'default'"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ"))
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0"))
     yield test_engine
     test_engine.dispose()
 

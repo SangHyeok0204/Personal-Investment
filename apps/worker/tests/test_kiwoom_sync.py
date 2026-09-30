@@ -674,6 +674,17 @@ def _history_responses():
             }],
             "return_code": 0,
         }),
+        "kt00015": FakeResponse({  # 국내 체결(위탁종합거래내역)
+            # ⚠️거래번호를 해외와 **같은 날 같은 번호**로 둔다. 자연키에 시장이
+            #   빠져 있던 시절에는 이 둘이 서로를 덮어썼다(alembic 0018).
+            "trst_ovrl_trde_prps_array": [{
+                "trde_dt": "20260918", "trde_no": "000000001",
+                "rmrk_nm": "현금매수", "stk_cd": "A005930", "stk_nm": "삼성전자",
+                "trde_qty_jwa_cnt": "10", "trde_unit": "71500",
+                "trde_amt": "000000000715000", "crnc_cd": "KRW",
+            }],
+            "return_code": 0,
+        }),
         "usa21670": FakeResponse({  # 일별 계좌성과
             "result_list": [{
                 "base_dt": "20260918", "dpst_aset_amt": "1000000",
@@ -723,7 +734,19 @@ def test_history_sync_actually_runs(db, tmp_path, patch_client):
     main.run_one_cycle(db, str(tmp_path))
 
     assert _get_job(db, job)["status"] == "SUCCESS"
-    assert _count(db, "trades") == 1
+    # 국내 1건 + 해외 1건. 둘은 같은 날 같은 거래번호("000000001")인데도
+    # 시장이 자연키에 들어 있어 서로를 덮지 않는다.
+    assert _count(db, "trades") == 2
+    with db.begin() as conn:
+        markets = sorted(
+            r[0] for r in conn.execute(text("SELECT market FROM trades")).all()
+        )
+        tickers = sorted(
+            r[0] for r in conn.execute(text("SELECT ticker FROM trades")).all()
+        )
+    assert markets == ["KR", "US"]
+    # 국내 종목코드는 접두어("A005930")를 떼고 저장해야 잔고와 같은 종목이 된다.
+    assert tickers == ["005930", "AAPL"]
     assert _count(db, "account_daily_performance") == 1
     assert _count(db, "realized_pnl") == 1
     assert _count(db, "orders") == 1

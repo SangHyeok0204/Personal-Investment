@@ -14,10 +14,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <Topbar
-        title="설정"
-        subtitle="Read-only system information for this phase."
-      />
+      <Topbar title="설정" />
       <PageContainer>
         <Card>
           <CardHeader>
@@ -45,8 +42,6 @@ export default function SettingsPage() {
               ))}
             </dl>
             <p className="mt-4 text-xs text-ink-faint">
-              Settings are read-only in this phase. Configuration is managed
-              through environment variables.{" "}
               <span className="text-white">Hi Gayeong</span>
             </p>
           </CardContent>

@@ -229,7 +229,7 @@ export function PerfReportCard() {
         <>
           {stale && (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2 text-[12px] text-amber-800">
-              오늘({d?.today}) 만들어진 보고서가 아닙니다 — {sel.savedAt} 저장분입니다.
+              {sel.savedAt} 저장분
             </div>
           )}
           <div className="overflow-hidden rounded-xl border border-hairline">

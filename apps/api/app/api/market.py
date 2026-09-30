@@ -8,9 +8,9 @@
   "+10bp" 다. 전부 수익률로 묶으면 화면이 통째로 틀린 말을 하게 된다.
   price → 비율(%), rate → bp.
 
-⚠️`/api/v1/stock-monitor` 와 다른 화면이다. 그쪽은 원본 GE 의 collector 를
-  프록시하는데 이 환경에는 collector 가 없어서 503 이다. 여기는 외부 의존이
-  야후뿐이라 그 자체로 동작한다.
+⚠️collector 를 프록시하는 화면들(iNAV · AI Key Data 등)과 다르다. 그쪽은 원본 GE 의
+  collector 가 필요한데 이 환경에는 없어서 503 이다. 여기는 외부 의존이 야후뿐이라
+  그 자체로 동작한다.
 """
 
 import sys
@@ -19,6 +19,7 @@ import time
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -27,7 +28,10 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import Asset, CurrentPosition
 
+from app.core import ai_live
 from app.schemas import (
+    AiSourceOut,
+    AiStatusOut,
     MarketNewsOut,
     TopicArticleOut,
     TopicOut,
@@ -36,6 +40,8 @@ from app.schemas import (
     EarningsEventOut,
     EarningsOut,
     EpsHistoryOut,
+    MacroHistoryOut,
+    MacroHistorySeriesOut,
     MacroMonitorOut,
     MacroRowOut,
     ManufacturerCountOut,
@@ -167,7 +173,12 @@ _MACRO_SEED = (
 MACRO_TTL_SECONDS = 3600.0
 
 _macro_lock = threading.Lock()
-_macro_cache: tuple[float, "MacroMonitorOut"] | None = None
+# (시각, /macro 응답, 원시 series_map). 원시 이력도 같이 들고 있어야 `/macro/series`
+# 가 FRED 를 다시 받지 않는다.
+_macro_cache: tuple[float, "MacroMonitorOut", dict] | None = None
+
+# NBER 경기침체 여부(월간 0/1). 차트 음영용 — 지표 목록에는 넣지 않는다.
+_RECESSION_ID = "USREC"
 
 
 def _load_macro_universe():
@@ -202,10 +213,9 @@ def _macro_at(series, transform: str, when):
     return series.value_on_or_before(when)
 
 
-def _build_macro() -> "MacroMonitorOut":
+def _build_macro(series_map: dict) -> "MacroMonitorOut":
     universe = _load_macro_universe()
     rows_def = universe.MACRO_UNIVERSE
-    series_map = fred.fetch_series([r[0] for r in rows_def])
 
     labels = [label for label, _ in universe.PERIOD_DAYS]
     out: list[MacroRowOut] = []
@@ -271,6 +281,11 @@ def get_macro(refresh: bool = Query(default=False)) -> MacroMonitorOut:
     ★FRED 를 **키 없이** 쓴다. API 는 api_key 를 요구하지만(400), 그래프 CSV
       내보내기는 키 없이 200 이다(실측).
     """
+    return _macro_state(refresh)[0]
+
+
+def _macro_state(refresh: bool) -> tuple["MacroMonitorOut", dict]:
+    """1시간 캐시 — `/macro` 와 `/macro/series` 가 같이 쓴다."""
     global _macro_cache
     now = time.monotonic()
     with _macro_lock:
@@ -279,12 +294,136 @@ def get_macro(refresh: bool = Query(default=False)) -> MacroMonitorOut:
             and _macro_cache is not None
             and now - _macro_cache[0] < MACRO_TTL_SECONDS
         ):
-            return _macro_cache[1]
+            return _macro_cache[1], _macro_cache[2]
 
-    built = _build_macro()
+    universe = _load_macro_universe()
+    # ⚠️USREC 는 음영용 1건 추가 요청이다(같은 병렬 묶음에 태운다).
+    series_map = fred.fetch_series(
+        [r[0] for r in universe.MACRO_UNIVERSE] + [_RECESSION_ID]
+    )
+    built = _build_macro(series_map)
     with _macro_lock:
-        _macro_cache = (time.monotonic(), built)
-    return built
+        _macro_cache = (time.monotonic(), built, series_map)
+    return built, series_map
+
+
+def _macro_monthly(series, transform: str) -> list[tuple[str, float]]:
+    """관측치 → 월간 이력 [("YYYY-MM", 값)].
+
+    ★**월말 다운샘플을 먼저** 한다(한 달의 마지막 관측치). 그 뒤 transform 을
+      월 키 조회로 한 번에 계산한다 — 점마다 `value_on_or_before` 를 부르면 일간
+      시리즈(수만 개)에서 O(n²) 이다.
+    ⚠️yoy 는 정확히 12개월 전, mom_diff 는 정확히 전월 값이 있어야 낸다. 없으면
+      그 점을 버린다(가까운 값으로 메우면 틀린 비율이 조용히 나온다).
+    """
+    keys: list[tuple[int, int]] = []
+    vals: list[Decimal] = []
+    for day, value in zip(series.dates, series.values):
+        key = (day.year, day.month)
+        if keys and keys[-1] == key:
+            vals[-1] = value
+        else:
+            keys.append(key)
+            vals.append(value)
+
+    by_key = dict(zip(keys, vals))
+    out: list[tuple[str, float]] = []
+    for (year, month), value in zip(keys, vals):
+        if transform == "yoy":
+            past = by_key.get((year - 1, month))
+            if past is None or past == 0:
+                continue
+            result = (value - past) / past
+        elif transform == "mom_diff":
+            past = by_key.get((year, month - 1) if month > 1 else (year - 1, 12))
+            if past is None:
+                continue
+            result = value - past
+        else:
+            result = value
+        out.append((f"{year:04d}-{month:02d}", round(float(result), 6)))
+    return out
+
+
+def _recession_ranges(points: list[tuple[str, float]]) -> list[tuple[str, str]]:
+    """USREC 월간 0/1 → 침체 구간 [(시작월, 끝월)] (양끝 포함)."""
+    ranges: list[tuple[str, str]] = []
+    start: str | None = None
+    prev: str | None = None
+    for month, value in points:
+        if value >= 0.5:
+            if start is None:
+                start = month
+        elif start is not None:
+            ranges.append((start, prev or start))
+            start = None
+        prev = month
+    if start is not None:
+        ranges.append((start, prev or start))
+    return ranges
+
+
+_MACRO_RANGE_YEARS = {"5y": 5, "10y": 10, "20y": 20, "max": None}
+
+
+@router.get("/macro/series", response_model=MacroHistoryOut)
+def get_macro_series(
+    range_: str = Query(default="10y", alias="range", pattern="^(5y|10y|20y|max)$"),
+    refresh: bool = Query(default=False),
+) -> MacroHistoryOut:
+    """매크로 지표 월간 이력 + NBER 침체 구간. `/macro` 와 캐시를 공유한다."""
+    _, series_map = _macro_state(refresh)
+    universe = _load_macro_universe()
+
+    years = _MACRO_RANGE_YEARS[range_]
+    today = date.today()
+    cutoff = f"{today.year - years:04d}-{today.month:02d}" if years else ""
+
+    out: list[MacroHistorySeriesOut] = []
+    missing: list[str] = []
+    for series_id, name, category, transform, unit, note in universe.MACRO_UNIVERSE:
+        series = series_map.get(series_id)
+        if series is None:
+            missing.append(f"{name} ({series_id})")
+            continue
+        points = [p for p in _macro_monthly(series, transform) if p[0] >= cutoff]
+        out.append(
+            MacroHistorySeriesOut(
+                series_id=series_id,
+                name=name,
+                category=category,
+                transform=transform,
+                unit=unit,
+                note=note or None,
+                points=points,
+            )
+        )
+
+    firsts = [s.points[0][0] for s in out if s.points]
+    lasts = [s.points[-1][0] for s in out if s.points]
+    start = cutoff or (min(firsts) if firsts else "")
+    end = max(lasts) if lasts else f"{today.year:04d}-{today.month:02d}"
+
+    usrec = series_map.get(_RECESSION_ID)
+    recessions = (
+        [
+            r
+            for r in _recession_ranges(_macro_monthly(usrec, "level"))
+            if r[1] >= start
+        ]
+        if usrec is not None
+        else []
+    )
+
+    return MacroHistoryOut(
+        range=range_,
+        start=start,
+        end=end,
+        series=out,
+        recessions=recessions,
+        categories=universe.CATEGORY_ORDER,
+        missing=missing,
+    )
 
 
 # ── 실적 발표 일정 ──────────────────────────────────────────────────────────
@@ -495,6 +634,31 @@ def get_ai_data(refresh: bool = Query(default=False)) -> AiDataOut:
     with _ai_lock:
         _ai_cache = (time.monotonic(), built)
     return built
+
+
+# ── AI Key Data v2 (S5) — 소스별. 위 `/ai-data` 는 기존 탭이 쓰므로 그대로 둔다. ──
+# 조립·캐시는 app/core/ai_live.py, 원천은 apps/worker/prices/ai_sources/*.
+
+AiSourceName = Literal["npm", "ramp", "openrouter", "tool_calling", "epoch", "vscode", "pypi"]
+
+
+# ⚠️`/ai/{source}` 보다 **먼저** 선언한다 — 뒤에 두면 "status" 가 source 로 잡혀 422 다.
+@router.get("/ai/status", response_model=AiStatusOut)
+def get_ai_status(db: Session = Depends(get_db)) -> AiStatusOut:
+    """소스별 신선도(ok/last_ok/latest_date/note/as_of/key_missing). 원천을 부르지 않는다."""
+    return AiStatusOut(items=ai_live.status(db))
+
+
+@router.get("/ai/{source}", response_model=AiSourceOut)
+def get_ai_source(
+    source: AiSourceName,
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> AiSourceOut:
+    """라이브 소스는 6h 메모리 캐시(실패 시 last-good=stale), vscode·pypi 는 스냅샷 표."""
+    if source in ai_live.SNAPSHOT:
+        return AiSourceOut(**ai_live.snapshot_payload(db, source))
+    return AiSourceOut(**ai_live.get(source, refresh=refresh))
 
 
 # ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────

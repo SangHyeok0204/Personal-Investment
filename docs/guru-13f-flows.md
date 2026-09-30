@@ -1,3 +1,9 @@
+> ★**2026-09-27 이전(계획 A5 · A8)**: 이 문서의 collector 배관(`guru13f.py` · `guru_flows.py` · `guru_queries.py`
+> · `/guru-13f/*` 프록시)은 **삭제했다.** 분석은 `apps/api/app/core/guru_flows.py`(순수 함수) · API
+> `/api/v1/research/guru/*` · 화면 `/research/guru` 로 옮겼다. 정정공시는 `app/core/guru13f.effective_accessions`
+> (원본 `_LATEST_13F_CTE` 버그 수정), 섹터 맵은 `apps/api/app/assets/guru_sector_map.csv` + SEC SIC 대체.
+> 아래는 **방법론 기록**으로 남긴다(예측 아님 결론 · 정족수 · 커버리지 격차 아티팩트).
+
 # GURU[13F] 변동 분석 (guru_flows)
 
 > **★2026-08-11 정본 이전.** 분석 산출이 대시보드에서 **배치 HTML** 로 옮겨가면서
@@ -6,10 +12,10 @@
 >
 > | | 경로 |
 > |---|---|
-> | 원본 | `S:\GE\raw\운용 전략\구루\13F기관내부자\src\flows.py` |
+> | 원본 | 원본: 사내 공유 드라이브(경로 비공개) |
 > | 벤더 사본 | `apps/collector/collector/guru_flows.py` |
 > | 리포트 생성기 | `…\13F기관내부자\scripts\build_flows_report.py` + `make_report.bat` |
-> | 산출 | `S:\GE\raw\data\13F기관내부자\output\results\13F_거장변동_{분기}.html` |
+> | 산출 | 원본: 사내 공유 드라이브(경로 비공개) |
 >
 > **고칠 일이 생기면 13F 쪽을 고치고 이쪽으로 복사한다.** 두 파일의 차이는 import 경로
 > (`.guru_queries` ↔ `src.storage`/`src.gurus`/`src.normalize`)와 섹터 맵 경로뿐이다.

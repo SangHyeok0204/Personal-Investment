@@ -47,7 +47,7 @@ function Failed({ error }: { error: unknown }) {
         신규상장 데이터를 불러오지 못했습니다
       </p>
       <p className="max-w-md text-[12.5px] leading-relaxed text-ink-faint">
-        상장이 없다는 뜻이 아닙니다. 수집기에 닿지 못했습니다. ({msg})
+        {msg}
       </p>
     </div>
   );

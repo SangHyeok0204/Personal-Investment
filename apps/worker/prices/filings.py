@@ -16,12 +16,16 @@
 """
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import httpx
+
+# ★(계획 A3a) SEC 요청은 공용 클라이언트를 거친다 — 프로세스당 속도 제한 + 403 이면 10분 멈춤.
+#   예전에는 4스레드가 제한 없이 동시에 불렀다.
+from sec.client import SecBlocked, sec_client, sec_get
+from sec.client import user_agent as _sec_user_agent
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -31,8 +35,8 @@ _DEFAULT_UA = "Personal-Investment-Dashboard/1.0 (dashboard@personal-investment.
 
 
 def user_agent() -> str:
-    """SEC 에 보낼 UA. 사용자가 `.env` 에 넣으면 그 값을 쓴다."""
-    return (os.environ.get("SEC_USER_AGENT") or "").strip() or _DEFAULT_UA
+    """SEC 에 보낼 UA. 사용자가 `.env` 에 넣으면 그 값을 쓴다(`sec.client` 와 같은 규칙)."""
+    return _sec_user_agent()
 
 
 # ── 서식 분류 ────────────────────────────────────────────────────────────────
@@ -196,10 +200,7 @@ class TickerFilings:
 
 
 def _client(timeout: float) -> httpx.Client:
-    return httpx.Client(
-        timeout=timeout,
-        headers={"User-Agent": user_agent(), "Accept-Encoding": "gzip, deflate"},
-    )
+    return sec_client(timeout)
 
 
 def fetch_cik_map(timeout: float = 15.0) -> dict[str, tuple[str, str]]:
@@ -209,7 +210,7 @@ def fetch_cik_map(timeout: float = 15.0) -> dict[str, tuple[str, str]]:
     """
     try:
         with _client(timeout) as client:
-            response = client.get(TICKER_MAP_URL)
+            response = sec_get(client, TICKER_MAP_URL)
             if response.status_code != 200:
                 return {}
             raw = response.json()
@@ -245,13 +246,18 @@ def _one(
     limit: int,
 ) -> TickerFilings:
     try:
-        response = client.get(SUBMISSIONS_URL.format(cik=cik))
+        response = sec_get(client, SUBMISSIONS_URL.format(cik=cik))
         if response.status_code != 200:
             return TickerFilings(
                 ticker=ticker, cik=cik, company=company, ok=False,
                 reason=f"SEC 응답 {response.status_code}",
             )
         recent = (response.json().get("filings") or {}).get("recent") or {}
+    except SecBlocked:
+        return TickerFilings(
+            ticker=ticker, cik=cik, company=company, ok=False,
+            reason="SEC 403 차단 — 10분 쉰 뒤 다시 받습니다",
+        )
     except Exception as exc:  # 네트워크·JSON 어느 쪽이든 한 종목만 비운다.
         return TickerFilings(
             ticker=ticker, cik=cik, company=company, ok=False,

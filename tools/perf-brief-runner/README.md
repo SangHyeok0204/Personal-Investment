@@ -17,7 +17,7 @@ collector 컨테이너로 옮길 수 없다(옮기려면 별도 Anthropic API �
        1. collector 의 /perf-brief/analyze 로 확정 수치 수령 (검증된 엔진 재사용)
        2. 프롬프트 = json_schema.md + 완성 보고서 2종 예시 + 확정 수치 + QA 경고
        3. claude -p --output-format json  (WebSearch 로 뉴스 조사 + 서사 작성)
-       4. 수치 보존 검증 → S:\...\정기미팅\daily_YYYYMMDD.json 저장
+       4. 수치 보존 검증 → (사내 경로)\daily_YYYYMMDD.json 저장
   → 기존 /perf-brief 배선이 그대로 집어 올려 대시보드에 렌더
 ```
 
@@ -35,7 +35,7 @@ collector 컨테이너로 옮길 수 없다(옮기려면 별도 Anthropic API �
 | `PERF_BRIEF_RUNNER_PORT` | `8010` | 수신 포트 |
 | `PERF_BRIEF_MODEL` | `opus` | `sonnet` 으로 낮추면 빠르고 저렴 |
 | `PERF_BRIEF_TIMEOUT_S` | `900` | claude 호출 상한(초) |
-| `PERF_BRIEF_DIR` | `S:\GE\Wonjae\07_회의자료\정기미팅` | 보고서·예시·스키마 폴더 |
+| `PERF_BRIEF_DIR` | (사내 경로) | 보고서·예시·스키마 폴더 |
 | `PERF_BRIEF_RUNNER_TOKEN` | (없음) | 설정 시 `X-Runner-Token` 헤더 검사. collector 에도 같은 값을 주어야 함 |
 
 `0.0.0.0` 에 바인딩하므로 사내 LAN 에서 보인다. 토큰을 걸려면 러너와 collector

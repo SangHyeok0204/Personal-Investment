@@ -1,0 +1,218 @@
+"""Investing.com 실적 캘린더 — 매출 컨센(과 지난 날짜의 매출 실적) (계획 B3b · 사용자 결정 5 = 2안).
+
+원본 `earnings_crawler.py` 이식. Nasdaq · Yahoo 는 무료로 매출 컨센을 주지 않는다(실측) — 이게 크롤을 두는 이유다.
+
+⚠️**화면 있는 크롬**이어야 한다: 2026-07-17 부터 Cloudflare 가 헤드리스 Chromium 을 "Just a moment..." 에서 막는다
+  (원본 주석). `channel="chrome"`(설치된 크롬) · `headless=False` · 창은 화면 밖(-32000,-32000). → 이 맥의
+  **로그인된 GUI 세션**(LaunchAgent gui 도메인)에서만 돈다. 도커 불가.
+⚠️커스텀 UA 를 주지 않는다 — 실제 크롬 버전과 어긋나면 그 자체가 봇 신호다(원본 주석).
+바꾼 것: 기간 전체가 아니라 **내 종목이 발표하는 날짜만** 돈다(하루 한두 쪽). Cloudflare 에 걸리면 `InvestingBlocked`.
+"""
+from __future__ import annotations
+
+import random
+import re
+import time
+from dataclasses import dataclass
+from datetime import date
+
+URL = "https://www.investing.com/earnings-calendar/"
+_TABLE = "table[class*='datatable-v2_table']"
+_BLOCKED_TITLES = ("just a moment", "attention required", "access denied")
+
+
+class InvestingBlocked(Exception):
+    """Cloudflare 챌린지를 못 넘었다(제목이 'Just a moment...' 등)."""
+
+
+@dataclass(frozen=True)
+class InvestingRow:
+    report_date: date
+    company: str
+    ticker: str
+    eps: str
+    eps_forecast: str
+    revenue: str
+    revenue_forecast: str
+    market_cap: str
+    timing: str        # 'Before Market' | 'After Market' | ''
+
+
+def parse_company_ticker(text: str) -> tuple[str, str]:
+    """'Palantir(PLTR)Palantir' → ('Palantir', 'PLTR')."""
+    # 실측(2026-09-27): 지금은 'Inventiva ( IVA )' 처럼 괄호 안에 공백이 있다 — 원본 정규식은 이걸 못 읽어 0행이 됐다
+    m = re.search(r"^(.+?)\(\s*([A-Za-z0-9._-]+)\s*\)", text or "")
+    return (m.group(1).strip(), m.group(2).strip()) if m else ((text or "").strip(), "")
+
+
+_HEADER = re.compile(r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), ([A-Z][a-z]+ \d{1,2}, \d{4})$")
+
+
+def header_date(text: str) -> date | None:
+    """'Wednesday, August 26, 2026' → date. 머리행이 아니면 None."""
+    from datetime import datetime
+    m = _HEADER.match((text or "").strip())
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%B %d, %Y").date()
+    except ValueError:
+        return None
+
+
+def parse_value(v: str) -> str:
+    """'0.25/' → '0.25', '-/' → ''."""
+    v = (v or "").replace("/", "").strip()
+    return "" if v in ("-", "") else v
+
+
+def rows_from_cells(cells: list[str], path_count: int, day: date) -> InvestingRow | None:
+    """표 한 줄(셀 글자들 · 시각 칸 SVG path 수) → 행. 날짜 구분 행 · 티커 없는 행은 None.
+
+    실제 칸 순서: [빈칸, 회사(티커), EPS/, EPS 컨센, 매출/, 매출 컨센, 시가총액, 시각, …]
+    시각은 아이콘으로만 온다 — 해(path 4개) = 장전, 달(path 1개) = 장후(원본 판별법).
+    """
+    cells = [c.strip() for c in cells]
+    if len(cells) < 6 or not cells[1] or cells[1].count(",") >= 2:
+        return None
+    company, ticker = parse_company_ticker(cells[1])
+    if not ticker:
+        return None
+    timing = "Before Market" if path_count == 4 else "After Market" if path_count == 1 else ""
+    return InvestingRow(day, company, ticker, parse_value(cells[2]), parse_value(cells[3]), parse_value(cells[4]),
+                        parse_value(cells[5]), parse_value(cells[6]) if len(cells) > 6 else "", timing)
+
+
+def crawl_dates(days: list[date], *, launch_timeout_ms: int = 90000) -> dict[date, list[InvestingRow]]:
+    """날짜마다 그날 발표 목록. Cloudflare 에 막히면 `InvestingBlocked`."""
+    from playwright.sync_api import sync_playwright
+
+    out: dict[date, list[InvestingRow]] = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            channel="chrome", headless=False, slow_mo=50,
+            args=["--disable-dev-shm-usage", "--disable-extensions", "--disable-gpu",
+                  "--disable-blink-features=AutomationControlled", "--window-position=-32000,-32000"],
+        )
+        try:
+            page = browser.new_context(viewport={"width": 1920, "height": 1080}).new_page()
+            for attempt in range(3):
+                try:
+                    page.goto(URL, wait_until="domcontentloaded", timeout=launch_timeout_ms)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(3)
+            # Cloudflare 챌린지는 몇 초 뒤 스스로 풀리기도 한다 — 표가 뜰 때까지 기다려 보고 판정
+            try:
+                page.wait_for_selector(_TABLE, timeout=25000)
+            except Exception:
+                pass
+            if any(t in (page.title() or "").lower() for t in _BLOCKED_TITLES) or page.locator(_TABLE).count() == 0:
+                raise InvestingBlocked(f"Cloudflare 통과 실패 — 제목 '{page.title()}'")
+            _block_noise(page)
+            _cookie(page)
+            for day in days:
+                out[day] = _one_day(page, day)
+                time.sleep(1 + random.random())          # 서버 부하 방지(원본)
+        finally:
+            browser.close()
+    return out
+
+
+def _block_noise(page) -> None:
+    noisy = ("googletagmanager", "google-analytics", "doubleclick", "facebook", "twitter", "amazon-adsystem",
+             "adsystem", "adservice", "googlesyndication", "chartbeat", "scorecardresearch", "taboola", "outbrain")
+
+    def route(r):
+        req = r.request
+        if req.resource_type in ("image", "media", "font") or any(d in req.url for d in noisy):
+            r.abort()
+        else:
+            r.continue_()
+
+    page.route("**/*", route)
+
+
+def _cookie(page) -> None:
+    try:
+        b = page.locator("button#onetrust-accept-btn-handler")
+        if b.is_visible(timeout=3000):
+            b.click()
+            time.sleep(1)
+    except Exception:
+        pass
+
+
+def _first_row(page) -> str:
+    try:
+        rows = page.locator(f"{_TABLE} tbody tr")
+        return rows.nth(1).text_content()[:100] if rows.count() > 1 else ""
+    except Exception:
+        return ""
+
+
+def _one_day(page, day: date) -> list[InvestingRow]:
+    mmddyyyy = day.strftime("%m/%d/%Y")
+    for attempt in range(3):
+        try:
+            page.keyboard.press("Escape")                              # 로그인 팝업 닫기(원본 방법 1)
+            before = _first_row(page)
+            btn = page.locator("button:has(span:text('Custom dates'))")
+            btn.wait_for(state="visible", timeout=10000)
+            btn.click()
+            time.sleep(0.5)
+            # ⚠️원본의 React native setter 주입은 지금 먹지 않는다(실측 2026-09-27: 표가 기본 주간 그대로) —
+            #   Playwright `fill` 이 실제 입력 이벤트를 내서 반영된다
+            page.locator("#date-picker-start-day").fill(mmddyyyy)
+            page.locator("#date-picker-end-day").fill(mmddyyyy)
+            time.sleep(0.5)
+            apply = page.locator("[data-test='date-picker-apply']")
+            apply.wait_for(state="visible", timeout=5000)
+            apply.click(force=True)
+            time.sleep(1)
+            if page.locator("#date-picker-start-day").is_visible():
+                page.keyboard.press("Enter")
+            for _ in range(10):
+                time.sleep(random.uniform(0, 1))
+                if _first_row(page) != before:
+                    break
+            try:
+                page.wait_for_selector(f"{_TABLE} tbody tr", timeout=8000)
+            except Exception:
+                return []                                             # 그날 발표 없음
+            time.sleep(1.5)
+            # ⚠️`textContent` 는 빈 글자로 온다(실측) — `innerText` 로, 한 번의 스크립트로 모든 행을 읽는다
+            raw = page.evaluate("""(sel) => {
+                const t = document.querySelector(sel);
+                if (!t) return [];
+                return [...t.querySelectorAll('tbody tr')].map(tr => {
+                    const tds = [...tr.querySelectorAll('td')];
+                    return {cells: tds.map(td => td.innerText.replace(/\\s+/g, ' ').trim()),
+                            paths: tds[7] ? tds[7].querySelectorAll('path').length : 0};
+                });
+            }""", _TABLE)
+            # ★행의 날짜는 **표 안의 날짜 머리행**('Wednesday, August 26, 2026')으로 정한다 — 요청한 날로 붙이면,
+            #   날짜 바꾸기가 조용히 실패했을 때 옛 표의 행이 엉뚱한 날짜로 들어간다(실측: 긴 회차에서 NVDA 8/26 누락).
+            rows, current = [], None
+            for x in raw:
+                hdr = header_date(x["cells"][1] if len(x["cells"]) > 1 else "")
+                if hdr:
+                    current = hdr
+                    continue
+                if current == day:
+                    r = rows_from_cells(x["cells"], x["paths"], day)
+                    if r:
+                        rows.append(r)
+            if current is None or not any(header_date(x["cells"][1] if len(x["cells"]) > 1 else "") == day
+                                          for x in raw):
+                if raw and attempt < 2:
+                    raise RuntimeError(f"표가 {day} 로 바뀌지 않음")        # 다시 시도
+            return rows
+        except Exception:
+            if attempt == 2:
+                raise
+            page.keyboard.press("Escape")
+            time.sleep(1)
+    return []

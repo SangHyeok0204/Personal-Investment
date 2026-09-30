@@ -86,7 +86,7 @@ export default function IndustryResearchPage() {
                 <div className="h-full w-0 rounded-full bg-ge-point" />
               </div>
               <p className="mt-1.5 text-[10px] font-semibold text-ink-faint">
-                학습 진행도 — 노트가 쌓이면 채워집니다
+                학습 진행도
               </p>
             </div>
           ))}
@@ -120,7 +120,7 @@ export default function IndustryResearchPage() {
           <StubCard title="내 포지션과의 연결" className="min-h-0 flex-1" scrollBody>
             <PlannedList
               items={[
-                "보유 종목의 섹터를 산업에 매핑 — 내가 돈을 넣은 산업부터 공부",
+                "보유 종목의 섹터를 산업에 매핑",
                 "섹터 비중 대비 학습 진행도가 낮은 곳을 상단에 띄움",
                 "산업 자료에서 언급된 종목을 관심종목으로 옮기기",
               ]}

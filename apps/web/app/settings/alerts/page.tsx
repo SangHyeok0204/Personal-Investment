@@ -103,7 +103,7 @@ export default function AlertsPage() {
 
   return (
     <>
-      <Topbar title="알림" subtitle="조건을 세워 두고 지금 충족하는지 본다" showAccountContext={false} />
+      <Topbar title="알림" showAccountContext={false} />
       <PageContainer fit>
         {/* ⚠️맨 위에 둔다 — 이걸 모르면 "알림이 오는 줄" 알게 된다.
             ⚠️2026-09-23 정정: "이 화면에서만 판정한다"는 이제 **사실이 아니다.**
@@ -114,19 +114,6 @@ export default function AlertsPage() {
           <span className="rounded bg-ge-point/15 px-1.5 py-0.5 text-[10px] font-extrabold text-ge-point">
             앱 안에서만
           </span>
-          <span className="text-[11px] font-semibold leading-snug text-ink-secondary">
-            <strong>밖으로는 아직 보내지 않습니다.</strong> 텔레그램 같은 전달
-            경로가 연결돼야 앱을 안 켜 놓은 동안에도 알림이 갑니다. 지금은 상단 바의{" "}
-            <strong>종</strong>이 유일한 전달 경로입니다 — 어느 화면에 있든 걸린
-            개수가 배지로 뜹니다.
-          </span>
-          <button
-            type="button"
-            onClick={() => setNotesOpen(true)}
-            className="ml-auto shrink-0 rounded-full bg-ge-point/10 px-2.5 py-1 text-[11px] font-bold text-ge-point transition-colors hover:bg-ge-point/20"
-          >
-            읽는 법
-          </button>
         </div>
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
@@ -141,7 +128,7 @@ export default function AlertsPage() {
             label="판정 불가"
             value={data ? `${data.unknown_count}건` : null}
             hint="시세 결측 · 미보유 등"
-            actionHint="눌러서 왜인지 보기"
+            actionHint="상세"
             onClick={() => setNotesOpen(true)}
             loading={alerts.isLoading}
           />
@@ -154,7 +141,7 @@ export default function AlertsPage() {
           <StatTile
             label="전달 설정"
             value={data ? (data.delivery_configured ? "연결됨" : "없음") : null}
-            hint="텔레그램 등 — 아직 없음"
+            hint="텔레그램 등 · 없음"
             loading={alerts.isLoading}
           />
         </div>
@@ -269,8 +256,7 @@ export default function AlertsPage() {
                     // ⚠️백분율로 받고 소수로 저장한다. 안 적으면 0.05 를 5% 로
                     //   쓰려다 0.05% 규칙을 만들게 된다.
                     <span className="mt-1 block text-[11px] text-ink-muted">
-                      퍼센트로 적으세요 — 5 는 5% 입니다. 손실 기준은 −10 처럼
-                      음수로.
+                      예: 5 = 5% · 손실 −10
                     </span>
                   )}
                 </label>
@@ -310,7 +296,6 @@ export default function AlertsPage() {
         open={notesOpen}
         onClose={() => setNotesOpen(false)}
         title="이 화면 읽는 법"
-        subtitle="무엇이 되고 무엇이 아직 안 되나"
       >
         <ul className="space-y-2">
           {(data?.notes ?? []).map((text) => (

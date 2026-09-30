@@ -17,17 +17,17 @@ from sqlalchemy import text
 _TRADE_UPSERT = text(
     """
     INSERT INTO trades (
-        id, account_id, asset_id, ticker, asset_name, trade_date, trade_no, side,
+        id, account_id, asset_id, ticker, asset_name, trade_date, trade_no, market, side,
         quantity, price, currency, amount_local, settlement_amount_local,
         commission_local, tax_local, amount_krw, exchange, channel, processed_at,
         source_job_id
     ) VALUES (
-        :id, :account_id, :asset_id, :ticker, :asset_name, :trade_date, :trade_no, :side,
+        :id, :account_id, :asset_id, :ticker, :asset_name, :trade_date, :trade_no, :market, :side,
         :quantity, :price, :currency, :amount_local, :settlement_amount_local,
         :commission_local, :tax_local, :amount_krw, :exchange, :channel, :processed_at,
         :source_job_id
     )
-    ON CONFLICT (account_id, trade_date, trade_no) DO UPDATE SET
+    ON CONFLICT (account_id, market, trade_date, trade_no) DO UPDATE SET
         asset_id = EXCLUDED.asset_id,
         ticker = EXCLUDED.ticker,
         asset_name = EXCLUDED.asset_name,
@@ -179,6 +179,7 @@ def upsert_trades(conn, account_id, trades, source_job_id=None):
                 "asset_name": trade.name,
                 "trade_date": trade.trade_date,
                 "trade_no": trade.trade_no,
+                "market": trade.market,
                 "side": trade.side,
                 "quantity": trade.quantity,
                 "price": trade.price,

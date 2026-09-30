@@ -70,9 +70,6 @@ from collector.krx_prep import (
 from collector.legacy_inputs import CACHE_DIR, DB_DEST, MASTER_CACHE_DIR
 from collector.state import SnapshotState, json_safe, now_kst_string
 from collector.wrap import WrapCollector
-from collector.guru13f import Guru13F
-from collector.stock_monitor import StockMonitor
-from collector.us_stock_monitor import UsStockMonitor
 
 FX_SYMBOLS = ("USD", "CNY", "HKD", "JPY", "EUR", "CAD", "TWD")
 
@@ -255,13 +252,6 @@ class Collector:
 
         self.state = SnapshotState()
         self.stop_event = asyncio.Event()
-        # GURU[13F] 서비스 (KIS 비의존, 독립 refresh 루프 + 로컬 .cache 스냅샷).
-        self.guru13f = Guru13F()
-        # [종목 모니터] KOSPI200 분봉 급등락·이상탐지 (독립 .cache 스냅샷, KIS 비의존).
-        self.stock_monitor = StockMonitor()
-        # [종목 모니터 · 미장] 미장_실시간체결가.db(토스 WS 틱) ro 직독 증분 집계.
-        # 첫 요청에서 백그라운드 판독 스레드가 lazy 기동 — 안 보면 SMB 를 안 건드린다.
-        self.us_stock_monitor = UsStockMonitor()
 
         self.engine: InavEngine | None = None
         self.instruments: list[dict] = []
@@ -1358,63 +1348,11 @@ class Collector:
                 _log(f"lp-eval-ts failed: {exc!r}")
                 return JSONResponse({"detail": "lp-eval-ts error"}, status_code=503)
 
-        @app.get("/index-strip")
-        def index_strip():
-            # [종목 모니터] 상단 지수 스트립 — INDEX_MONITOR.db 판독.
-            #   대상 5종은 index_window.STRIP_CODES (알림용 DEFAULT_CODES 와 별개).
-            from collector import index_window as _iw
-
-            try:
-                return JSONResponse(_iw.build_index_strip())
-            except Exception as exc:  # noqa: BLE001
-                _log(f"index-strip failed: {exc!r}")
-                return JSONResponse({"detail": "index-strip error"}, status_code=503)
-
-        @app.get("/etf-flows")
-        def etf_flows():
-            # [종목 모니터] ETF 순매수 모니터 — CHECK 호가 envelope 의 newEtfs 판독.
-            #   (첫 설계는 S: DB 브리지였으나 CHECK 쪽이 호가 lane 에 태워 와서 교체.)
-            #   envelope 수신 전(기동 직후)에는 rows 빈 배열(화면이 대기 문구).
-            from collector import etf_flows as _ef
-
-            try:
-                return JSONResponse(_ef.build_etf_flows(state.hoga()))
-            except Exception as exc:  # noqa: BLE001
-                _log(f"etf-flows failed: {exc!r}")
-                return JSONResponse({"detail": "etf-flows error"}, status_code=503)
-
-        @app.get("/market-signal")
-        def market_signal():
-            # [시장 시그널] 1단 결정론 룰 → 2단 온톨로지(.ttl/rdflib) → 3단 뉴스.
-            #   ETF 순매수 카드를 대체한다(2026-08-31). 카드 문구는 2단이 만드는
-            #   summary("암호화폐 전반 강세")가 그대로 15자 요약이다 — LLM 안 부른다.
-            #   ★뉴스(Google RSS)까지 포함해 실측 5~7초. 화면 폴링은 10분이라 무해.
-            from collector.market_signal import pipeline as _ms
-
-            try:
-                return JSONResponse(_ms.build_market_signal())
-            except Exception as exc:  # noqa: BLE001
-                _log(f"market-signal failed: {exc!r}")
-                return JSONResponse({"detail": "market-signal error"}, status_code=503)
-
-        @app.get("/price-returns")
-        def price_returns():
-            # [종목 모니터] 수익률 모니터 — 주간가격모니터 price_monitor.xlsx 판독.
-            #   관심 자산(금·비트코인·30년 국채금리)의 YtD·MtD·WtD·DtD + 저점 대비
-            #   상승 + 1년 스파크. 자산 목록은 price_returns.ASSETS 가 정본.
-            from collector import price_returns as _pr
-
-            try:
-                return JSONResponse(_pr.build_price_returns())
-            except Exception as exc:  # noqa: BLE001
-                _log(f"price-returns failed: {exc!r}")
-                return JSONResponse({"detail": "price-returns error"}, status_code=503)
-
         @app.get("/compute-index")
         def compute_index():
-            # [종목 모니터] 컴퓨팅 지수 모니터링 — GPU선물지수.xlsx 판독.
+            # [AI Key Data] 컴퓨팅 지수 모니터링 — GPU선물지수.xlsx 판독.
             #   Silicon Data 렌탈 지수 SDH100RT·SDB200RT + 배수(B200/H100) 3분할.
-            #   원천 파일이 price_monitor.xlsx 와 같은 폴더라 마운트 공유.
+            #   AI Key Data 마운트(/srv/legacy/gpu_compute)를 다른 카드와 공유한다.
             from collector import compute_index as _ci
 
             try:
@@ -1541,86 +1479,6 @@ class Collector:
                     {"detail": "epoch-datacenters error"}, status_code=503
                 )
 
-        @app.get("/price-board")
-        def price_board(cat: str = "equity"):
-            # [종목 모니터] 가격 모니터 — price_monitor.xlsx 84개 시장.
-            #   자산군 하나씩 낸다(cat=equity|bond|commodity|fx|crypto) — 전량을 한 번에
-            #   내면 3년 주간 시계열까지 실려 payload 가 몇 배가 된다.
-            from collector import price_board as _pb
-
-            try:
-                return JSONResponse(_pb.build_price_board(cat))
-            except Exception as exc:  # noqa: BLE001
-                _log(f"price-board failed: {exc!r}")
-                return JSONResponse({"detail": "price-board error"}, status_code=503)
-
-        @app.get("/price-board/metric-series")
-        def price_board_metric_series(key: str):
-            # [종목 모니터] 시장 하나의 차트 계열 — 가격 원본 + 롤링 3M(차트용).
-            #   목록 payload 에 다 실을 수 없다 — 클릭할 때 하나씩.
-            from collector import price_board as _pb
-
-            try:
-                return JSONResponse(_pb.build_metric_series(key))
-            except Exception as exc:  # noqa: BLE001
-                _log(f"price-board/metric-series failed: {exc!r}")
-                return JSONResponse({"detail": "metric-series error"}, status_code=503)
-
-        @app.get("/price-board/group-series")
-        def price_board_group_series(cat: str = "equity", l1: str = "", l2: str = ""):
-            # [종목 모니터] 묶음(예: DM/미국) 안 시장들의 차트 계열.
-            #   목록에서 layer2 를 누르면 그 아래 시장들을 한 차트에 겹쳐 비교한다.
-            from collector import price_board as _pb
-
-            try:
-                return JSONResponse(_pb.build_group_series(cat, l1, l2))
-            except Exception as exc:  # noqa: BLE001
-                _log(f"price-board/group-series failed: {exc!r}")
-                return JSONResponse({"detail": "group-series error"}, status_code=503)
-
-        @app.get("/stock-monitor")
-        def stock_monitor(day: str | None = None, sort: str = "value",
-                          limit: int = 30, market: str = "kr"):
-            # [종목 모니터] KOSPI200 분봉 기반 급등락·이상현상. Toss_분봉_모니터 DB 판독.
-            #   sort: value(거래대금) | change(등락률) | sigma(자기 변동성 대비)
-            #   market=us 는 미장_실시간체결가.db lane (us_stock_monitor.py, day 무시).
-            try:
-                mon = self.us_stock_monitor if market == "us" else self.stock_monitor
-                return JSONResponse(mon.build(day=day, sort=sort, limit=limit))
-            except Exception as exc:  # noqa: BLE001
-                _log(f"stock-monitor failed: {exc!r}")
-                return JSONResponse({"detail": "stock-monitor error"}, status_code=503)
-
-        @app.get("/stock-monitor/stock-detail")
-        def stock_monitor_stock_detail(name: str):
-            # [종목 모니터] 종목 상세 — stock_info(sector·country) + stock_axis(5대 축).
-            #   파일 키가 한글 이름이라 화면이 들고 있는 name 을 그대로 받는다.
-            from collector import stock_monitor as _sm
-
-            try:
-                payload = _sm.stock_detail(name)
-            except Exception as exc:  # noqa: BLE001
-                _log(f"stock-detail failed: {exc!r}")
-                return JSONResponse({"detail": "stock-detail error"}, status_code=503)
-            if payload is None:
-                return JSONResponse({"detail": "그 이름의 종목 파일이 없다"},
-                                    status_code=404)
-            return JSONResponse(payload)
-
-        @app.post("/stock-monitor/stock-axis")
-        def stock_monitor_save_axis(payload: dict):
-            # [종목 모니터] 5대 축 저장 — S: stock_axis/{이름}_axis.json 원자 교체.
-            #   :rw 마운트는 그 폴더 하나뿐이다(docker-compose 주석 참조).
-            from collector import stock_monitor as _sm
-
-            try:
-                status, body = _sm.save_axes(payload)
-            except Exception as exc:  # noqa: BLE001
-                _log(f"stock-axis save failed: {exc!r}")
-                return JSONResponse({"detail": "stock-axis save error"},
-                                    status_code=503)
-            return JSONResponse(body, status_code=status)
-
         @app.get("/wrap-performance")
         def wrap_performance():
             # 성과 비교(track record) 누적수익률 시계열. 소스 xlsx mtime 캐시.
@@ -1641,56 +1499,7 @@ class Collector:
                 return JSONResponse({"detail": "not ready"}, status_code=503)
             return JSONResponse(payload)
 
-        # ── GURU[13F] track record ──────────────────────────────────────
-        # 무거운 교차거장 집계(consensus/turnover)는 백그라운드 사전계산분(state)만 서빙,
-        # 단일거장(portfolio/changes/timeline)은 요청 시 로컬 .cache copy 경량 쿼리.
-        # 준비 전(첫 clean 복사 이전)은 503 not-ready. ETag = f(dbVersion, endpoint, params).
-        guru = self.guru13f
-
-        def _guru_serve(request: Request, produce, *etag_parts):
-            # produce() 는 payload 를 만드는 thunk. 요청경로 쿼리 예외도 500 이 아니라
-            # 503(not ready)으로 격하 — collector 는 이 페이지 때문에 절대 500 을 내지 않는다.
-            try:
-                payload = produce()
-            except Exception as exc:  # noqa: BLE001
-                _log(f"guru-13f serve failed: {exc!r}")
-                payload = None
-            if payload is None:
-                return JSONResponse({"detail": "not ready"}, status_code=503)
-            etag = guru.etag(*etag_parts)
-            if request.headers.get("if-none-match") == etag:
-                return Response(status_code=304, headers={"ETag": etag})
-            return JSONResponse(payload, headers={"ETag": etag})
-
-        @app.get("/guru-13f/roster")
-        def guru_roster(request: Request):
-            return _guru_serve(request, lambda: guru.roster(), "roster")
-
-        @app.get("/guru-13f/portfolio")
-        def guru_portfolio(request: Request, cik: str, period: str):
-            return _guru_serve(request, lambda: guru.portfolio(cik, period), "portfolio", cik, period)
-
-        @app.get("/guru-13f/changes")
-        def guru_changes(request: Request, cik: str, period: str):
-            return _guru_serve(request, lambda: guru.changes(cik, period), "changes", cik, period)
-
-        @app.get("/guru-13f/timeline")
-        def guru_timeline(request: Request, cik: str):
-            return _guru_serve(request, lambda: guru.timeline(cik), "timeline", cik)
-
-        @app.get("/guru-13f/consensus")
-        def guru_consensus_ep(request: Request, period: str | None = None):
-            return _guru_serve(request, lambda: guru.consensus(period), "consensus", period or "latest")
-
-        # ── 변동 분석: 동시 리밸런싱 / 편입·방출 / 섹터 ────────────────
-        # view 생략 시 세 뷰를 한 번에. 사전계산분이라 응답은 가볍다.
-        @app.get("/guru-13f/flows")
-        def guru_flows_ep(request: Request, view: str | None = None):
-            return _guru_serve(request, lambda: guru.flows(view), "flows", view or "all")
-
-        @app.get("/guru-13f/turnover")
-        def guru_turnover_ep(request: Request, period: str | None = None):
-            return _guru_serve(request, lambda: guru.turnover(period), "turnover", period or "latest")
+        # ── GURU[13F] 는 대시보드 API 로 옮겼다(계획 A5 · A8) — /api/v1/research/guru/* ──
 
         # ── [매크로] 물가·고용·유동성 패널 ──────────────────────────────
         # S: 매크로모니터가 macro.db 에서 계산해 구운 macro_panels.json 만 읽는다
@@ -1707,7 +1516,7 @@ class Collector:
             return JSONResponse(payload, headers={"ETag": tag})
 
         # ── [회의] 회의자료 파일 탐색기 (PoC) ───────────────────────────
-        # S:\GE\_Team\07_회의자료 (:ro 마운트) 를 루트로 폴더 탐색 + HTML 원문 반환.
+        # 회의자료 루트(사내 경로, :ro 마운트) 를 루트로 폴더 탐색 + HTML 원문 반환.
         @app.get("/meeting/list")
         def meeting_list(path: str = ""):
             from collector import meeting as _mt
@@ -1763,7 +1572,7 @@ class Collector:
             return JSONResponse(payload, headers={"ETag": etag})
 
         # ── [성과보고] 데일리·위클리 성과 브리프 ─────────────────────────
-        # S:\GE\Wonjae\07_회의자료\정기미팅 (:ro) 의 성과보고 JSON 을 요일 규칙
+        # 정기미팅 폴더(사내 경로, :ro) 의 성과보고 JSON 을 요일 규칙
         # (월=위클리 / 화~금=데일리)에 맞춰 골라 서빙. 오늘 작성분이 없으면 pending.
         @app.get("/perf-brief")
         def perf_brief():
@@ -1980,7 +1789,6 @@ class Collector:
             asyncio.create_task(self._price_loop()),
             asyncio.create_task(self._etf_quote_loop()),
             asyncio.create_task(self._wrap_loop()),
-            asyncio.create_task(self.guru13f.loop(self.stop_event)),
             asyncio.create_task(self._twse_loop()),
             asyncio.create_task(self._ws_loop()),
             asyncio.create_task(self._rollover_loop()),

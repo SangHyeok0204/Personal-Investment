@@ -53,8 +53,37 @@ class Job(Base):
         onupdate=_utcnow,
         server_default=text("now()"),
     )
+    # ★(0019) 큐별로 worker 를 따로 띄운다 — LLM 한 건(수 분)이 공시 수집을 막지 않게.
+    queue: Mapped[str] = mapped_column(
+        String, nullable=False, default="default", server_default=text("'default'")
+    )
+    # 작업 중 주기적으로 갱신. 끊기면 죽은 작업으로 보고 되살린다(attempts 상한까지).
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
-    __table_args__ = (Index("ix_jobs_status_created_at", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_jobs_status_created_at", "status", "created_at"),
+        Index("ix_jobs_queue_status_created_at", "queue", "status", "created_at"),
+    )
+
+
+class SourceStatus(Base):
+    """원천·worker 의 마지막 성공/실패(0019). 실패는 종류(403/429/timeout/other)로."""
+
+    __tablename__ = "source_status"
+
+    source: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
 
 
 class JobLog(Base):
@@ -429,7 +458,9 @@ class PortfolioSnapshot(Base):
 class Trade(Base):
     """체결 한 건 (alembic 0007).
 
-    ⚠️`trade_no` 는 증권사 안에서 **일자별로 리셋**된다. 유일키는 계좌+일자+번호다.
+    ⚠️`trade_no` 는 증권사 안에서 **일자별로 리셋**된다. 게다가 국내와 해외가
+      번호를 따로 매겨 같은 날 `000000001` 이 둘 생긴다 — 유일키는
+      계좌+**시장**+일자+번호다(alembic 0018).
     ⚠️해외 거래는 원화 금액이 0 으로 오므로 amount_krw 는 NULL 일 수 있다 —
       0 으로 채우면 "거래금액 0원"이라는 틀린 사실이 화면에 뜬다.
     """
@@ -448,6 +479,7 @@ class Trade(Base):
     asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
     trade_no: Mapped[str] = mapped_column(String, nullable=False)
+    market: Mapped[str] = mapped_column(String, nullable=False)  # KR / US
     side: Mapped[str] = mapped_column(String, nullable=False)  # BUY / SELL
     quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
@@ -789,3 +821,289 @@ class Order(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
+
+
+class SeasonalitySeries(Base):
+    """계절성 대상 시계열(0020). 시드: `database/seeds/seasonality_series.py`."""
+
+    __tablename__ = "seasonality_series"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    grp: Mapped[str] = mapped_column(String, nullable=False)
+    bbg_ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    yahoo_symbol: Mapped[str | None] = mapped_column(String, nullable=True)
+    continuation: Mapped[str] = mapped_column(
+        String, nullable=False, default="direct", server_default=text("'direct'")
+    )
+    sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+
+
+class MonthlyClose(Base):
+    """월말 종가(0020). 수익률은 **같은 source 안에서만** 낸다 — 원천끼리 수준을 잇지 않는다."""
+
+    __tablename__ = "monthly_closes"
+
+    series: Mapped[str] = mapped_column(
+        String, ForeignKey("seasonality_series.key"), primary_key=True
+    )
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)  # 'YYYY-MM'
+    close: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    # (0021) 키에 포함 — 같은 달의 블룸버그·Yahoo 값을 둘 다 둔다(원천 전환 달의 기준값).
+    source: Mapped[str] = mapped_column(String, primary_key=True)
+    loaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+
+
+# ── SEC 공시(0022, 계획 A) — 원본 `13F기관내부자/db/filings.db` 의 표를 옮겼다 ──────────
+
+
+class GuruRoster(Base):
+    """13F 추적 대상. kind='guru' 는 활성·백필, kind='index'(퀀트·인덱스)는 비활성으로만."""
+
+    __tablename__ = "guru_roster"
+
+    cik: Mapped[str] = mapped_column(String(10), primary_key=True)
+    guru_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    firm: Mapped[str] = mapped_column(String, nullable=False)
+    filer_name: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    backfill_status: Mapped[str] = mapped_column(
+        String, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    backfill_from: Mapped[date] = mapped_column(
+        Date, nullable=False, default=date(2013, 4, 1), server_default=text("'2013-04-01'")
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SecFiling(Base):
+    __tablename__ = "sec_filings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    form_type: Mapped[str] = mapped_column(String, nullable=False)
+    accession_number: Mapped[str] = mapped_column(String, nullable=False)
+    filing_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_of_report: Mapped[date | None] = mapped_column(Date, nullable=True)
+    issuer_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    issuer_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    filer_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    filer_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    watch_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    watch_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 13F-HR/A: 'RESTATEMENT'(대체) | 'NEW HOLDINGS'(추가분, 합산)
+    amendment_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    headline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("accession_number", "form_type", name="uq_sec_filings_acc_form"),
+        Index("ix_sec_filings_watch_form_period", "watch_cik", "form_type", "period_of_report"),
+        Index("ix_sec_filings_issuer_form_date", "issuer_cik", "form_type", "filing_date"),
+    )
+
+
+class Holding13F(Base):
+    __tablename__ = "holdings_13f"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    accession_number: Mapped[str] = mapped_column(String, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    name_of_issuer: Mapped[str | None] = mapped_column(String, nullable=True)
+    title_of_class: Mapped[str | None] = mapped_column(String, nullable=True)
+    cusip: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    shares: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    shr_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    put_call: Mapped[str | None] = mapped_column(String, nullable=True)
+    investment_discretion: Mapped[str | None] = mapped_column(String, nullable=True)
+    vote_sole: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    vote_shared: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    vote_none: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+
+    __table_args__ = (
+        Index("ix_holdings_13f_acc", "accession_number"),
+        Index("ix_holdings_13f_cusip", "cusip"),
+    )
+
+
+class Form4Transaction(Base):
+    __tablename__ = "form4_transactions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    accession_number: Mapped[str] = mapped_column(String, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    issuer_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    issuer_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    insider_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    insider_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    insider_role: Mapped[str | None] = mapped_column(String, nullable=True)
+    transaction_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    transaction_code: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    transaction_description: Mapped[str | None] = mapped_column(String, nullable=True)
+    buy_sell: Mapped[str | None] = mapped_column(String, nullable=True)
+    shares: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    transaction_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 2), nullable=True)
+    shares_owned_after: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    ownership_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    acquired_disposed: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    is_derivative: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_open_market: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_option_exercise: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # 10b5-1 계획매매 — 순매수에서 뺀다(장내 매도의 73%, 실측)
+    is_planned_trade: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    superseded_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("ix_form4_acc", "accession_number"),
+        Index("ix_form4_issuer_date", "issuer_cik", "transaction_date"),
+    )
+
+
+class OwnershipEvent(Base):
+    __tablename__ = "ownership_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    accession_number: Mapped[str] = mapped_column(String, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    subject_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    subject_cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    cusip: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    filer_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    percent: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
+    shares: Mapped[Decimal | None] = mapped_column(Numeric(24, 4), nullable=True)
+    event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_amendment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_activist: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+
+    __table_args__ = (Index("ix_ownership_events_acc", "accession_number"),)
+
+
+class CusipMap(Base):
+    __tablename__ = "cusip_map"
+
+    cusip: Mapped[str] = mapped_column(String(9), primary_key=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="none", server_default=text("'none'"))
+    figi: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 0023 — SEC 업종코드와 그로 정한 섹터('' = 찾아봤지만 없음)
+    sic: Mapped[str | None] = mapped_column(String, nullable=True)
+    sector: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+
+
+# ── 실적 모니터 (0024, 계획 B1) ────────────────────────────────────────────────
+# ⚠️`quarter` 는 발표일로 정한 달력 분기 라벨(원본 `derive_fiscal_quarter`) — 회사 회계분기가 아니다.
+
+
+class EarningsEvent(Base):
+    __tablename__ = "earnings_events"
+    __table_args__ = (UniqueConstraint("ticker", "quarter", name="uq_earnings_events_ticker_quarter"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    quarter: Mapped[str] = mapped_column(String(8), nullable=False)
+    company: Mapped[str | None] = mapped_column(String, nullable=True)
+    report_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    timing: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    eps_forecast: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    n_estimates: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    revenue_forecast: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    revenue_forecast_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    revenue_forecast_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    market_cap: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+
+
+class EarningsResult(Base):
+    __tablename__ = "earnings_results"
+
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("earnings_events.id", ondelete="CASCADE"), primary_key=True
+    )
+    eps_actual: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    revenue_actual: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    eps_surprise_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    revenue_surprise_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    verdict: Mapped[str | None] = mapped_column(String, nullable=True)
+    filing_accession: Mapped[str | None] = mapped_column(String, nullable=True)
+    filing_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reaction_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    reaction_window: Mapped[str | None] = mapped_column(String, nullable=True)
+    reaction_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class EarningsGuidance(Base):
+    __tablename__ = "earnings_guidance"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("earnings_events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    metric: Mapped[str] = mapped_column(String, nullable=False)
+    period: Mapped[str | None] = mapped_column(String, nullable=True)
+    low: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    high: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    prior_low: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    prior_high: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    direction: Mapped[str | None] = mapped_column(String, nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EarningsWatchpoint(Base):
+    __tablename__ = "earnings_watchpoints"
+    __table_args__ = (UniqueConstraint("ticker", "quarter", "rank", name="uq_earnings_watchpoints"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    quarter: Mapped[str] = mapped_column(String(8), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    point: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+
+
+class AiMetricSnapshot(Base):
+    """AI Key Data 스냅샷(0025) — 과거를 다시 받을 수 없는 VS Code·PyPI 전용.
+
+    ⚠️npm·Ramp·OpenRouter·Epoch 은 여기 적지 않는다(라이브 조회 + 메모리 캐시, 계획 §12-3).
+    같은 날 재실행은 덮어쓴다. 음수 델타도 원값 그대로(차분은 API 몫).
+    """
+
+    __tablename__ = "ai_metric_snapshot"
+
+    source: Mapped[str] = mapped_column(String, primary_key=True)   # 'vscode' | 'pypi'
+    series: Mapped[str] = mapped_column(String, primary_key=True)   # ext id | 패키지명
+    date: Mapped[date] = mapped_column(Date, primary_key=True)      # 스냅샷 날짜(KST)
+    value: Mapped[Decimal] = mapped_column(Numeric(24, 4), nullable=False)
+    extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

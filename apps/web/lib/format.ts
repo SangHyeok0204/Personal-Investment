@@ -12,10 +12,6 @@ export function formatDateTime(iso: string | null): string {
   });
 }
 
-export function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
-}
-
 export function prettyJson(value: unknown): string {
   if (value == null) return "—";
   try {
@@ -30,7 +26,6 @@ const USD_FMT = new Intl.NumberFormat("ko-KR", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const QTY_FMT = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 6 });
 
 // Negative amounts read as -₩379,148 (sign ahead of the symbol), not ₩-379,148.
 export function formatKrw(value: number | null | undefined): string {
@@ -39,50 +34,10 @@ export function formatKrw(value: number | null | undefined): string {
   return `${sign}₩${KRW_FMT.format(Math.abs(value))}`;
 }
 
-export function formatUsd(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  const sign = value < 0 ? "-" : "";
-  return `${sign}$${USD_FMT.format(Math.abs(value))}`;
-}
-
-export function formatMoney(
-  value: number | null | undefined,
-  currency: string | null | undefined,
-): string {
-  return currency === "USD" ? formatUsd(value) : formatKrw(value);
-}
-
-// 45,275,026 → "4,528만원"; 145,275,026 → "1.45억원". For headline totals only —
-// tables keep the exact formatKrw value.
-export function formatKrwCompact(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  const sign = value < 0 ? "-" : "";
-  const abs = Math.abs(value);
-  if (abs >= 100_000_000) {
-    return `${sign}${(abs / 100_000_000).toFixed(2)}억원`;
-  }
-  if (abs >= 10_000) {
-    return `${sign}${KRW_FMT.format(Math.round(abs / 10_000))}만원`;
-  }
-  return formatKrw(value);
-}
-
 // FX rate exactly as Kiwoom reports it (e.g. 1484.1 → "1,484.10"). Never derived.
 export function formatRate(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return USD_FMT.format(value);
-}
-
-export function formatQuantity(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return QTY_FMT.format(value);
-}
-
-// Takes an already-percent value (e.g. 3.21 → "+3.21%").
-export function formatPercent(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
 }
 
 export function formatRelativeTime(iso: string | null | undefined): string {

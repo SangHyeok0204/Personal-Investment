@@ -15,6 +15,7 @@ import {
 } from "@/components/stub";
 import {
   getFreshness,
+  getJobSources,
   getJobs,
   runHistorySync,
   type Freshness,
@@ -45,6 +46,25 @@ const STATUS_STYLE: Record<string, string> = {
   PENDING: "bg-canvas-soft text-ink-faint",
 };
 
+const SOURCE_STATE_LABEL: Record<string, string> = {
+  alive: "작동",
+  down: "멈춤",
+  ok: "정상",
+  "403": "403 차단",
+  "429": "429 요청 제한",
+  timeout: "응답 없음",
+  other: "오류",
+  config: "설정 필요",
+  // 계획 B2 — claude CLI(LLM 큐)
+  logged_out: "로그아웃",
+  usage_limit: "사용량 초과",
+  cap: "하루 상한",
+  missing: "CLI 없음",
+  // 계획 B3b — Investing.com(화면 있는 크롬)
+  blocked: "Cloudflare 차단",
+  unknown: "기록 없음",
+};
+
 const JOB_LABEL: Record<string, string> = {
   SYNC_KIWOOM_PORTFOLIO: "증권사 이력 동기화",
   CSV_IMPORT: "CSV 가져오기",
@@ -55,6 +75,7 @@ export default function DataOperationsPage() {
   const qc = useQueryClient();
   const [notesOpen, setNotesOpen] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   const freshness = useQuery({
     queryKey: ["freshness"],
@@ -67,6 +88,19 @@ export default function DataOperationsPage() {
     queryFn: () => getJobs({ limit: 12 }),
     staleTime: 30_000,
   });
+
+  // ★(P0) 네이티브 수집기(LaunchAgent)와 외부 원천의 상태. 수집기는 30초마다 생존 신호를 남긴다.
+  const sources = useQuery({
+    queryKey: ["jobSources"],
+    queryFn: getJobSources,
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+  });
+  const workers = (sources.data?.items ?? []).filter((s) => s.kind === "worker");
+  const aliveWorkers = workers.filter((s) => s.state === "alive").length;
+  const blockedSources = (sources.data?.items ?? []).filter(
+    (s) => s.kind === "source" && s.state !== "ok" && s.state !== "unknown",
+  );
 
   const sync = useMutation({
     mutationFn: runHistorySync,
@@ -91,7 +125,7 @@ export default function DataOperationsPage() {
     <>
       <Topbar
         title="수집 상태"
-        subtitle="내 데이터가 최신인가"
+        subtitle="데이터 최신성"
         showAccountContext={false}
       />
       <PageContainer fit>
@@ -110,9 +144,7 @@ export default function DataOperationsPage() {
               {f.last_market_close_at && (
                 <> (마감 {formatDateTime(f.last_market_close_at)})</>
               )}{" "}
-              — 새 체결이 있어도 아직 안 들어와 있습니다.{" "}
-              <strong>체결·배당·주문·일별성과</strong>를 쓰는 화면이 옛 것을
-              보여 줍니다.
+              — 새 체결 미반영.
             </span>
             <button
               type="button"
@@ -125,7 +157,7 @@ export default function DataOperationsPage() {
           </div>
         )}
 
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-5">
           <StatTile
             label="마지막 이력 동기화"
             value={
@@ -168,6 +200,31 @@ export default function DataOperationsPage() {
             hint="체결 · 주문 · 배당 · 실현 · 일별성과"
             loading={freshness.isLoading}
           />
+          <StatTile
+            label="수집기"
+            value={
+              sources.data
+                ? workers.length === 0
+                  ? "꺼짐"
+                  : `${aliveWorkers}/${workers.length} 작동`
+                : null
+            }
+            hint={
+              blockedSources.length > 0
+                ? `원천 경고 ${blockedSources.length} — ${blockedSources.map((s) => s.source).join(", ")}`
+                : "SEC · 크롤 / LLM 큐"
+            }
+            accent={
+              sources.data
+                ? aliveWorkers < workers.length || workers.length === 0 || blockedSources.length > 0
+                  ? "down"
+                  : "up"
+                : undefined
+            }
+            actionHint="눌러서 원천별 상태 보기"
+            onClick={() => setSourcesOpen(true)}
+            loading={sources.isLoading}
+          />
         </div>
 
         <div
@@ -179,7 +236,6 @@ export default function DataOperationsPage() {
         >
           <StubCard
             title="원장별 상태"
-            subtitle="무엇이 언제까지 들어와 있나"
             className="min-h-0"
             scrollBody
             action={
@@ -223,11 +279,6 @@ export default function DataOperationsPage() {
               ))}
             </DataTable>
             {/* ⚠️원장 날짜가 며칠 전이어도 뒤처진 게 아닐 수 있다. */}
-            <p className="mt-2 text-[11px] leading-snug text-ink-muted">
-              최신 날짜가 며칠 전이어도 <strong>뒤처진 것이 아닐 수 있습니다</strong> —
-              배당은 지급일에만, 매매는 거래한 날에만 생깁니다. 판정은 위의 동기화
-              시각으로 합니다.
-            </p>
             {syncError && (
               <p className="mt-2 rounded-lg bg-ask-soft px-2.5 py-2 text-[11px] font-semibold text-ask">
                 {syncError}
@@ -257,6 +308,36 @@ export default function DataOperationsPage() {
           </StubCard>
         </div>
       </PageContainer>
+
+      <Modal
+        open={sourcesOpen}
+        onClose={() => setSourcesOpen(false)}
+        title="수집기 · 원천 상태"
+        subtitle="수집기는 30초마다 생존 신호 · 원천은 마지막 성공/실패"
+        width={820}
+      >
+        <DataTable
+          columns={["이름", "구분", "상태", "마지막 성공", "마지막 실패"]}
+          align={["left", "left", "left", "right", "left"]}
+          empty="아직 기록이 없습니다 — 수집기가 한 번도 돌지 않았습니다"
+        >
+          {(sources.data?.items ?? []).map((s) => (
+            <tr key={s.source} className="border-b border-hairline">
+              <Cell left strong>{s.source}</Cell>
+              <Cell left tone="muted">{s.kind === "worker" ? "수집기" : "원천"}</Cell>
+              <Cell left tone={s.state === "alive" || s.state === "ok" ? "up" : s.state === "unknown" ? "muted" : "down"}>
+                {SOURCE_STATE_LABEL[s.state] ?? s.state}
+              </Cell>
+              <Cell tone="muted">{s.last_ok_at ? formatRelativeTime(s.last_ok_at) : "—"}</Cell>
+              <Cell left tone="muted" className="max-w-[260px] truncate">
+                {s.last_error_at
+                  ? `${formatRelativeTime(s.last_error_at)} · ${s.last_error_kind ?? ""} ${s.last_error_message ?? ""}`
+                  : "—"}
+              </Cell>
+            </tr>
+          ))}
+        </DataTable>
+      </Modal>
 
       <Modal
         open={notesOpen}

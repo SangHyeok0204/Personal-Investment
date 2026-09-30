@@ -16,8 +16,7 @@ export function ApiErrorBanner({ error }: { error: unknown }) {
         </div>
         {unreachable && (
           <div className="mt-0.5 text-status-failed/80">
-            Could not reach the API server. Make sure it is running and
-            reachable.
+            Could not reach the API server.
           </div>
         )}
       </div>

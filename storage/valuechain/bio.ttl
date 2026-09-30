@@ -1,0 +1,2441 @@
+@prefix vc:   <http://ge.local/valuechain#> .
+@prefix co:   <http://ge.local/company#> .
+@prefix bio:  <http://ge.local/valuechain/bio#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+#############################################################################
+# 바이오 섹터 밸류체인 — 이 파일이 정본이다(사람이 직접 고친다).
+#
+# 처음 한 번 scripts/valuechain/bio_json_to_ttl.py 로 bio_data.json 에서 만들었다.
+# 새 섹터는 이 파일을 복사해 내용을 바꾸면 된다(README.md). 스키마는 core.ttl.
+# 관계는 한 방향만 쓴다: subCategoryOf(하위→상위), belongsTo(멤버십→분류), feedsInto.
+#############################################################################
+
+# ── 섹터 ───────────────────────────────────────────────────────────────────
+bio:Bio a vc:Sector ;
+    vc:code "bio" ;
+    rdfs:label "바이오"@ko , "Bio"@en ;
+    rdfs:comment "AI 바이오 밸류체인: 인프라 → 신약·진단·기기 → 임상·생산."@ko .
+
+# ── 분류(대분류 → 중분류) ─────────────────────────────────────────────────
+
+bio:A a vc:Category ;
+    vc:subCategoryOf bio:Bio ;
+    vc:code "A" ; vc:order 1 ; vc:color "#23865f" ;
+    rdfs:label "바이오 인프라"@ko ; vc:shortLabel "인프라" ;
+    rdfs:comment "데이터·파운데이션 모델·실험 자동화·진단 장비. AI 바이오의 원천 데이터와 도구를 공급하는 “곡괭이” 층."@ko .
+bio:A-1 a vc:Category ;
+    vc:subCategoryOf bio:A ;
+    vc:code "A-1" ; vc:order 1 ;
+    rdfs:label "데이터 인프라"@ko ;
+    rdfs:comment "EMR·오믹스·영상 등 멀티모달 의료 데이터 수집·정제·연결(시퀀싱·임상·영상 데이터)"@ko ;
+    vc:marketSize "헬스케어 빅데이터 2024 $550억 → 2030 $1,300억 (연 18%)" .
+bio:A-2 a vc:Category ;
+    vc:subCategoryOf bio:A ;
+    vc:code "A-2" ; vc:order 2 ;
+    rdfs:label "파운데이션 모델"@ko ;
+    rdfs:comment "단백질 구조·서열·분자를 학습한 바이오 AI 모델·신약발굴 플랫폼. 오픈소스로 평준화되어 학습 데이터가 경쟁력"@ko ;
+    vc:marketSize "AI 신약개발 2024 $20억 → 2030 $90억 (연 30%)" .
+bio:A-3 a vc:Category ;
+    vc:subCategoryOf bio:A ;
+    vc:code "A-3" ; vc:order 3 ;
+    rdfs:label "실험 자동화"@ko ;
+    rdfs:comment "로봇·클라우드랩으로 실험을 자동화해 AI용 데이터를 대량 생성"@ko ;
+    vc:marketSize "실험실 자동화 2024 $80억 → 2030 $130억 (연 9%)" .
+bio:A-4 a vc:Category ;
+    vc:subCategoryOf bio:A ;
+    vc:code "A-4" ; vc:order 4 ;
+    rdfs:label "진단기기"@ko ;
+    rdfs:comment "체외진단(IVD)·영상진단(CT·MRI·초음파)·시퀀서 장비. AI 진단의 원천 데이터 생성"@ko ;
+    vc:marketSize "IVD 2024 $1,010억 → 2030 $1,580억 (연 8%)" .
+
+bio:B-1 a vc:Category ;
+    vc:subCategoryOf bio:Bio ;
+    vc:code "B-1" ; vc:order 2 ; vc:color "#6a55c9" ;
+    rdfs:label "신약개발"@ko ; vc:shortLabel "신약" ;
+    rdfs:comment "치료제 유형(모달리티)별 신약. 저분자·항체·핵산·펩타이드·면역세포·줄기세포 6개 축."@ko .
+bio:B-1-1 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-1" ; vc:order 1 ;
+    rdfs:label "저분자·기타"@ko ;
+    rdfs:comment "화학 합성 저분자(경구), 표적단백질분해(TPD)·분해제-항체 접합체(DAC)·마이크로바이옴"@ko ;
+    vc:marketSize "저분자 2024 $7,000억 → 2030 $9,500억 (연 5%)" .
+bio:B-1-2 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-2" ; vc:order 2 ;
+    rdfs:label "항체"@ko ;
+    rdfs:comment "mAb·이중항체·ADC·BBB 셔틀, SC 제형 플랫폼, 바이오시밀러 포함"@ko ;
+    vc:marketSize "항체 2024 $2,530억 → 2030 $4,950억 (연 11%)" .
+bio:B-1-3 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-3" ; vc:order 3 ;
+    rdfs:label "핵산"@ko ;
+    rdfs:comment "유전자치료·mRNA로 발현을 켜거나 siRNA·ASO로 끔. CRISPR 편집, LNP·AAV 전달체"@ko ;
+    vc:marketSize "mRNA 치료제 2024 $120억 → 2030 $310억 (연 17%)" .
+bio:B-1-4 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-4" ; vc:order 4 ;
+    rdfs:label "펩타이드·단백질"@ko ;
+    rdfs:comment "GLP-1 등 인크레틴·인슐린·혈액제제. 비만·대사가 최대 화두, 장기지속·경구 제형 경쟁"@ko ;
+    vc:marketSize "GLP-1 2024 $530억 → 2030 $1,570억 (연 17%)" .
+bio:B-1-5 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-5" ; vc:order 5 ;
+    rdfs:label "면역세포"@ko ;
+    rdfs:comment "CAR-T·CAR-NK. 혈액암 중심, 자가면역·in vivo CAR-T로 확장"@ko ;
+    vc:marketSize "CAR-T 2024 $110억 → 2030 $530억 (연 30%)" .
+bio:B-1-6 a vc:Category ;
+    vc:subCategoryOf bio:B-1 ;
+    vc:code "B-1-6" ; vc:order 6 ;
+    rdfs:label "줄기세포·재생"@ko ;
+    rdfs:comment "중간엽·iPSC 유래 세포치료, 조직 재생"@ko ;
+    vc:marketSize "줄기세포치료 2024 $160억 → 2030 $330억 (연 13%)" .
+
+bio:B-2 a vc:Category ;
+    vc:subCategoryOf bio:Bio ;
+    vc:code "B-2" ; vc:order 3 ; vc:color "#2877b5" ;
+    rdfs:label "진단"@ko ; vc:shortLabel "진단" ;
+    rdfs:comment "영상 판독 AI와 혈액·분자 진단(액체생검). 조기진단·재발 모니터링."@ko .
+bio:B-2-1 a vc:Category ;
+    vc:subCategoryOf bio:B-2 ;
+    vc:code "B-2-1" ; vc:order 1 ;
+    rdfs:label "영상진단 AI"@ko ;
+    rdfs:comment "X-ray·CT·MRI·병리 영상 딥러닝 판독 보조"@ko ;
+    vc:marketSize "AI 영상진단 2024 $18억 → 2030 $85억 (연 30%)" .
+bio:B-2-2 a vc:Category ;
+    vc:subCategoryOf bio:B-2 ;
+    vc:code "B-2-2" ; vc:order 2 ;
+    rdfs:label "혈액·분자진단 AI"@ko ;
+    rdfs:comment "ctDNA·cfDNA를 NGS+AI로 분석하는 액체생검, 분자진단"@ko ;
+    vc:marketSize "액체생검 2024 $62억 → 2030 $140억 (연 14%)" .
+
+bio:B-3 a vc:Category ;
+    vc:subCategoryOf bio:Bio ;
+    vc:code "B-3" ; vc:order 4 ; vc:color "#c24f78" ;
+    rdfs:label "의료기기"@ko ; vc:shortLabel "기기" ;
+    rdfs:comment "수술로봇·미용기기 등 치료 기기. AI 영상유도·개인화로 고도화."@ko .
+bio:B-3-1 a vc:Category ;
+    vc:subCategoryOf bio:B-3 ;
+    vc:code "B-3-1" ; vc:order 1 ;
+    rdfs:label "수술용 로봇"@ko ;
+    rdfs:comment "로봇 팔·3D 영상 기반 최소침습 수술"@ko ;
+    vc:marketSize "수술로봇 2024 $115억 → 2030 $270억 (연 15%)" .
+bio:B-3-2 a vc:Category ;
+    vc:subCategoryOf bio:B-3 ;
+    vc:code "B-3-2" ; vc:order 2 ;
+    rdfs:label "미용기기·에스테틱"@ko ;
+    rdfs:comment "레이저·RF·HIFU 기기. 톡신·필러·스킨부스터 등 에스테틱 제품을 함께 묶음(확장)"@ko ;
+    vc:marketSize "미용 의료기기 2024 $150억 → 2030 $280억 (연 13%)" .
+bio:B-3-3 a vc:Category ;
+    vc:subCategoryOf bio:B-3 ;
+    vc:code "B-3-3" ; vc:order 3 ;
+    rdfs:label "기타 기기·치료재료"@ko ;
+    rdfs:comment "웨어러블 모니터링·지혈재·인체조직 등. 원 분류표에 없어 추가한 확장 노드"@ko .
+
+bio:C a vc:Category ;
+    vc:subCategoryOf bio:Bio ;
+    vc:code "C" ; vc:order 5 ; vc:color "#a97b12" ;
+    rdfs:label "임상·생산"@ko ; vc:shortLabel "임상/생산" ;
+    rdfs:comment "CRO(임상 검증) → CDMO(상업 생산). 신약 후보가 시장으로 가는 마지막 관문."@ko .
+bio:C-1 a vc:Category ;
+    vc:subCategoryOf bio:C ;
+    vc:code "C-1" ; vc:order 1 ;
+    rdfs:label "CRO"@ko ;
+    rdfs:comment "전임상·임상시험 대행: 프로토콜 설계·환자 모집·데이터 관리·규제 대응"@ko ;
+    vc:marketSize "CRO 2024 $790억 → 2030 $1,260억 (연 8%)" .
+bio:C-2 a vc:Category ;
+    vc:subCategoryOf bio:C ;
+    vc:code "C-2" ; vc:order 2 ;
+    rdfs:label "CDMO"@ko ;
+    rdfs:comment "공정개발·위탁생산. 항체·ADC·GLP-1·올리고 캐파 부족, 생물보안법 수혜"@ko ;
+    vc:marketSize "제약 CDMO 2024 $1,660억 → 2030 $2,900억 (연 8%)" .
+
+# ── 흐름(밸류체인 단계 A → B) ─────────────────────────────────────────────
+
+bio:A vc:feedsInto bio:B-1 , bio:B-2 , bio:B-3 .
+bio:B-1 vc:feedsInto bio:C .
+bio:C-1 vc:feedsInto bio:C-2 .
+
+# ── 자료(출처 태그) ───────────────────────────────────────────────────────
+
+bio:src-01 a vc:Source ; vc:order 1 ;
+    vc:code "한투 분류PPT" ;
+    rdfs:label "01_산업분류PPT / 한국투자 바이오헬스케어산업분류 260702 v2 (3개 버전, 본문 동일)"@ko ;
+    rdfs:comment "분류 뼈대와 글로벌 대표 기업 전부"@ko .
+
+bio:src-02 a vc:Source ; vc:order 2 ;
+    vc:code "—" ;
+    rdfs:label "02_AI바이오이노베이션 소개자료 PDF"@ko ;
+    rdfs:comment "DRM(Document Safer) 암호화로 읽지 못함"@ko .
+
+bio:src-03 a vc:Source ; vc:order 3 ;
+    vc:code "미래에셋 26H2" ;
+    rdfs:label "03_미래에셋 [2026 하반기 전망] 109p (2개 파일 동일)"@ko ;
+    rdfs:comment "폰트 깨짐으로 페이지 이미지 판독. 국내 커버 종목·글로벌 딜"@ko .
+
+bio:src-04 a vc:Source ; vc:order 4 ;
+    vc:code "KB 딜위클리" ;
+    rdfs:label "04_KB증권 제약 Biopharma Deals & News Weekly (2026.07.06)"@ko ;
+    rdfs:comment "라이선스·M&A 표"@ko .
+
+bio:src-05 a vc:Source ; vc:order 5 ;
+    vc:code "GS 리포트" ;
+    rdfs:label "05_Sana 리포트 (Goldman Sachs, 4개 파일 동일)"@ko ;
+    rdfs:comment "Sana 카드"@ko .
+
+bio:src-06 a vc:Source ; vc:order 6 ;
+    vc:code "일루미나 인사이트" ;
+    rdfs:label "06_일루미나 인사이트 PPT (한국투자, 2026.06.25)"@ko ;
+    rdfs:comment "일루미나·시퀀서 경쟁사"@ko .
+
+bio:src-07 a vc:Source ; vc:order 7 ;
+    vc:code "—" ;
+    rdfs:label "07_ACE 바이오M&A ETF PPT"@ko ;
+    rdfs:comment "DRM(Document Safer) 암호화로 읽지 못함"@ko .
+
+bio:src-08 a vc:Source ; vc:order 8 ;
+    vc:code "텔레그램" ;
+    rdfs:label "08_텔레그램 허혜민(B, 333건)·한투(47건), 6/26–9/2"@ko ;
+    rdfs:comment "국내 기업 이벤트·실적"@ko .
+
+bio:src-09 a vc:Source ; vc:order 9 ;
+    vc:code "KoAct ETF" ;
+    rdfs:label "09_KoAct 바이오헬스케어액티브 구성종목 (4/1–4/17)"@ko ;
+    rdfs:comment "국내 편입 종목과 비중(4/17 기준)"@ko .
+
+bio:src-10 a vc:Source ; vc:order 10 ;
+    vc:code "배경지식·검증 필요" ;
+    rdfs:label "—"@ko ;
+    rdfs:comment "폴더 자료에 사업 설명이 없어 일반 지식으로 채운 항목. 검증 필요"@ko .
+
+# ── 핵심 논지 ─────────────────────────────────────────────────────────────
+
+bio:thesis-1 a vc:Thesis ; vc:order 1 ;
+    rdfs:label "한투 분류PPT"@ko ;
+    rdfs:comment "AI 바이오의 해자는 알고리즘보다 독점 데이터. 모델은 오픈소스로 평준화되고 있다."@ko .
+
+bio:thesis-2 a vc:Thesis ; vc:order 2 ;
+    rdfs:label "KB 딜위클리 (7/6)"@ko ;
+    rdfs:comment "2026 글로벌 라이선스 $1,609억(+40%), M&A $1,221억(+237%). 국내 기업 라이선스 비중 5%대."@ko .
+
+bio:thesis-3 a vc:Thesis ; vc:order 3 ;
+    rdfs:label "미래에셋 26H2"@ko ;
+    rdfs:comment "글로벌 M&A run-rate $2,400억으로 2019년 기록 경신 가능. BBB 셔틀·DAC·MASH·근육보존 비만약에 빅파마 딜 집중."@ko .
+
+bio:thesis-4 a vc:Thesis ; vc:order 4 ;
+    rdfs:label "미래에셋 26H2"@ko ;
+    rdfs:comment "CDMO는 생물보안법(WuXi 1260H 등재) 수혜, 바이오시밀러는 비교임상 면제로 개발비 최대 50% 절감."@ko .
+
+bio:thesis-5 a vc:Thesis ; vc:order 5 ;
+    rdfs:label "텔레그램 6/26–9/2"@ko ;
+    rdfs:comment "코스닥 제약지수 3월 고점 대비 -52%(7/21) vs XBI 연초 대비 +26%. 한미·알테오젠 등 대형 L/O 재개."@ko .
+
+bio:thesis-6 a vc:Thesis ; vc:order 6 ;
+    rdfs:label "일루미나 인사이트"@ko ;
+    rdfs:comment "유전체 인프라가 국가 전략자산으로 격상. 설치기반 60%의 “통행료” 모델이 가격 경쟁을 버티는지가 관건."@ko .
+
+# ── 기업 · 멤버십 ─────────────────────────────────────────────────────────
+# 기업(co:) = 섹터 불문 신원. 멤버십(bio:m-…) = 이 섹터에서의 소속·역할·포인트·출처.
+# 주 소속(primaryCategory) 중분류별로 묶었다.
+
+# ━━ A-1 데이터 인프라 ━━
+
+co:US-TEM a vc:Company ;
+    rdfs:label "Tempus AI"@ko , "Tempus AI"@en ;
+    vc:ticker "TEM" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-TEM a vc:Membership ;
+    vc:company co:US-TEM ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 , bio:B-2-2 ;
+    vc:role "종양 멀티모달 데이터·유전체 검사" ;
+    vc:points (
+        "유전체+임상 데이터 4,000만+ 건, “곡괭이 대표주자”"
+        "Personalis를 $15억에 인수(텔레그램)"
+    ) ;
+    vc:source bio:src-01 , bio:src-08 .
+
+co:US-VEEV a vc:Company ;
+    rdfs:label "Veeva Systems"@ko ;
+    vc:ticker "VEEV" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-VEEV a vc:Membership ;
+    vc:company co:US-VEEV ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 ;
+    vc:role "생명과학 데이터 클라우드" ;
+    vc:points (
+        "규제·임상 데이터 SaaS, 업계 표준"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-IQV a vc:Company ;
+    rdfs:label "IQVIA"@ko ;
+    vc:ticker "IQV" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-IQV a vc:Membership ;
+    vc:company co:US-IQV ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 , bio:C-1 ;
+    vc:role "RWD·처방/청구 데이터 + 임상 CRO" ;
+    vc:points (
+        "전 세계 처방·claims 보유, 최대 헬스 데이터"
+        "CRO 업계 1위(임상+데이터·분석)"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-truveta a vc:Company ;
+    rdfs:label "Truveta"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-truveta a vc:Membership ;
+    vc:company co:US-x-truveta ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 ;
+    vc:role "병원 연합 RWD 플랫폼(비상장)" ;
+    vc:points (
+        "비식별 EMR 기반 신흥 데이터 플랫폼"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-komodo a vc:Company ;
+    rdfs:label "Komodo"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-komodo a vc:Membership ;
+    vc:company co:US-x-komodo ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 ;
+    vc:role "병원 연합 RWD 플랫폼(비상장)" ;
+    vc:points (
+        "비식별 EMR 기반 신흥 데이터 플랫폼"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-epic a vc:Company ;
+    rdfs:label "Epic"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-epic a vc:Membership ;
+    vc:company co:US-x-epic ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 ;
+    vc:role "EMR 원천(병원 진료기록)" ;
+    vc:points (
+        "데이터 발생지. Epic 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-ORCL a vc:Company ;
+    rdfs:label "Oracle"@ko ;
+    vc:ticker "ORCL" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ORCL a vc:Membership ;
+    vc:company co:US-ORCL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-1 ;
+    vc:belongsTo bio:A-1 ;
+    vc:role "EMR 원천(병원 진료기록)" ;
+    vc:points (
+        "데이터 발생지. Epic 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+# ━━ A-2 파운데이션 모델 ━━
+
+co:US-GOOGL a vc:Company ;
+    rdfs:label "Google DeepMind / Isomorphic"@ko ;
+    vc:ticker "GOOGL" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-GOOGL a vc:Membership ;
+    vc:company co:US-GOOGL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "AlphaFold 3 단백질·복합체 구조예측" ;
+    vc:points (
+        "2024 노벨화학상. Isomorphic Labs(비상장)가 AI 신약 사업화"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-evolutionaryscale a vc:Company ;
+    rdfs:label "EvolutionaryScale"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-evolutionaryscale a vc:Membership ;
+    vc:company co:US-x-evolutionaryscale ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "단백질 언어모델 ESM3(비상장)" ;
+    vc:points (
+        "오픈 계열 파운데이션 모델"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-chai-discovery a vc:Company ;
+    rdfs:label "Chai Discovery"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-chai-discovery a vc:Membership ;
+    vc:company co:US-x-chai-discovery ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "구조예측 Chai-1/2(비상장)" ;
+    vc:points (
+        "오픈 모델, 빅파마 협력"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-boltz-mit a vc:Company ;
+    rdfs:label "Boltz (MIT)"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-boltz-mit a vc:Membership ;
+    vc:company co:US-x-boltz-mit ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "오픈소스 구조예측 Boltz-1/2" ;
+    vc:points (
+        "모델 평준화의 상징"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-NVDA a vc:Company ;
+    rdfs:label "NVIDIA"@ko ;
+    vc:ticker "NVDA" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-NVDA a vc:Membership ;
+    vc:company co:US-NVDA ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "BioNeMo 바이오 AI 인프라" ;
+    vc:points (
+        "GPU·플랫폼 공급"
+    ) ;
+    vc:source bio:src-01 .
+
+co:CN-3696 a vc:Company ;
+    rdfs:label "Insilico Medicine"@ko ;
+    vc:ticker "3696" ; vc:exchange "HKEX" ;
+    vc:country "CN" ;
+    vc:otherCountry "HK" ;
+    vc:listed true .
+bio:m-CN-3696 a vc:Membership ;
+    vc:company co:CN-3696 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "Pharma.AI 신약발굴 플랫폼" ;
+    vc:points (
+        "Takeda와 계약금 등 $6천만, 총 $6억 AI 발굴 계약(26.07.01)"
+        "SK Biopharm과 신경질환 $25억 계약(06.21), Bora $25억(텔레그램)"
+    ) ;
+    vc:source bio:src-04 , bio:src-08 .
+
+co:KR-468530 a vc:Company ;
+    rdfs:label "프로티나"@ko ;
+    vc:country "KR" ;
+    vc:ticker "468530" ;
+    vc:exchange "KRX" ;
+    vc:listed true .
+bio:m-KR-468530 a vc:Membership ;
+    vc:company co:KR-468530 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-2 ;
+    vc:belongsTo bio:A-2 ;
+    vc:role "단백질 상호작용(SPID) 데이터 기반 AI 항체 설계" ;
+    vc:points (
+        "삼성바이오에피스와 AI 항체 공동개발·기술이전 옵션 계약(7/9)"
+        "AI 항체설계사 ABX Biosciences 최대주주(7/14)"
+    ) ;
+    vc:source bio:src-08 .
+
+# ━━ A-3 실험 자동화 ━━
+
+co:US-DNA a vc:Company ;
+    rdfs:label "Ginkgo Bioworks"@ko ;
+    vc:ticker "DNA" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-DNA a vc:Membership ;
+    vc:company co:US-DNA ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 ;
+    vc:role "바이오파운드리(균주·효소 자동설계)" ;
+    vc:points (
+        "합성생물 데이터 공장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-RXRX a vc:Company ;
+    rdfs:label "Recursion"@ko ;
+    vc:ticker "RXRX" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-RXRX a vc:Membership ;
+    vc:company co:US-RXRX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 , bio:A-2 ;
+    vc:role "자동화 표현형 스크리닝" ;
+    vc:points (
+        "수십억 장 실험 이미지, AI+로봇 통합"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-emerald-cloud-lab a vc:Company ;
+    rdfs:label "Emerald Cloud Lab"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-emerald-cloud-lab a vc:Membership ;
+    vc:company co:US-x-emerald-cloud-lab ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 ;
+    vc:role "클라우드 실험실(비상장)" ;
+    vc:points (
+        "원격 실험 자동화, 서비스형 랩"
+    ) ;
+    vc:source bio:src-01 .
+
+co:CH-TECN a vc:Company ;
+    rdfs:label "Tecan"@ko ;
+    vc:ticker "TECN" ; vc:exchange "SIX" ;
+    vc:country "CH" ;
+    vc:listed true .
+bio:m-CH-TECN a vc:Membership ;
+    vc:company co:CH-TECN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 ;
+    vc:role "액체 핸들링 로봇" ;
+    vc:points (
+        "고속 처리 장비 표준. Opentrons 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:CH-x-opentrons a vc:Company ;
+    rdfs:label "Opentrons"@ko ;
+    vc:country "CH" ;
+    vc:listed false .
+bio:m-CH-x-opentrons a vc:Membership ;
+    vc:company co:CH-x-opentrons ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 ;
+    vc:role "액체 핸들링 로봇" ;
+    vc:points (
+        "고속 처리 장비 표준. Opentrons 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-benchling a vc:Company ;
+    rdfs:label "Benchling"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-benchling a vc:Membership ;
+    vc:company co:US-x-benchling ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-3 ;
+    vc:belongsTo bio:A-3 ;
+    vc:role "R&D 실험 데이터 관리 SW(비상장)" ;
+    vc:points (
+        "업계 SaaS"
+    ) ;
+    vc:source bio:src-01 .
+
+# ━━ A-4 진단기기 ━━
+
+co:US-ILMN a vc:Company ;
+    rdfs:label "Illumina"@ko ;
+    vc:ticker "ILMN" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ILMN a vc:Membership ;
+    vc:company co:US-ILMN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:A-1 ;
+    vc:role "NGS 시퀀서 + 고마진 소모품(면도기-면도날)" ;
+    vc:points (
+        "설치기반 약 60%로 글로벌 1위, 2025 매출 $4.34B(제품 ~$3.7B)"
+        "게놈 비용 18만분의 1로 하락, 주가 2021 $555 → 2026 $142"
+        "리스크: $100 게놈 가격 경쟁(Ultima·MGI), 중국 UEL·수입금지(중화권 분기매출 -31%), GRAIL 분사 -$1.2B"
+        "트리거: 중국 정상화, 소모품 마진 방어, SomaLogic 멀티오믹스 통합. 연구자 스코어 7/10"
+    ) ;
+    vc:source bio:src-06 , bio:src-01 .
+
+co:CH-ROG a vc:Company ;
+    rdfs:label "Roche"@ko , "Roche / Genentech"@en ;
+    vc:ticker "ROG" ; vc:exchange "SIX" ;
+    vc:country "CH" ;
+    vc:listed true .
+bio:m-CH-ROG a vc:Membership ;
+    vc:company co:CH-ROG ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:B-1-2 ;
+    vc:role "체외진단 1위 + 항체 신약" ;
+    vc:points (
+        "IVD 1위(면역·분자진단), 시퀀싱 시장 재진입"
+        "Herceptin·Kadcyla(ADC), BBB 셔틀 trontinemab: 3.6mg/kg 92% 플라크 제거, ARIA-E 2.4%"
+        "89bio 최대 $35억 인수(MASH), C4T DAC 최대 $10.2억, Nurix BTK 분해제 $23억(계약금 $7억)"
+        "Genentech가 한미 HM17321 최대 $23.05억 도입(8/24)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-04 , bio:src-08 .
+
+co:US-ABT a vc:Company ;
+    rdfs:label "Abbott"@ko ;
+    vc:ticker "ABT" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ABT a vc:Membership ;
+    vc:company co:US-ABT ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "체외진단·현장진단(POC)" ;
+    vc:points (
+        "혈액·감염 IVD 대형"
+    ) ;
+    vc:source bio:src-01 .
+
+co:DE-SHL a vc:Company ;
+    rdfs:label "Siemens Healthineers"@ko ;
+    vc:ticker "SHL" ; vc:exchange "XETRA" ;
+    vc:country "DE" ;
+    vc:listed true .
+bio:m-DE-SHL a vc:Membership ;
+    vc:company co:DE-SHL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:B-2-1 ;
+    vc:role "IVD + 영상장비 통합 진단" ;
+    vc:points (
+        "영상장비 내장 AI"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-GEHC a vc:Company ;
+    rdfs:label "GE HealthCare"@ko ;
+    vc:ticker "GEHC" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-GEHC a vc:Membership ;
+    vc:company co:US-GEHC ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:B-2-1 ;
+    vc:role "CT·MRI·초음파 영상장비 빅3" ;
+    vc:points (
+        "장비 내장 AI로 전 모달리티 판독 보조"
+    ) ;
+    vc:source bio:src-01 .
+
+co:NL-PHG a vc:Company ;
+    rdfs:label "Philips"@ko ;
+    vc:ticker "PHG" ; vc:exchange "EURONEXT" ;
+    vc:country "NL" ;
+    vc:listed true .
+bio:m-NL-PHG a vc:Membership ;
+    vc:company co:NL-PHG ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:B-2-1 ;
+    vc:role "CT·MRI·초음파 영상장비 빅3" ;
+    vc:points (
+        "장비 내장 AI로 전 모달리티 판독 보조"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-096530 a vc:Company ;
+    rdfs:label "씨젠"@ko , "Seegene"@en ;
+    vc:ticker "096530" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-096530 a vc:Membership ;
+    vc:company co:KR-096530 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 , bio:B-2-2 ;
+    vc:role "PCR 분자진단" ;
+    vc:points (
+        "국내 분자진단 대표"
+        "자사주 1,737억 소각, 분기배당 300원(텔레그램)"
+    ) ;
+    vc:source bio:src-01 , bio:src-08 .
+
+co:KR-x-삼성메디슨 a vc:Company ;
+    rdfs:label "삼성메디슨"@ko ;
+    vc:country "KR" ;
+    vc:listed false .
+bio:m-KR-x-삼성메디슨 a vc:Membership ;
+    vc:company co:KR-x-삼성메디슨 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "초음파 영상진단" ;
+    vc:points (
+        "국내 영상진단 대표(삼성전자 자회사)"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-ultima a vc:Company ;
+    rdfs:label "Ultima"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-ultima a vc:Membership ;
+    vc:company co:US-x-ultima ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "저가 시퀀서 도전자" ;
+    vc:points (
+        "$100/$90 게놈으로 점유율 확대, 중국 규제 공백기에 MGI 점유율 상승"
+    ) ;
+    vc:source bio:src-06 .
+
+co:CN-688114 a vc:Company ;
+    rdfs:label "MGI"@ko ;
+    vc:ticker "688114" ; vc:exchange "SSE" ;
+    vc:country "CN" ;
+    vc:listed true .
+bio:m-CN-688114 a vc:Membership ;
+    vc:company co:CN-688114 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "저가 시퀀서 도전자" ;
+    vc:points (
+        "$100/$90 게놈으로 점유율 확대, 중국 규제 공백기에 MGI 점유율 상승"
+    ) ;
+    vc:source bio:src-06 .
+
+co:US-PACB a vc:Company ;
+    rdfs:label "PacBio"@ko ;
+    vc:ticker "PACB" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-PACB a vc:Membership ;
+    vc:company co:US-PACB ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "롱리드 시퀀서" ;
+    vc:points (
+        "구조변이 등 숏리드의 빈틈 공략"
+    ) ;
+    vc:source bio:src-06 .
+
+co:UK-ONT a vc:Company ;
+    rdfs:label "Oxford Nanopore"@ko ;
+    vc:ticker "ONT" ; vc:exchange "LSE" ;
+    vc:country "UK" ;
+    vc:listed true .
+bio:m-UK-ONT a vc:Membership ;
+    vc:company co:UK-ONT ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:A-4 ;
+    vc:belongsTo bio:A-4 ;
+    vc:role "롱리드 시퀀서" ;
+    vc:points (
+        "구조변이 등 숏리드의 빈틈 공략"
+    ) ;
+    vc:source bio:src-06 .
+
+# ━━ B-1-1 저분자·기타 ━━
+
+co:US-PFE a vc:Company ;
+    rdfs:label "Pfizer"@ko ;
+    vc:ticker "PFE" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-PFE a vc:Membership ;
+    vc:company co:US-PFE ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 , bio:B-1-4 ;
+    vc:role "저분자 대형(Paxlovid·항암)" ;
+    vc:points (
+        "Metsera 최대 $100억 인수(GLP-1), danuglipron 중단"
+        "경구 MET-224o 중단(텔레그램), 디앤디와 경구 이중작용제 연구계약"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 .
+
+co:CH-NOVN a vc:Company ;
+    rdfs:label "Novartis"@ko ;
+    vc:ticker "NOVN" ; vc:exchange "SIX" ;
+    vc:country "CH" ;
+    vc:listed true .
+bio:m-CH-NOVN a vc:Membership ;
+    vc:company co:CH-NOVN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 , bio:B-1-3 , bio:B-1-5 ;
+    vc:role "표적 저분자 + 유전자치료 + CAR-T" ;
+    vc:points (
+        "키나제 억제제, Zolgensma(AAV), Kymriah(최초 CAR-T)"
+        "Avidity $120억 인수(AOC), BBB 셔틀 계약 다수"
+        "알테오젠 ALT-B4 최대 $32.2억 계약(9/2)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 .
+
+co:US-ARVN a vc:Company ;
+    rdfs:label "Arvinas"@ko ;
+    vc:ticker "ARVN" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ARVN a vc:Membership ;
+    vc:company co:US-ARVN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "PROTAC 표적단백질분해" ;
+    vc:points (
+        "TPD 선두 바이오텍(전립선·유방암)"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-MCRB a vc:Company ;
+    rdfs:label "Seres"@ko ;
+    vc:ticker "MCRB" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-MCRB a vc:Membership ;
+    vc:company co:US-MCRB ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "마이크로바이옴 치료제" ;
+    vc:points (
+        "감염·염증 신영역. Vedanta 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-vedanta a vc:Company ;
+    rdfs:label "Vedanta"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-vedanta a vc:Membership ;
+    vc:company co:US-x-vedanta ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "마이크로바이옴 치료제" ;
+    vc:points (
+        "감염·염증 신영역. Vedanta 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-NRIX a vc:Company ;
+    rdfs:label "Nurix Therapeutics"@ko ;
+    vc:ticker "NRIX" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-NRIX a vc:Membership ;
+    vc:company co:US-NRIX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "BTK 분해제(bexobrutideg)" ;
+    vc:points (
+        "Roche와 총 $23억, 계약금 $7억(계약금 비중 30%)"
+    ) ;
+    vc:source bio:src-04 , bio:src-03 .
+
+co:KR-475830 a vc:Company ;
+    rdfs:label "오름테라퓨틱"@ko , "Orum Therapeutics"@en ;
+    vc:ticker "475830" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-475830 a vc:Membership ;
+    vc:company co:KR-475830 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 , bio:B-1-2 ;
+    vc:role "TPD²: 분해제-항체 접합체(DAC)" ;
+    vc:points (
+        "ORM-6151(CD33×GSPT1) BMS에 업프론트 $1억 매각, 세계에서 가장 앞선 DAC"
+        "Vertex 플랫폼 딜 총 $9.45억(Casgevy 전처치제)"
+        "ORM-1153 FDA 임상 승인(8/23)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 .
+
+co:KR-326030 a vc:Company ;
+    rdfs:label "SK바이오팜"@ko , "SK Biopharm"@en ;
+    vc:ticker "326030" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-326030 a vc:Membership ;
+    vc:company co:KR-326030 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "뇌전증 신약 엑스코프리 미국 직판" ;
+    vc:points (
+        "2Q 매출 2,474억·영업익 971억, 엑스코프리 2,244억(+46%)"
+        "Biohaven 오파칼림 최대 $7.95억 도입(8/26)"
+        "Insilico와 $25억 신경질환 AI 계약(KB)"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-04 .
+
+co:KR-000100 a vc:Company ;
+    rdfs:label "유한양행"@ko , "Yuhan"@en ;
+    vc:ticker "000100" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-000100 a vc:Membership ;
+    vc:company co:KR-000100 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "전통제약 + 렉라자(lazertinib, J&J)" ;
+    vc:points (
+        "1Q26 라즈클루즈 매출 약 $34M으로 부진, MARIPOSA 최종 OS 2H26"
+        "자사주 4,253억 소각, BlackRock 6.50%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-039200 a vc:Company ;
+    rdfs:label "오스코텍"@ko , "Oscotec"@en ;
+    vc:ticker "039200" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-039200 a vc:Membership ;
+    vc:company co:KR-039200 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "저분자 신약(렉라자 공동 권리)" ;
+    vc:points (
+        "세비도플레닙을 Agios에 $6.65억 기술수출(6월)"
+        "GNS-3545(ROCK2) 1상 완료"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-028300 a vc:Company ;
+    rdfs:label "HLB"@ko ;
+    vc:ticker "028300" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-028300 a vc:Membership ;
+    vc:company co:KR-028300 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "리보세라닙+캄렐리주맙 간암 1차" ;
+    vc:points (
+        "FDA CRL(7/9, 제조시설) 후 VAI로 해소"
+        "MSCI 편출, BlackRock 7.15%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-x-aribio a vc:Company ;
+    rdfs:label "아리바이오"@ko , "AriBio"@en ;
+    vc:country "KR" ;
+    vc:listed false .
+bio:m-KR-x-aribio a vc:Membership ;
+    vc:company co:KR-x-aribio ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "경구 알츠하이머 AR1001" ;
+    vc:points (
+        "Fosun에 총 $47억 기술수출, 선급 $6천만 확보"
+        "3상 투약 완료(1,535명), 11/16 CTAD 발표"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-310210 a vc:Company ;
+    rdfs:label "보로노이"@ko , "Voronoi"@en ;
+    vc:ticker "310210" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-310210 a vc:Membership ;
+    vc:company co:KR-310210 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "표적 저분자 항암(VRN11, 폐암)" ;
+    vc:points (
+        "VRN11 NSCLC 데이터 in-line"
+        "ETF 비중 3.96%"
+    ) ;
+    vc:source bio:src-03 , bio:src-09 .
+
+co:KR-195940 a vc:Company ;
+    rdfs:label "HK이노엔"@ko , "HK inno.N"@en ;
+    vc:ticker "195940" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-195940 a vc:Membership ;
+    vc:company co:KR-195940 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "전통제약(케이캡, P-CAB)" ;
+    vc:points (
+        "2Q 매출 2,672억·영업익 300억, 수출 +337%"
+    ) ;
+    vc:source bio:src-08 , bio:src-09 .
+
+co:KR-249420 a vc:Company ;
+    rdfs:label "일동제약"@ko , "Ildong"@en ;
+    vc:ticker "249420" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-249420 a vc:Membership ;
+    vc:company co:KR-249420 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 , bio:B-1-4 ;
+    vc:role "경구 저분자 GLP-1 등 신약(배경지식)" ;
+    vc:points (
+        "ETF 비중 1.77%"
+        "텔레그램·리포트 언급 없음"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+co:KR-389470 a vc:Company ;
+    rdfs:label "인벤티지랩"@ko , "Inventage Lab"@en ;
+    vc:ticker "389470" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-389470 a vc:Membership ;
+    vc:company co:KR-389470 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "장기지속형 주사제(마이크로스피어) 제형 플랫폼(배경지식)" ;
+    vc:points (
+        "ETF 비중 1.13%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+co:US-MDGL a vc:Company ;
+    rdfs:label "Madrigal"@ko ;
+    vc:ticker "MDGL" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-MDGL a vc:Membership ;
+    vc:company co:US-MDGL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-1 ;
+    vc:belongsTo bio:B-1-1 ;
+    vc:role "최초 MASH 치료제 Rezdiffra(THR-β)" ;
+    vc:points (
+        "시총 $4bn → $14bn, 분기마다 컨센서스 상회"
+    ) ;
+    vc:source bio:src-03 .
+
+# ━━ B-1-2 항체 ━━
+
+co:US-MRK a vc:Company ;
+    rdfs:label "Merck (MSD)"@ko ;
+    vc:ticker "MRK" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-MRK a vc:Membership ;
+    vc:company co:US-MRK ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:B-1-3 ;
+    vc:role "Keytruda 면역항암 mAb" ;
+    vc:points (
+        "세계 1위 매출약, IV 특허 2028 만료 → SC 제형 Qlex로 방어"
+        "Qlex 2Q 매출 $4.63억(+262% QoQ), 알테오젠 ALT-B4 적용"
+        "Moderna와 개인맞춤 mRNA 암백신 흑색종 3상 성공(8/19)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 .
+
+co:JP-4568 a vc:Company ;
+    rdfs:label "Daiichi Sankyo"@ko ;
+    vc:ticker "4568" ; vc:exchange "TSE" ;
+    vc:country "JP" ;
+    vc:listed true .
+bio:m-JP-4568 a vc:Membership ;
+    vc:company co:JP-4568 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:B-1-3 ;
+    vc:role "Enhertu(HER2 ADC)" ;
+    vc:points (
+        "ADC 블록버스터 선두, 엔허투 6년 차 Topo1 페이로드 내성 증가"
+        "AZ–CSPC siRNA 신장질환 최대 $17.7억(7/2)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-04 .
+
+co:UK-AZN a vc:Company ;
+    rdfs:label "AstraZeneca"@ko ;
+    vc:ticker "AZN" ; vc:exchange "LSE" ;
+    vc:country "UK" ;
+    vc:listed true .
+bio:m-UK-AZN a vc:Membership ;
+    vc:company co:UK-AZN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:B-1-3 ;
+    vc:role "Enhertu(HER2 ADC)" ;
+    vc:points (
+        "ADC 블록버스터 선두, 엔허투 6년 차 Topo1 페이로드 내성 증가"
+        "AZ–CSPC siRNA 신장질환 최대 $17.7억(7/2)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-04 .
+
+co:US-AMGN a vc:Company ;
+    rdfs:label "Amgen"@ko ;
+    vc:ticker "AMGN" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-AMGN a vc:Membership ;
+    vc:company co:US-AMGN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:B-1-4 ;
+    vc:role "Blincyto(BiTE) + MariTide 비만" ;
+    vc:points (
+        "이중항체 선구, 바이오시밀러 리더"
+        "MariTide 월 1회, 3상 중 -20.0%"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:US-JNJ a vc:Company ;
+    rdfs:label "Johnson & Johnson"@ko ;
+    vc:ticker "JNJ" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-JNJ a vc:Membership ;
+    vc:company co:US-JNJ ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:B-1-5 , bio:B-3-1 ;
+    vc:role "Darzalex·Tremfya, Carvykti, 수술로봇 Ottava" ;
+    vc:points (
+        "Firefly Bio $10억 현금 인수(DAC), 리가켐 LCB84 도입"
+        "Carvykti(BCMA CAR-T, Legend와)"
+        "수술로봇 Ottava 개발 중"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-04 .
+
+co:KR-141080 a vc:Company ;
+    rdfs:label "리가켐바이오"@ko , "LigaChem Biosciences"@en ;
+    vc:ticker "141080" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-141080 a vc:Membership ;
+    vc:company co:KR-141080 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "ADC 플랫폼 ConjuALL(링커·페이로드)" ;
+    vc:points (
+        "누적 기술이전 15건 $83억+ (J&J·Amgen·Takeda 등)"
+        "미래에셋 매수, 목표가 23만원(현재가 12.9만원)"
+        "CS5001 1차 DLBCL 반응률·완전관해 100%, 국민성장펀드 5,000억 조달"
+        "ETF 비중 9.56%(2위)"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-298380 a vc:Company ;
+    rdfs:label "에이비엘바이오"@ko , "ABL Bio"@en ;
+    vc:ticker "298380" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-298380 a vc:Membership ;
+    vc:company co:KR-298380 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "이중항체·BBB 셔틀 Grabody-B" ;
+    vc:points (
+        "Grabody-B 계약 GSK 4조 + Lilly 3.8조 = 7.8조원(2025)"
+        "IGF1R 뇌 발현 32.7% vs TfR 5.6%, IGF1R 셔틀 보유는 유일"
+        "tovecimig 담도암 OS 실패, 연내 BLA 추진"
+        "ETF 비중 9.06%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-196170 a vc:Company ;
+    rdfs:label "알테오젠"@ko , "Alteogen"@en ;
+    vc:ticker "196170" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-196170 a vc:Membership ;
+    vc:company co:KR-196170 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "SC 제형 전환 플랫폼 ALT-B4(히알루로니다제)" ;
+    vc:points (
+        "Keytruda Qlex 적용, 판매 마일스톤 $10억 후 로열티 2%"
+        "Novartis 최대 $32.2억(9/2) 등 파트너 10개사"
+        "2Q 매출 689억·영업익 342억, BlackRock 5.03%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-068270 a vc:Company ;
+    rdfs:label "셀트리온"@ko , "Celltrion"@en ;
+    vc:ticker "068270" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-068270 a vc:Membership ;
+    vc:company co:KR-068270 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 , bio:C-2 ;
+    vc:role "바이오시밀러 + 짐펜트라 + CMO" ;
+    vc:points (
+        "미래에셋 매수, 목표가 26만원(EV/EBITDA 28배)"
+        "2Q 매출 1조 3,937억(+45%)·영업익 4,518억(+86%)"
+        "트룩시마 첫 리툭시맙 시밀러 FDA 상호교환성, 짐펜트라 26F +118%"
+        "ETF 비중 7.43%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 , bio:src-01 .
+
+co:KR-0126Z0 a vc:Company ;
+    rdfs:label "삼성바이오에피스"@ko , "Samsung Epis Holdings"@en ;
+    vc:ticker "0126Z0" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-0126Z0 a vc:Membership ;
+    vc:company co:KR-0126Z0 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "바이오시밀러 + ADC" ;
+    vc:points (
+        "SB27(키트루다 시밀러) 3상 중간분석 동등성"
+        "인투셀 넥틴-4 ADC 본계약, 프로티나와 AI 항체 계약"
+        "2Q 매출 3,919억·영업익 587억"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-009420 a vc:Company ;
+    rdfs:label "한올바이오파마"@ko , "HanAll Biopharma"@en ;
+    vc:ticker "009420" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-009420 a vc:Membership ;
+    vc:company co:KR-009420 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "FcRn 항체(IMVT-1402, 파트너 Immunovant)" ;
+    vc:points (
+        "D2T RA 16주 ACR20 72.7%, IgG 감소 74~82%"
+        "미래에셋 매수, 목표가 7.1만원"
+        "2H26 28주 탑라인·CLE PoC"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-397030 a vc:Company ;
+    rdfs:label "에이프릴바이오"@ko , "AprilBio"@en ;
+    vc:ticker "397030" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-397030 a vc:Membership ;
+    vc:company co:KR-397030 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "반감기 연장 항체 플랫폼 SAFA" ;
+    vc:points (
+        "TKG휴켐스·IMM 3,468억 유상증자, 현금 약 4,370억 vs 시총 9천억"
+        "EVO301 아토피 서프라이즈"
+        "ETF 비중 4.92%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-000250 a vc:Company ;
+    rdfs:label "삼천당제약"@ko , "Samchundang"@en ;
+    vc:ticker "000250" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-000250 a vc:Membership ;
+    vc:company co:KR-000250 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "안과 바이오시밀러·경구 제형(배경지식)" ;
+    vc:points (
+        "신뢰도 하락·주가 급락으로 1H26 악재로 꼽힘"
+        "4/1 ETF 3.58% → 4/17 편출"
+    ) ;
+    vc:source bio:src-03 , bio:src-09 , bio:src-10 .
+
+co:NL-ARGX a vc:Company ;
+    rdfs:label "argenx"@ko ;
+    vc:ticker "ARGX" ; vc:exchange "EURONEXT" ;
+    vc:country "NL" ;
+    vc:otherCountry "BE" ;
+    vc:listed true .
+bio:m-NL-ARGX a vc:Membership ;
+    vc:company co:NL-ARGX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "FcRn 항체 Vyvgart" ;
+    vc:points (
+        "$100억+ 메가블록버스터 가능성"
+    ) ;
+    vc:source bio:src-03 .
+
+co:CN-6990 a vc:Company ;
+    rdfs:label "Kelun-Biotech"@ko ;
+    vc:ticker "6990" ; vc:exchange "HKEX" ;
+    vc:country "CN" ;
+    vc:listed true .
+bio:m-CN-6990 a vc:Membership ;
+    vc:company co:CN-6990 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "TROP2 ADC sac-TMT(Merck 공동)" ;
+    vc:points (
+        "ASCO 2026 PD-1 병용 PFS HR 0.35"
+    ) ;
+    vc:source bio:src-03 .
+
+co:KR-287840 a vc:Company ;
+    rdfs:label "인투셀"@ko , "Intocell"@en ;
+    vc:country "KR" ;
+    vc:ticker "287840" ;
+    vc:exchange "KRX" ;
+    vc:listed true .
+bio:m-KR-287840 a vc:Membership ;
+    vc:company co:KR-287840 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "ADC 링커 OHPAS" ;
+    vc:points (
+        "삼성에피스와 넥틴-4 ADC SBE303 계약"
+    ) ;
+    vc:source bio:src-08 .
+
+co:KR-358570 a vc:Company ;
+    rdfs:label "지아이이노베이션"@ko , "GI Innovation"@en ;
+    vc:ticker "358570" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-358570 a vc:Membership ;
+    vc:company co:KR-358570 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-2 ;
+    vc:belongsTo bio:B-1-2 ;
+    vc:role "융합단백질 면역항암 GI-101A/GI-102" ;
+    vc:points (
+        "GI-101A 요로상피암 FDA 패스트트랙(반응률 50%)"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+# ━━ B-1-3 핵산 ━━
+
+co:US-ALNY a vc:Company ;
+    rdfs:label "Alnylam"@ko ;
+    vc:ticker "ALNY" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ALNY a vc:Membership ;
+    vc:company co:US-ALNY ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "siRNA(Onpattro·Leqvio)" ;
+    vc:points (
+        "siRNA 선두, Inceptive와 AI 설계 RNAi $20억"
+    ) ;
+    vc:source bio:src-01 , bio:src-04 .
+
+co:US-MRNA a vc:Company ;
+    rdfs:label "Moderna"@ko ;
+    vc:ticker "MRNA" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-MRNA a vc:Membership ;
+    vc:company co:US-MRNA ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "mRNA 백신·항암백신" ;
+    vc:points (
+        "코로나 이후 항암백신 확장"
+        "Moderna/Merck 개인맞춤 mRNA 암백신 흑색종 3상 성공"
+    ) ;
+    vc:source bio:src-01 , bio:src-08 .
+
+co:DE-BNTX a vc:Company ;
+    rdfs:label "BioNTech"@ko ;
+    vc:ticker "BNTX" ; vc:exchange "NASDAQ" ;
+    vc:country "DE" ;
+    vc:listed true .
+bio:m-DE-BNTX a vc:Membership ;
+    vc:company co:DE-BNTX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "mRNA 백신·항암백신" ;
+    vc:points (
+        "코로나 이후 항암백신 확장"
+        "Moderna/Merck 개인맞춤 mRNA 암백신 흑색종 3상 성공"
+    ) ;
+    vc:source bio:src-01 , bio:src-08 .
+
+co:US-VRTX a vc:Company ;
+    rdfs:label "Vertex"@ko ;
+    vc:ticker "VRTX" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-VRTX a vc:Membership ;
+    vc:company co:US-VRTX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 , bio:B-1-6 ;
+    vc:role "Casgevy(첫 CRISPR 치료제)" ;
+    vc:points (
+        "겸상적혈구 적응증"
+        "Vertex zimislecel(iPSC 췌도세포) 1형 당뇨 iPSC 임상 선두"
+        "오름과 전처치제 플랫폼 딜"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:US-CRSP a vc:Company ;
+    rdfs:label "CRISPR Tx"@ko ;
+    vc:ticker "CRSP" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-CRSP a vc:Membership ;
+    vc:company co:US-CRSP ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 , bio:B-1-6 ;
+    vc:role "Casgevy(첫 CRISPR 치료제)" ;
+    vc:points (
+        "겸상적혈구 적응증"
+        "Vertex zimislecel(iPSC 췌도세포) 1형 당뇨 iPSC 임상 선두"
+        "오름과 전처치제 플랫폼 딜"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:US-IONS a vc:Company ;
+    rdfs:label "Ionis"@ko ;
+    vc:ticker "IONS" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-IONS a vc:Membership ;
+    vc:company co:US-IONS ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "ASO(안티센스) 선구" ;
+    vc:points (
+        "Recordati에 GFAP siRNA 라이선스"
+        "에이비엘과 IGF1R 기반 siRNA 근육 전달 공동연구"
+    ) ;
+    vc:source bio:src-01 , bio:src-04 , bio:src-03 .
+
+co:US-ARWR a vc:Company ;
+    rdfs:label "Arrowhead"@ko ;
+    vc:ticker "ARWR" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ARWR a vc:Membership ;
+    vc:company co:US-ARWR ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "siRNA(ALK7·INHBE·APOC3)" ;
+    vc:points (
+        "ALK7 siRNA 최선두, APOC3 3상 중성지방 -79~81%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-226950 a vc:Company ;
+    rdfs:label "올릭스"@ko , "OliX"@en ;
+    vc:ticker "226950" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-226950 a vc:Membership ;
+    vc:company co:KR-226950 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "비대칭 siRNA 플랫폼 OASIS" ;
+    vc:points (
+        "OLX702A(MASH) 릴리 라이선스아웃, 2상 진입 기대"
+        "탈모 OLX104C 1b 2H26, 비만 ALK7 siRNA 1H27 IND"
+        "로레알 포함 1,107억 투자 유치, 키움 탑픽"
+        "ETF 비중 9.80%(1위)"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-476830 a vc:Company ;
+    rdfs:label "알지노믹스"@ko , "Rznomics"@en ;
+    vc:ticker "476830" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-476830 a vc:Membership ;
+    vc:company co:KR-476830 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "RNA 치환효소(trans-splicing) 유전자치료" ;
+    vc:points (
+        "RZ-001 간암 서프라이즈, 완전관해 1명 추가"
+        "릴리 난청 공동연구비 수령"
+        "ETF 비중 7.29%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-199800 a vc:Company ;
+    rdfs:label "툴젠"@ko , "ToolGen"@en ;
+    vc:ticker "199800" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-199800 a vc:Membership ;
+    vc:company co:KR-199800 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-3 ;
+    vc:belongsTo bio:B-1-3 ;
+    vc:role "CRISPR-Cas9 원천 특허" ;
+    vc:points (
+        "브로드와 선발명 다툼 2단계"
+    ) ;
+    vc:source bio:src-08 .
+
+# ━━ B-1-4 펩타이드·단백질 ━━
+
+co:DK-NOVO-B a vc:Company ;
+    rdfs:label "Novo Nordisk"@ko ;
+    vc:ticker "NOVO-B" ; vc:exchange "CPH" ;
+    vc:country "DK" ;
+    vc:listed true .
+bio:m-DK-NOVO-B a vc:Membership ;
+    vc:company co:DK-NOVO-B ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 , bio:C-2 ;
+    vc:role "Wegovy·Ozempic" ;
+    vc:points (
+        "비만치료제 양강, 인크레틴 점유율 39.4%"
+        "Wegovy pill 1Q26 $3.53억, 처방의 약 35%"
+        "Akero 최대 $52억 인수, Catalent 인수(2024)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 .
+
+co:US-LLY a vc:Company ;
+    rdfs:label "Eli Lilly"@ko ;
+    vc:ticker "LLY" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-LLY a vc:Membership ;
+    vc:company co:US-LLY ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 , bio:B-1-2 ;
+    vc:role "Zepbound·Mounjaro, 경구 orforglipron" ;
+    vc:points (
+        "시총 1위 제약사, 인크레틴 점유율 60.1%"
+        "retatrutide -28.7%(3상 -22.6%), orforglipron 2026.04 허가"
+        "한미·에이비엘·올릭스·알지노믹스 파트너, 2026 KB표 최다 딜 인수자"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 , bio:src-04 .
+
+co:US-VKTX a vc:Company ;
+    rdfs:label "Viking Therapeutics"@ko ;
+    vc:ticker "VKTX" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-VKTX a vc:Membership ;
+    vc:company co:US-VKTX ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "VK2735(GLP-1/GIP)" ;
+    vc:points (
+        "SC 3상 -14.7%, 경구 2상 -12.2%"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:DK-ZEAL a vc:Company ;
+    rdfs:label "Zealand Pharma"@ko ;
+    vc:ticker "ZEAL" ; vc:exchange "CPH" ;
+    vc:country "DK" ;
+    vc:listed true .
+bio:m-DK-ZEAL a vc:Membership ;
+    vc:company co:DK-ZEAL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "아밀린·펩타이드 비만" ;
+    vc:points (
+        "survodutide 원개발사(BI)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:KR-128940 a vc:Company ;
+    rdfs:label "한미약품"@ko , "Hanmi Pharm"@en ;
+    vc:ticker "128940" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-128940 a vc:Membership ;
+    vc:company co:KR-128940 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "LAPSCOVERY 장기지속 펩타이드, 비만·MASH" ;
+    vc:points (
+        "미래에셋 매수, 목표가 70만원(영업 5.9조 + 파이프라인 3.2조)"
+        "Genentech에 HM17321(근육보존) 최대 $23.05억, Lilly에 GLP-2 $12억"
+        "에페글레나타이드 국내 비만 출시 2H26"
+        "ETF 비중 5.06%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-347850 a vc:Company ;
+    rdfs:label "디앤디파마텍"@ko , "D&D Pharmatech"@en ;
+    vc:ticker "347850" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-347850 a vc:Membership ;
+    vc:company co:KR-347850 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "GLP-1/GCG MASH(DD01) + 경구 펩타이드 ORALINK" ;
+    vc:points (
+        "48주 MASH 해소 62.5% vs 5.3%, 섬유화 개선 50% vs 15.8%, Lancet 게재"
+        "ORALINK 파트너 Metsera가 Pfizer에 인수"
+        "ETF 비중 4.96%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-006280 a vc:Company ;
+    rdfs:label "녹십자"@ko , "GC Biopharma"@en ;
+    vc:ticker "006280" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-006280 a vc:Membership ;
+    vc:company co:KR-006280 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "혈액제제·백신·희귀질환 효소" ;
+    vc:points (
+        "관계사 Curevo가 Lilly에 피인수, 선급금 2,868억"
+        "2Q 영업익 17억(-94%)"
+        "ETF 비중 3.39%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-087010 a vc:Company ;
+    rdfs:label "펩트론"@ko , "Peptron"@en ;
+    vc:ticker "087010" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-087010 a vc:Membership ;
+    vc:company co:KR-087010 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "펩타이드 장기지속 제형 SmartDepot" ;
+    vc:points (
+        "월 1회 세마글루타이드 1상 IND(8/26)"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-138610 a vc:Company ;
+    rdfs:label "나이벡"@ko , "Nibec"@en ;
+    vc:ticker "138610" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-138610 a vc:Membership ;
+    vc:company co:KR-138610 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-4 ;
+    vc:belongsTo bio:B-1-4 ;
+    vc:role "펩타이드 기반 신약·전달 플랫폼(배경지식)" ;
+    vc:points (
+        "ETF 비중 1.49%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+# ━━ B-1-5 면역세포 ━━
+
+co:KR-174900 a vc:Company ;
+    rdfs:label "앱클론"@ko , "AbClon"@en ;
+    vc:ticker "174900" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-174900 a vc:Membership ;
+    vc:company co:KR-174900 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 , bio:B-1-2 ;
+    vc:role "CAR-T(AT101) + 항체(AC101/HLX22)" ;
+    vc:points (
+        "AT101 2상 모집 완료, AC101 위암 3상 탑라인 1H27"
+        "GC와 in vivo CAR-T MOU"
+    ) ;
+    vc:source bio:src-08 , bio:src-09 .
+
+co:US-GILD a vc:Company ;
+    rdfs:label "Gilead / Kite"@ko ;
+    vc:ticker "GILD" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-GILD a vc:Membership ;
+    vc:company co:US-GILD ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 , bio:B-1-2 ;
+    vc:role "CAR-T Yescarta·Tecartus + ADC Trodelvy" ;
+    vc:points (
+        "CAR-T 매출 선두, TROP2 ADC로 항암 고성장"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:US-BMY a vc:Company ;
+    rdfs:label "BMS"@ko ;
+    vc:ticker "BMY" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-BMY a vc:Membership ;
+    vc:company co:US-BMY ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 , bio:B-1-2 ;
+    vc:role "CAR-T Breyanzi·Abecma + Opdivo" ;
+    vc:points (
+        "오름 ORM-6151 도입, BioArctic 셔틀 계약"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:US-FATE a vc:Company ;
+    rdfs:label "Fate Therapeutics"@ko ;
+    vc:ticker "FATE" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-FATE a vc:Membership ;
+    vc:company co:US-FATE ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 , bio:B-1-6 ;
+    vc:role "iPSC 유래 CAR-NK" ;
+    vc:points (
+        "off-the-shelf 세포치료 플랫폼"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-LEGN a vc:Company ;
+    rdfs:label "Legend Biotech"@ko ;
+    vc:ticker "LEGN" ; vc:exchange "NASDAQ" ;
+    vc:country "US" ;
+    vc:otherCountry "CN" ;
+    vc:listed true .
+bio:m-US-LEGN a vc:Membership ;
+    vc:company co:US-LEGN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 ;
+    vc:role "Carvykti(BCMA CAR-T, J&J)" ;
+    vc:points (
+        "다발골수종 강자"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-SANA a vc:Company ;
+    rdfs:label "Sana Biotechnology"@ko ;
+    vc:ticker "SANA" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-SANA a vc:Membership ;
+    vc:company co:US-SANA ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 , bio:B-1-6 ;
+    vc:role "저면역(HIP) 세포 + in vivo CAR-T" ;
+    vc:points (
+        "SC451 iPSC 췌도세포(1형 당뇨) IND·1상 2026 목표, UP421 12개월 무면역억제 생존"
+        "SG293 in vivo CD19 CAR-T, 첫 인체 데이터 2026+"
+        "GS: 피크매출 합산 $124억, 현금 $1.38억으로 2026 말까지 운영"
+    ) ;
+    vc:source bio:src-05 .
+
+co:KR-024850 a vc:Company ;
+    rdfs:label "HLB이노베이션"@ko ;
+    vc:ticker "024850" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-024850 a vc:Membership ;
+    vc:company co:KR-024850 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 ;
+    vc:role "SYN-KIR CAR-T(베리스모)" ;
+    vc:points (
+        "SYN-KIR110 고형암 서프라이즈, 310 혈액암 4Q26"
+    ) ;
+    vc:source bio:src-03 .
+
+co:KR-372320 a vc:Company ;
+    rdfs:label "큐로셀"@ko , "Curocell"@en ;
+    vc:ticker "372320" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-372320 a vc:Membership ;
+    vc:company co:KR-372320 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-5 ;
+    vc:belongsTo bio:B-1-5 ;
+    vc:role "CAR-T 림카토" ;
+    vc:points (
+        "급여 첫 관문 통과, 연매출 900억 목표"
+    ) ;
+    vc:source bio:src-08 .
+
+# ━━ B-1-6 줄기세포·재생 ━━
+
+co:AU-MESO a vc:Company ;
+    rdfs:label "Mesoblast"@ko ;
+    vc:ticker "MESO" ; vc:exchange "NASDAQ" ;
+    vc:country "AU" ;
+    vc:listed true .
+bio:m-AU-MESO a vc:Membership ;
+    vc:company co:AU-MESO ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "Ryoncil(중간엽 줄기세포)" ;
+    vc:points (
+        "첫 MSC 승인(이식편대숙주병)"
+    ) ;
+    vc:source bio:src-01 .
+
+co:DE-BAYN a vc:Company ;
+    rdfs:label "BlueRock (Bayer)"@ko ;
+    vc:ticker "BAYN" ; vc:exchange "XETRA" ;
+    vc:country "DE" ;
+    vc:listed true .
+bio:m-DE-BAYN a vc:Membership ;
+    vc:company co:DE-BAYN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "iPSC 도파민세포(파킨슨)" ;
+    vc:points (
+        "Bayer 자회사"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-085660 a vc:Company ;
+    rdfs:label "차바이오텍"@ko , "CHA Biotech"@en ;
+    vc:ticker "085660" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-085660 a vc:Membership ;
+    vc:company co:KR-085660 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "줄기세포 파이프라인" ;
+    vc:points (
+        "퇴행성·난임, 국내 대표"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-950160 a vc:Company ;
+    rdfs:label "코오롱티슈진"@ko , "Kolon TissueGene"@en ;
+    vc:ticker "950160" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-950160 a vc:Membership ;
+    vc:company co:KR-950160 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "골관절염 세포유전자치료 TG-C" ;
+    vc:points (
+        "미국 3상(15302) 실패(7/20), 연일 -29.9%"
+        "12301 결과 10월, 허가신청 지연"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+co:KR-217730 a vc:Company ;
+    rdfs:label "강스템바이오텍"@ko ;
+    vc:ticker "217730" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-217730 a vc:Membership ;
+    vc:company co:KR-217730 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "줄기세포 골관절염 오스카" ;
+    vc:points (
+        "2a 유효성 확인(7/28)"
+    ) ;
+    vc:source bio:src-08 .
+
+co:KR-376900 a vc:Company ;
+    rdfs:label "로킷헬스케어"@ko , "ROKIT Healthcare"@en ;
+    vc:ticker "376900" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-376900 a vc:Membership ;
+    vc:company co:KR-376900 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-1-6 ;
+    vc:belongsTo bio:B-1-6 ;
+    vc:role "AI·3D 바이오프린팅 조직 재생(배경지식)" ;
+    vc:points (
+        "ETF 비중 0.85%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+# ━━ B-2-1 영상진단 AI ━━
+
+co:KR-328130 a vc:Company ;
+    rdfs:label "루닛"@ko , "Lunit"@en ;
+    vc:ticker "328130" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-328130 a vc:Membership ;
+    vc:company co:KR-328130 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-1 ;
+    vc:belongsTo bio:B-2-1 ;
+    vc:role "영상 판독 AI INSIGHT·병리 SCOPE" ;
+    vc:points (
+        "흉부·유방·병리, 국내 대표·글로벌 확장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-380550 a vc:Company ;
+    rdfs:label "뉴로핏"@ko , "Neurophet"@en ;
+    vc:ticker "380550" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-380550 a vc:Membership ;
+    vc:company co:KR-380550 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-1 ;
+    vc:belongsTo bio:B-2-1 ;
+    vc:role "뇌 MRI·PET 영상 분석 AI(배경지식)" ;
+    vc:points (
+        "ETF 비중 1.12%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+co:IL-x-aidoc a vc:Company ;
+    rdfs:label "Aidoc"@ko ;
+    vc:country "IL" ;
+    vc:listed false .
+bio:m-IL-x-aidoc a vc:Membership ;
+    vc:company co:IL-x-aidoc ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-1 ;
+    vc:belongsTo bio:B-2-1 ;
+    vc:role "급성질환 트리아지(비상장)" ;
+    vc:points (
+        "응급 CT, FDA 다수 승인"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-viz-ai a vc:Company ;
+    rdfs:label "Viz.ai"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-viz-ai a vc:Membership ;
+    vc:company co:US-x-viz-ai ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-1 ;
+    vc:belongsTo bio:B-2-1 ;
+    vc:role "뇌졸중 워크플로(비상장)" ;
+    vc:points (
+        "치료시간 단축"
+    ) ;
+    vc:source bio:src-01 .
+
+co:IN-x-qure-ai a vc:Company ;
+    rdfs:label "Qure.ai"@ko ;
+    vc:country "IN" ;
+    vc:listed false .
+bio:m-IN-x-qure-ai a vc:Membership ;
+    vc:company co:IN-x-qure-ai ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-1 ;
+    vc:belongsTo bio:B-2-1 ;
+    vc:role "흉부·뇌 판독(비상장)" ;
+    vc:points (
+        "신흥국 확산"
+    ) ;
+    vc:source bio:src-01 .
+
+# ━━ B-2-2 혈액·분자진단 AI ━━
+
+co:US-GH a vc:Company ;
+    rdfs:label "Guardant Health"@ko ;
+    vc:ticker "GH" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-GH a vc:Membership ;
+    vc:company co:US-GH ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-2 ;
+    vc:belongsTo bio:B-2-2 ;
+    vc:role "Guardant360·Shield 액체생검" ;
+    vc:points (
+        "암 프로파일·조기검진 선두"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-GRAL a vc:Company ;
+    rdfs:label "GRAIL"@ko ;
+    vc:ticker "GRAL" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-GRAL a vc:Membership ;
+    vc:company co:US-GRAL ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-2 ;
+    vc:belongsTo bio:B-2-2 ;
+    vc:role "다중암 조기검진 Galleri" ;
+    vc:points (
+        "특이도 99.5%지만 1기 민감도 16.8%, PPV 43.1%"
+        "2026.01 FDA PMA 제출, 9/23 자문위"
+    ) ;
+    vc:source bio:src-01 , bio:src-06 , bio:src-08 .
+
+co:US-EXAS a vc:Company ;
+    rdfs:label "Exact Sciences"@ko ;
+    vc:ticker "EXAS" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-EXAS a vc:Membership ;
+    vc:company co:US-EXAS ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-2 ;
+    vc:belongsTo bio:B-2-2 ;
+    vc:role "Cologuard·Oncotype" ;
+    vc:points (
+        "분자진단 대형"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-NTRA a vc:Company ;
+    rdfs:label "Natera"@ko ;
+    vc:ticker "NTRA" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-NTRA a vc:Membership ;
+    vc:company co:US-NTRA ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-2 ;
+    vc:belongsTo bio:B-2-2 ;
+    vc:role "Signatera MRD" ;
+    vc:points (
+        "ctDNA MRD 선두"
+    ) ;
+    vc:source bio:src-01 , bio:src-06 .
+
+co:US-x-freenome a vc:Company ;
+    rdfs:label "Freenome"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-freenome a vc:Membership ;
+    vc:company co:US-x-freenome ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-2-2 ;
+    vc:belongsTo bio:B-2-2 ;
+    vc:role "멀티오믹스 조기진단(비상장)" ;
+    vc:points (
+        "데이터 연계"
+    ) ;
+    vc:source bio:src-01 .
+
+# ━━ B-3-1 수술용 로봇 ━━
+
+co:US-ISRG a vc:Company ;
+    rdfs:label "Intuitive Surgical"@ko ;
+    vc:ticker "ISRG" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-ISRG a vc:Membership ;
+    vc:company co:US-ISRG ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-1 ;
+    vc:belongsTo bio:B-3-1 ;
+    vc:role "da Vinci 5" ;
+    vc:points (
+        "수술로봇 1위"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-MDT a vc:Company ;
+    rdfs:label "Medtronic"@ko ;
+    vc:ticker "MDT" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-MDT a vc:Membership ;
+    vc:company co:US-MDT ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-1 ;
+    vc:belongsTo bio:B-3-1 ;
+    vc:role "Hugo RAS" ;
+    vc:points (
+        "후발 대형"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-SYK a vc:Company ;
+    rdfs:label "Stryker"@ko ;
+    vc:ticker "SYK" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-SYK a vc:Membership ;
+    vc:company co:US-SYK ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-1 ;
+    vc:belongsTo bio:B-3-1 ;
+    vc:role "Mako 정형 로봇" ;
+    vc:points (
+        "정형(관절) 로봇 선두"
+    ) ;
+    vc:source bio:src-01 .
+
+co:UK-x-cmr-surgical a vc:Company ;
+    rdfs:label "CMR Surgical"@ko ;
+    vc:country "UK" ;
+    vc:listed false .
+bio:m-UK-x-cmr-surgical a vc:Membership ;
+    vc:company co:UK-x-cmr-surgical ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-1 ;
+    vc:belongsTo bio:B-3-1 ;
+    vc:role "Versius / 큐비스" ;
+    vc:points (
+        "신흥·국내. CMR 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-060280 a vc:Company ;
+    rdfs:label "큐렉소"@ko ;
+    vc:ticker "060280" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-060280 a vc:Membership ;
+    vc:company co:KR-060280 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-1 ;
+    vc:belongsTo bio:B-3-1 ;
+    vc:role "Versius / 큐비스" ;
+    vc:points (
+        "신흥·국내. CMR 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+# ━━ B-3-2 미용기기·에스테틱 ━━
+
+co:IL-INMD a vc:Company ;
+    rdfs:label "InMode"@ko ;
+    vc:ticker "INMD" ; vc:exchange "NASDAQ" ;
+    vc:country "IL" ;
+    vc:listed true .
+bio:m-IL-INMD a vc:Membership ;
+    vc:company co:IL-INMD ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "RF 미용기기" ;
+    vc:points (
+        "바디·페이스 미용기기 대형"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-CUTR a vc:Company ;
+    rdfs:label "Cutera"@ko ;
+    vc:ticker "CUTR" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-CUTR a vc:Membership ;
+    vc:company co:US-CUTR ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "레이저·IPL 에너지기기" ;
+    vc:points (
+        "피부·제모·안과. Candela·Lumenis 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-x-candela a vc:Company ;
+    rdfs:label "Candela"@ko ;
+    vc:country "US" ;
+    vc:listed false .
+bio:m-US-x-candela a vc:Membership ;
+    vc:company co:US-x-candela ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "레이저·IPL 에너지기기" ;
+    vc:points (
+        "피부·제모·안과. Candela·Lumenis 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:IL-x-lumenis a vc:Company ;
+    rdfs:label "Lumenis"@ko ;
+    vc:country "IL" ;
+    vc:listed false .
+bio:m-IL-x-lumenis a vc:Membership ;
+    vc:company co:IL-x-lumenis ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "레이저·IPL 에너지기기" ;
+    vc:points (
+        "피부·제모·안과. Candela·Lumenis 비상장"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-214150 a vc:Company ;
+    rdfs:label "클래시스"@ko , "Classys"@en ;
+    vc:ticker "214150" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-214150 a vc:Membership ;
+    vc:company co:KR-214150 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "슈링크(HIFU) 리프팅" ;
+    vc:points (
+        "국내 대표"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-336570 a vc:Company ;
+    rdfs:label "원텍"@ko ;
+    vc:ticker "336570" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-336570 a vc:Membership ;
+    vc:company co:KR-336570 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "RF 리프팅 올리지오·포텐자" ;
+    vc:points (
+        "국내 성장주"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-287410 a vc:Company ;
+    rdfs:label "제이시스"@ko ;
+    vc:ticker "287410" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-287410 a vc:Membership ;
+    vc:company co:KR-287410 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "RF 리프팅 올리지오·포텐자" ;
+    vc:points (
+        "국내 성장주"
+    ) ;
+    vc:source bio:src-01 .
+
+co:KR-214450 a vc:Company ;
+    rdfs:label "파마리서치"@ko , "PharmaResearch"@en ;
+    vc:ticker "214450" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-214450 a vc:Membership ;
+    vc:company co:KR-214450 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 ;
+    vc:role "리쥬란 스킨부스터" ;
+    vc:points (
+        "2Q 매출 1,787억(+27%)·영업익 665억 역대 최대"
+        "ETF 비중 2.11%"
+    ) ;
+    vc:source bio:src-08 , bio:src-09 .
+
+co:KR-145020 a vc:Company ;
+    rdfs:label "휴젤"@ko , "Hugel"@en ;
+    vc:ticker "145020" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-145020 a vc:Membership ;
+    vc:company co:KR-145020 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 , bio:B-1-4 ;
+    vc:role "보툴리눔 톡신 보툴렉스" ;
+    vc:points (
+        "2Q 매출 1,379억(+25%), 톡신 수출 +51%, 미국 직판 시작"
+        "ETF 비중 2.11%"
+    ) ;
+    vc:source bio:src-08 , bio:src-09 .
+
+co:KR-069620 a vc:Company ;
+    rdfs:label "대웅제약"@ko , "Daewoong"@en ;
+    vc:ticker "069620" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-069620 a vc:Membership ;
+    vc:company co:KR-069620 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-2 ;
+    vc:belongsTo bio:B-3-2 , bio:B-1-1 ;
+    vc:role "전통제약 + 톡신 나보타" ;
+    vc:points (
+        "2Q 매출 4,002억·영업익 771억, 톡신 1,034억(+48%)"
+        "미국 관세 15% 전 에볼루스향 선제 출하"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 .
+
+# ━━ B-3-3 기타 기기·치료재료 ━━
+
+co:KR-042520 a vc:Company ;
+    rdfs:label "한스바이오메드"@ko , "Hans Biomed"@en ;
+    vc:ticker "042520" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-042520 a vc:Membership ;
+    vc:company co:KR-042520 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-3 ;
+    vc:belongsTo bio:B-3-3 , bio:B-3-2 ;
+    vc:role "인체조직 이식재·보형물(배경지식)" ;
+    vc:points (
+        "ETF 비중 0.59%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+co:KR-389650 a vc:Company ;
+    rdfs:label "넥스트바이오메디컬"@ko , "Next Biomedical"@en ;
+    vc:ticker "389650" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-389650 a vc:Membership ;
+    vc:company co:KR-389650 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-3 ;
+    vc:belongsTo bio:B-3-3 ;
+    vc:role "내시경 지혈재·색전 미립구(배경지식)" ;
+    vc:points (
+        "ETF 비중 2.32%"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+co:KR-458870 a vc:Company ;
+    rdfs:label "씨어스테크놀로지"@ko , "Seers Technology"@en ;
+    vc:ticker "458870" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-458870 a vc:Membership ;
+    vc:company co:KR-458870 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-3 ;
+    vc:belongsTo bio:B-3-3 ;
+    vc:role "웨어러블 입원환자 원격 모니터링" ;
+    vc:points (
+        "누적 병상 2만(국내 잠재 60만 병상)"
+        "ETF 비중 1.48%"
+    ) ;
+    vc:source bio:src-08 , bio:src-09 .
+
+co:KR-0120G0 a vc:Company ;
+    rdfs:label "삼양바이오팜"@ko , "Samyang Biopharm"@en ;
+    vc:ticker "0120G0" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-0120G0 a vc:Membership ;
+    vc:company co:KR-0120G0 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:B-3-3 ;
+    vc:belongsTo bio:B-3-3 , bio:B-1-3 ;
+    vc:role "봉합사 원사·항암제·유전자 전달체(배경지식)" ;
+    vc:points (
+        "4/1 ETF 2.64% → 4/17 편출"
+    ) ;
+    vc:source bio:src-09 , bio:src-10 .
+
+# ━━ C-1 CRO ━━
+
+co:IE-ICLR a vc:Company ;
+    rdfs:label "ICON plc"@ko ;
+    vc:ticker "ICLR" ; vc:exchange "NASDAQ" ;
+    vc:country "IE" ;
+    vc:listed true .
+bio:m-IE-ICLR a vc:Membership ;
+    vc:company co:IE-ICLR ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-1 ;
+    vc:belongsTo bio:C-1 ;
+    vc:role "풀서비스 임상 CRO" ;
+    vc:points (
+        "글로벌 사이트망"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-LH a vc:Company ;
+    rdfs:label "Labcorp"@ko ;
+    vc:ticker "LH" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-LH a vc:Membership ;
+    vc:company co:US-LH ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-1 ;
+    vc:belongsTo bio:C-1 ;
+    vc:role "임상 + 진단검사" ;
+    vc:points (
+        "Fortrea 스핀오프"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-FTRE a vc:Company ;
+    rdfs:label "Fortrea"@ko ;
+    vc:ticker "FTRE" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-FTRE a vc:Membership ;
+    vc:company co:US-FTRE ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-1 ;
+    vc:belongsTo bio:C-1 ;
+    vc:role "임상 + 진단검사" ;
+    vc:points (
+        "Fortrea 스핀오프"
+    ) ;
+    vc:source bio:src-01 .
+
+co:US-TMO a vc:Company ;
+    rdfs:label "Thermo Fisher (PPD)"@ko ;
+    vc:ticker "TMO" ; vc:exchange "US" ;
+    vc:country "US" ;
+    vc:listed true .
+bio:m-US-TMO a vc:Membership ;
+    vc:company co:US-TMO ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-1 ;
+    vc:belongsTo bio:C-1 , bio:C-2 , bio:A-3 ;
+    vc:role "임상·실험실·CDMO 통합" ;
+    vc:points (
+        "PPD 편입, 바이오·무균 CDMO 네트워크"
+    ) ;
+    vc:source bio:src-01 .
+
+co:CN-2359 a vc:Company ;
+    rdfs:label "WuXi AppTec"@ko ;
+    vc:ticker "2359" ; vc:exchange "HKEX" ;
+    vc:country "CN" ;
+    vc:listed true .
+bio:m-CN-2359 a vc:Membership ;
+    vc:company co:CN-2359 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-1 ;
+    vc:belongsTo bio:C-1 , bio:C-2 ;
+    vc:role "발굴~임상~생산 통합" ;
+    vc:points (
+        "미 국방부 1260H 리스트, 생물보안법 차단 위험 → 경쟁사 수혜"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+# ━━ C-2 CDMO ━━
+
+co:CH-LONN a vc:Company ;
+    rdfs:label "Lonza"@ko ;
+    vc:ticker "LONN" ; vc:exchange "SIX" ;
+    vc:country "CH" ;
+    vc:listed true .
+bio:m-CH-LONN a vc:Membership ;
+    vc:company co:CH-LONN ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "바이오·저분자 통합 최대 CDMO" ;
+    vc:points (
+        "증설로 경쟁 심화"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:KR-207940 a vc:Company ;
+    rdfs:label "삼성바이오로직스"@ko , "Samsung Biologics"@en ;
+    vc:ticker "207940" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-207940 a vc:Membership ;
+    vc:company co:KR-207940 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "항체 대량생산, 세계 최대 캐파" ;
+    vc:points (
+        "폴리펩타이드 2조 7,062억 인수(펩타이드 CDMO, 7/20)"
+        "2Q 매출 1조 3,209억·영업익 5,864억, 3조 유상증자"
+        "노조 파업 생산 차질 약 1,500억, 9개월 신규 수주 공백(미래에셋)"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:CN-2269 a vc:Company ;
+    rdfs:label "WuXi Biologics"@ko ;
+    vc:ticker "2269" ; vc:exchange "HKEX" ;
+    vc:country "CN" ;
+    vc:listed true .
+bio:m-CN-2269 a vc:Membership ;
+    vc:company co:CN-2269 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "바이오 통합 CDMO" ;
+    vc:points (
+        "1260H 리스트 포함 여부가 관건"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:JP-4901 a vc:Company ;
+    rdfs:label "Fujifilm Diosynth"@ko ;
+    vc:ticker "4901" ; vc:exchange "TSE" ;
+    vc:country "JP" ;
+    vc:listed true .
+bio:m-JP-4901 a vc:Membership ;
+    vc:company co:JP-4901 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "바이오·무균 CDMO" ;
+    vc:points (
+        "증설로 경쟁 강도 상승"
+    ) ;
+    vc:source bio:src-01 , bio:src-03 .
+
+co:KR-237690 a vc:Company ;
+    rdfs:label "에스티팜"@ko , "ST Pharm"@en ;
+    vc:ticker "237690" ; vc:exchange "KRX" ;
+    vc:country "KR" ;
+    vc:listed true .
+bio:m-KR-237690 a vc:Membership ;
+    vc:company co:KR-237690 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 , bio:B-1-3 ;
+    vc:role "올리고 CDMO + HIV 신약" ;
+    vc:points (
+        "고마진 올리고 비중 상승, 수주잔고 5,308억(+58.7%)"
+        "STP0404 HIV 2a상 성공"
+        "ETF 비중 5.76%"
+    ) ;
+    vc:source bio:src-03 , bio:src-08 , bio:src-09 .
+
+co:KR-x-롯데바이오로직스 a vc:Company ;
+    rdfs:label "롯데바이오로직스"@ko ;
+    vc:country "KR" ;
+    vc:listed false .
+bio:m-KR-x-롯데바이오로직스 a vc:Membership ;
+    vc:company co:KR-x-롯데바이오로직스 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "항체 CDMO(비상장)" ;
+    vc:points (
+        "빅파마 상업생산 연내 계약 목표, 2,553억 유상증자"
+    ) ;
+    vc:source bio:src-08 .
+
+co:KR-x-sk팜테코 a vc:Company ;
+    rdfs:label "SK팜테코"@ko ;
+    vc:country "KR" ;
+    vc:listed false .
+bio:m-KR-x-sk팜테코 a vc:Membership ;
+    vc:company co:KR-x-sk팜테코 ; vc:sector bio:Bio ;
+    vc:primaryCategory bio:C-2 ;
+    vc:belongsTo bio:C-2 ;
+    vc:role "펩타이드 원료 CDMO(비상장)" ;
+    vc:points (
+        "세종 펩타이드 공장 $2.6억 준공"
+    ) ;
+    vc:source bio:src-08 .

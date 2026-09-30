@@ -39,11 +39,14 @@ class Settings(BaseSettings):
     # ⚠️읽기 전용이다 — 이름·크기·수정시각만 본다. 내용은 열지 않는다.
     RESEARCH_DIR: str = ""
 
+    # SEC 연락처 UA(계획 A3a) — 거장 검색(A7)이 EDGAR 회사 검색을 부를 때 쓴다. worker 와 같은 값.
+    SEC_USER_AGENT: str = ""
+
     # Internal API auth shared with the worker/n8n; guards the /internal router.
     INTERNAL_API_KEY: str = "change_me_internal"
 
     # Upstream AI usage monitor (Claude/Codex account meters) that /api/v1/ai-token-usage proxies.
-    AI_USAGE_MONITOR_BASE_URL: str = "http://192.168.199.120:8002"
+    AI_USAGE_MONITOR_BASE_URL: str = ""
 
     # Upstream ETF iNAV collector (profile service) that /api/v1/inav/snapshot proxies.
     COLLECTOR_URL: str = "http://collector:8100"
@@ -53,6 +56,9 @@ class Settings(BaseSettings):
     SD_PUSH_INTERVAL_HINT: int = 60
     SD_STALE_FACTOR: int = 3
     SD_KEYWORD_RENDER_MAX: int = 500
+
+    # AI Key Data — OpenRouter rankings-daily(토큰·tool_calling). 비어 있으면 호출하지 않고 "키 미설정".
+    OPENROUTER_API_KEY: str = ""
 
 
 settings = Settings()

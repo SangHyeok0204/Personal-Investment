@@ -1,0 +1,116 @@
+@prefix vc:   <http://ge.local/valuechain#> .
+@prefix co:   <http://ge.local/company#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+#############################################################################
+# 산업 밸류체인 — 스키마 (섹터 불문, 이 파일 1개)
+#
+# 이 디렉터리의 다른 *.ttl 하나 = 섹터 하나(bio.ttl 이 첫 섹터). 로더는
+# apps/api/app/core/valuechain.py, 새 섹터 추가 절차는 README.md.
+#
+# ★★관계는 **한 방향만 저장**한다.
+#   · 저장:  하위 분류 vc:subCategoryOf 상위 분류(또는 섹터)
+#            멤버십   vc:belongsTo      분류(복수)
+#            단계     vc:feedsInto      다음 단계
+#   · 유도:  vc:hasSubCategory / vc:composedOf / vc:contains 는 아래에 **정의만** 있다.
+#            인스턴스 파일에 이 술어로 트리플을 쓰지 않는다 — 로더가 역방향을 만든다.
+#   두 방향을 다 쓰면 한쪽만 고쳤을 때 둘이 어긋나고, 어느 쪽이 맞는지 알 길이 없다.
+#
+# ★기업(co:)과 멤버십(섹터별 노드)을 나눈다.
+#   · co: 기업 노드 — 섹터와 무관한 신원만(이름·티커·거래소·국가·상장여부).
+#     IRI = co:{국가}-{티커}, 비상장은 co:{국가}-x-{slug}. 여러 섹터 파일이 같은 기업을
+#     가리켜도 트리플이 같으니 충돌하지 않는다.
+#   · 멤버십 노드 — 섹터 특이 정보(소속 분류·역할·포인트·출처).
+#############################################################################
+
+# ── 클래스 ──────────────────────────────────────────────────────────────────
+vc:Sector     a owl:Class ; rdfs:label "섹터"@ko , "Sector"@en ;
+    rdfs:comment "밸류체인 지도 하나의 뿌리. 섹터 파일마다 정확히 1개."@ko .
+vc:Category   a owl:Class ; rdfs:label "분류"@ko , "Category"@en ;
+    rdfs:comment "밸류체인 단계·중분류. 깊이 제한 없음 — 레벨은 섹터까지의 거리로 계산한다."@ko .
+vc:Company    a owl:Class ; rdfs:label "기업"@ko , "Company"@en ;
+    rdfs:comment "섹터 불문 기업 신원. 섹터 특이 정보는 vc:Membership 에 둔다."@ko .
+vc:Membership a owl:Class ; rdfs:label "멤버십"@ko , "Membership"@en ;
+    rdfs:comment "기업 × 섹터 한 쌍. 소속 분류·역할·포인트·출처를 들고 있다."@ko .
+vc:Source     a owl:Class ; rdfs:label "자료"@ko , "Source"@en ;
+    rdfs:comment "근거 자료. vc:code 가 화면에 보이는 태그다."@ko .
+vc:Thesis     a owl:Class ; rdfs:label "핵심 논지"@ko , "Thesis"@en ;
+    rdfs:comment "자료들이 공통으로 가리키는 흐름 한 줄. rdfs:label = 출처 표기, rdfs:comment = 본문."@ko .
+
+# ── 섹터 카탈로그(catalog.ttl) ───────────────────────────────────────────────
+# 첫 화면(섹터 허브)에 무엇을 어떤 묶음으로 보일지. 섹터 파일과 vc:code 로 잇는다 —
+# 파일이 있으면 카드가 열리고, 없으면 "미작성" 카드로 자리만 보인다.
+vc:SectorGroup a owl:Class ; rdfs:label "섹터 묶음"@ko , "Sector group"@en ;
+    rdfs:comment "허브의 묶음 제목(예: IT, 헬스케어). vc:order 로 정렬."@ko .
+vc:SectorEntry a owl:Class ; rdfs:label "섹터 항목"@ko , "Sector entry"@en ;
+    rdfs:comment "허브의 카드 한 장. vc:code 가 섹터 파일의 vc:code 와 같으면 그 섹터로 들어간다."@ko .
+vc:inGroup a owl:ObjectProperty ; rdfs:domain vc:SectorEntry ; rdfs:range vc:SectorGroup ;
+    rdfs:label "묶음"@ko .
+
+# ── 저장하는 관계 ────────────────────────────────────────────────────────────
+vc:subCategoryOf a owl:ObjectProperty ; rdfs:domain vc:Category ;
+    rdfs:label "상위 분류"@ko ;
+    rdfs:comment "하위 → 상위. 최상위 분류는 섹터 노드를 가리킨다. 분류마다 정확히 1개."@ko .
+vc:feedsInto a owl:ObjectProperty ; rdfs:domain vc:Category ; rdfs:range vc:Category ;
+    rdfs:label "다음 단계"@ko ;
+    rdfs:comment "밸류체인 흐름 A → B. 최상위끼리면 단계 스트립 화살표, 하위끼리면 섹션 안에 표시."@ko .
+vc:belongsTo a owl:ObjectProperty ; rdfs:domain vc:Membership ; rdfs:range vc:Category ;
+    rdfs:label "소속 분류"@ko ;
+    rdfs:comment "멤버십 → 분류. 복수 가능. 최소 1개."@ko .
+vc:primaryCategory a owl:ObjectProperty ; rdfs:domain vc:Membership ; rdfs:range vc:Category ;
+    rdfs:label "주 소속"@ko ;
+    rdfs:comment "카드가 놓이는 분류. 반드시 vc:belongsTo 중 하나. 나머지는 '＋' 태그로 보인다."@ko .
+vc:company a owl:ObjectProperty ; rdfs:domain vc:Membership ; rdfs:range vc:Company ;
+    rdfs:label "기업"@ko .
+vc:sector a owl:ObjectProperty ; rdfs:range vc:Sector ;
+    rdfs:label "섹터"@ko .
+vc:source a owl:ObjectProperty ; rdfs:range vc:Source ;
+    rdfs:label "출처"@ko .
+
+# ── 유도 관계(정의만 — 인스턴스로 저장 금지) ─────────────────────────────────
+vc:contains a owl:ObjectProperty ; owl:inverseOf vc:belongsTo ;
+    rdfs:label "포함"@ko ;
+    rdfs:comment "분류 → 멤버십. vc:belongsTo 의 역. 로더가 유도한다 — 파일에 쓰지 않는다."@ko .
+vc:hasSubCategory a owl:ObjectProperty ; owl:inverseOf vc:subCategoryOf ;
+    rdfs:label "하위 분류"@ko ;
+    rdfs:comment "상위 → 하위. vc:subCategoryOf 의 역. 로더가 유도한다 — 파일에 쓰지 않는다."@ko .
+vc:composedOf a owl:ObjectProperty ; owl:equivalentProperty vc:hasSubCategory ;
+    rdfs:label "구성"@ko ;
+    rdfs:comment "섹터/분류가 어떤 하위 단계로 구성되는가(composed of). vc:hasSubCategory 의 문서용 별칭."@ko .
+
+# ── 값 속성 ──────────────────────────────────────────────────────────────────
+vc:code a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:label "코드"@ko ;
+    rdfs:comment "섹터: URL 에 쓰는 코드(bio). 분류: A, B-1-2 처럼 섹터 안에서 유일. 자료: 화면 태그."@ko .
+vc:shortLabel a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:label "짧은 이름"@ko ; rdfs:comment "필터 칩에 쓰는 짧은 이름."@ko .
+vc:marketSize a owl:DatatypeProperty ; rdfs:domain vc:Category ; rdfs:range xsd:string ;
+    rdfs:label "시장 규모"@ko ; rdfs:comment "사람이 읽는 문장 그대로(예: 2024 $20억 → 2030 $90억)."@ko .
+vc:color a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:label "색"@ko ; rdfs:comment "#rrggbb(라이트 모드 기준). 분류: 없으면 상위 분류 색을 물려받는다. 섹터(선택): 허브 덱·카드 기준색 — 분류 섹터는 L1 기준색."@ko .
+vc:order a owl:DatatypeProperty ; rdfs:range xsd:integer ;
+    rdfs:label "순서"@ko ; rdfs:comment "형제 사이의 표시 순서(1부터)."@ko .
+vc:role a owl:DatatypeProperty ; rdfs:domain vc:Membership ; rdfs:range xsd:string ;
+    rdfs:label "역할"@ko ; rdfs:comment "이 섹터에서 기업이 맡는 역할 한 줄."@ko .
+vc:points a owl:ObjectProperty ; rdfs:domain vc:Membership ; rdfs:range rdf:List ;
+    rdfs:label "포인트"@ko ; rdfs:comment "순서 있는 문자열 목록 ( \"…\" \"…\" )."@ko .
+vc:ticker a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:string ;
+    rdfs:label "티커"@ko ; rdfs:comment "거래소 접미사 없는 심볼(KR 6자리, HK 는 숫자만). 비상장은 없음."@ko .
+vc:exchange a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:string ;
+    rdfs:label "거래소"@ko ; rdfs:comment "KRX·HKEX·SSE·TSE·SIX·XETRA·LSE·CPH·ASX·EURONEXT·NASDAQ, 미국은 US(거래소 구분 안 함 — assets.market 과 같다)."@ko .
+vc:country a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:string ;
+    rdfs:label "국가"@ko ; rdfs:comment "ISO 2자리(UK 는 관행대로 UK). IRI 의 국가와 같다."@ko .
+vc:otherCountry a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:string ;
+    rdfs:label "기타 국가"@ko ; rdfs:comment "본사 외 연관 국가(예: 미국 상장 중국 기업의 CN)."@ko .
+vc:listed a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:boolean ;
+    rdfs:label "상장 여부"@ko ; rdfs:comment "false 면 티커가 없고 IRI 가 co:{국가}-x-{slug}."@ko .
+vc:isin a owl:DatatypeProperty ; rdfs:domain vc:Company ; rdfs:range xsd:string ;
+    rdfs:label "ISIN"@ko ; rdfs:comment "선택. 티커가 바뀌어도 안정적인 증권 키(분류 생성물이 기록한다)."@ko .
+vc:kind a owl:DatatypeProperty ; rdfs:domain vc:Sector ; rdfs:range xsd:string ;
+    rdfs:label "섹터 종류"@ko ;
+    rdfs:comment "선택. \"theme\"(손으로 쓴 테마 밸류체인, 기본값) | \"taxonomy\"(generated/ 의 자동 생성 분류 지도)."@ko .
+vc:url a owl:DatatypeProperty ; rdfs:domain vc:Membership ; rdfs:range xsd:anyURI ;
+    rdfs:label "근거 링크"@ko ; rdfs:comment "선택. 멤버십 판정 근거 문서(IR·SEC) URL."@ko .

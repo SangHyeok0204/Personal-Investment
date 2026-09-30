@@ -75,3 +75,46 @@ def display_names(db: Session, tickers: Iterable[str]) -> dict[str, str]:
         }
     )
     return names
+
+
+# ── 우리 표에 없는 티커: 네이버 증권 자동완성에서 이름을 받는다 ─────────────────
+# ★관심종목에 티커만 넣으면 이름이 비어 "ISRG [ISRG]" 처럼 보였다. 자산·실현손익
+#   표에는 **사고판 종목만** 있으니, 처음 보는 티커는 밖에서 받아야 한다.
+# ⚠️토스 `/api/v1/stocks` 도 이름을 주지만 IP 허용목록에 막히면 통째로 실패한다
+#   (2026-09-27 실측). 네이버는 키가 필요 없고, 이미 쓰는 이름("블룸 에너지",
+#   "알파벳 Class A")과 같은 한글 표기를 준다.
+_NAVER_AC = "https://ac.stock.naver.com/ac"
+_NAVER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+
+def parse_naver_ac(body: dict, ticker: str) -> str | None:
+    """자동완성 응답에서 **코드가 정확히 같은** 항목의 이름만 고른다.
+
+    ⚠️첫 항목을 그냥 쓰면 안 된다 — "BE" 를 치면 BRK B 도 함께 온다.
+    """
+    want = ticker.strip().upper()
+    for item in (body or {}).get("items") or []:
+        if str(item.get("code") or "").strip().upper() == want:
+            name = str(item.get("name") or "").strip()
+            return name or None
+    return None
+
+
+def lookup_name(ticker: str, timeout: float = 5.0) -> str | None:
+    """네이버에서 이름을 받는다. 실패하면 None — 화면이 티커로 떨어진다."""
+    import httpx
+
+    try:
+        response = httpx.get(
+            _NAVER_AC,
+            params={"q": ticker, "target": "stock,etf"},
+            timeout=timeout,
+            headers={"User-Agent": _NAVER_UA, "Accept": "application/json"},
+        )
+        response.raise_for_status()
+        return parse_naver_ac(response.json(), ticker)
+    except (httpx.HTTPError, ValueError):
+        return None

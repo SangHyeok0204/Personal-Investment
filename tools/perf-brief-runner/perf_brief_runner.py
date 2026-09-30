@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-BRIEF_DIR = Path(os.environ.get("PERF_BRIEF_DIR", r"S:\GE\Wonjae\07_회의자료\정기미팅"))
+BRIEF_DIR = Path(os.environ.get("PERF_BRIEF_DIR", ""))
 SCHEMA_MD = BRIEF_DIR / "perf-brief-skill" / "references" / "json_schema.md"
 EXAMPLE_DAILY = BRIEF_DIR / "daily_20260723.json"
 EXAMPLE_WEEKLY = BRIEF_DIR / "weekly_20260717_20260724.json"

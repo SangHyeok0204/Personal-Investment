@@ -7,16 +7,18 @@ import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
 import { Modal } from "@/components/ui/modal";
 import { SeriesChart } from "@/components/charts/series-chart";
+import { SignedBarChart } from "@/components/charts/signed-bar-chart";
 import {
   Cell,
   DataTable,
+  HeaderChip,
+  ListButton,
   NotConnectedBanner,
-  PlannedList,
   StatTile,
   StubCard,
   toneOf,
 } from "@/components/stub";
-import { getPerformance } from "@/lib/api";
+import { getPerformance, type DailyPerformancePoint } from "@/lib/api";
 import { formatKrwSigned, formatKrwString } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +45,10 @@ import { cn } from "@/lib/utils";
 //   적어 두었는데, **연쇄(chain-link)는 그 문제를 피해 간다** — 입금이 있는
 //   날도 그날 수익률만 곱하면 되기 때문이다. 다만 이 TWR 은 **주가 기준**이라
 //   '성과 분석' 화면의 원화 기준 수익률과 값이 다르다. 기준을 화면에 적는다.
+//
+// ★2026-09-25 사용자 지시(전체 메뉴 공통 패턴): 오른쪽 월별 **표**를 월별 주가손익
+//   **막대**로 바꿨다. 막대를 누르면 그 달의 일별 내역, 헤더 '전체 목록'은 옛 월별
+//   표다. 왼쪽 예탁자산·누적손익은 일별 추이라 선 그래프 그대로 둔다.
 
 const RANGES = [
   { id: 90, label: "3개월" },
@@ -54,9 +60,11 @@ const RANGES = [
 export default function ReturnsPage() {
   const { accountId, connected } = useAccount();
   const [days, setDays] = useState(365);
-  const [notesOpen, setNotesOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(false);
   const [metric, setMetric] = useState<"assets" | "cumulative">("assets");
+  // 막대 → 그 달 일별 내역. 헤더 '전체 목록' → 월별 표.
+  const [pickedMonth, setPickedMonth] = useState<string | null>(null);
+  const [monthListOpen, setMonthListOpen] = useState(false);
 
   const perf = useQuery({
     queryKey: ["performance", accountId, days],
@@ -96,7 +104,20 @@ export default function ReturnsPage() {
   // 월별 집계 — 월말 예탁자산과 그 달의 **주가** 손익 합.
   // ⚠️첫날 손익은 뺀다. 상단 '주가 손익' 타일도 빼고 세므로, 넣으면 표의 합과
   //   타일이 어긋난다(실측 차이 ₩11,369 = 2026-06-04 의 손익).
-  const monthly = aggregateMonthly(items);
+  const monthly = useMemo(() => aggregateMonthly(items), [items]);
+  // 막대는 왼쪽이 과거다(표는 최근 달이 위).
+  const monthColumns = useMemo(
+    () =>
+      [...monthly]
+        .reverse()
+        .map((m) => ({ key: m.month, label: m.month, value: m.pnl })),
+    [monthly],
+  );
+  const monthPicked = monthly.find((m) => m.month === pickedMonth) ?? null;
+  const monthDays = useMemo(
+    () => items.filter((p) => p.base_date.startsWith(pickedMonth ?? "—")),
+    [items, pickedMonth],
+  );
 
   return (
     <>
@@ -125,14 +146,19 @@ export default function ReturnsPage() {
                 ? "환율 제외 · 증권사 일별 손익 합"
                 : `환율 제외 · 연쇄 수익률 ${twrPct} (${bridge?.twr_days}일)`
             }
+            actionHint="눌러서 월별 표 보기"
+            onClick={() => {
+              setPickedMonth(null);
+              setMonthListOpen(true);
+            }}
             accent="auto"
             loading={perf.isLoading}
           />
           <StatTile
             label="환율 등"
             value={formatKrwSigned(bridge?.fx_effect_krw)}
-            hint="잔차 · 눌러서 설명"
-            actionHint="눌러서 읽는 법 보기"
+            hint="잔차"
+            actionHint="눌러서 상세 보기"
             onClick={() => setBridgeOpen(true)}
             accent="auto"
             loading={perf.isLoading}
@@ -145,6 +171,8 @@ export default function ReturnsPage() {
                 ? "끝자산 − 시작자산 − 순입금"
                 : `${gainRate > 0 ? "+" : ""}${gainRate.toFixed(2)}% · 원금 대비`
             }
+            actionHint="눌러서 이어지는 법 보기"
+            onClick={() => setBridgeOpen(true)}
             accent="auto"
             loading={perf.isLoading}
           />
@@ -152,17 +180,17 @@ export default function ReturnsPage() {
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {RANGES.map((r) => (
-            <Chip key={r.id} active={days === r.id} onClick={() => setDays(r.id)}>
+            <HeaderChip key={r.id} active={days === r.id} onClick={() => setDays(r.id)}>
               {r.label}
-            </Chip>
+            </HeaderChip>
           ))}
           <span className="mx-1 h-4 w-px bg-hairline" />
-          <Chip active={metric === "assets"} onClick={() => setMetric("assets")}>
+          <HeaderChip active={metric === "assets"} onClick={() => setMetric("assets")}>
             예탁자산
-          </Chip>
-          <Chip active={metric === "cumulative"} onClick={() => setMetric("cumulative")}>
+          </HeaderChip>
+          <HeaderChip active={metric === "cumulative"} onClick={() => setMetric("cumulative")}>
             누적손익
-          </Chip>
+          </HeaderChip>
           {data?.first_date && (
             <span className="ml-auto text-[11px] font-semibold text-ink-faint">
               {data.first_date} ~ {data.last_date} ({items.length}일)
@@ -190,15 +218,6 @@ export default function ReturnsPage() {
             }
             className="min-h-0"
             scrollBody
-            action={
-              <button
-                type="button"
-                onClick={() => setNotesOpen(true)}
-                className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
-              >
-                이 화면의 범위
-              </button>
-            }
           >
             {items.length > 0 ? (
               <SeriesChart
@@ -228,35 +247,86 @@ export default function ReturnsPage() {
               환산액이고 이 칸은 환율이 빠진 주가 손익이라, 이름을 같게 두면
               "왜 자산은 줄었는데 손익은 플러스냐"가 된다. */}
           <StubCard
-            title="월별"
-            subtitle="월말 자산(원화) · 주가손익"
+            title="월별 주가손익"
+            subtitle="환율 제외 · 막대를 누르면 그 달 일별 내역"
             className="min-h-0"
             scrollBody
+            action={
+              <ListButton
+                onClick={() => {
+                  setPickedMonth(null);
+                  setMonthListOpen(true);
+                }}
+              />
+            }
           >
-            <DataTable
-              columns={["월", "월말 예탁자산", "월 주가손익"]}
-              align={["left", "right", "right"]}
-              empty={perf.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
-            >
-              {monthly.map((m) => (
-                <tr
-                  key={m.month}
-                  className="border-t border-hairline transition-colors hover:bg-canvas-soft/60"
-                >
-                  <Cell left strong>
-                    {m.month}
-                  </Cell>
-                  <Cell>{formatKrwString(String(Math.round(m.assets)))}</Cell>
-                  <Cell tone={toneOf(String(m.pnl))}>
-                    {formatKrwSigned(String(Math.round(m.pnl)))}
-                  </Cell>
-                </tr>
-              ))}
-            </DataTable>
+            {perf.isLoading ? (
+              <div className="flex h-full items-center justify-center text-[12px] font-semibold text-ink-faint">
+                불러오는 중…
+              </div>
+            ) : (
+              <SignedBarChart
+                columns={monthColumns}
+                height={300}
+                formatValue={(v) => formatKrwSigned(String(Math.round(v)))}
+                selected={pickedMonth}
+                onPick={setPickedMonth}
+              />
+            )}
           </StubCard>
-
         </div>
       </PageContainer>
+
+      {/* ── 막대 → 그 달 일별 내역 ───────────────────────────────────────── */}
+      <Modal
+        open={monthPicked != null}
+        onClose={() => setPickedMonth(null)}
+        title={monthPicked ? `${monthPicked.month} 일별` : ""}
+        subtitle={
+          monthPicked
+            ? `월 주가손익 ${formatKrwSigned(String(Math.round(monthPicked.pnl)))} · 월말 예탁자산 ${formatKrwString(String(Math.round(monthPicked.assets)))}`
+            : undefined
+        }
+        width={720}
+      >
+        {monthPicked && <MonthDays days={monthDays} firstDate={items[0]?.base_date ?? null} />}
+      </Modal>
+
+      {/* ── 헤더 '전체 목록' → 옛 월별 표 ───────────────────────────────── */}
+      <Modal
+        open={monthListOpen}
+        onClose={() => setMonthListOpen(false)}
+        title="월별"
+        subtitle="월말 자산(원화) · 주가손익(환율 제외) · 행을 누르면 그 달 일별"
+        width={620}
+      >
+        <div className="max-h-[60vh] overflow-y-auto">
+          <DataTable
+            columns={["월", "월말 예탁자산", "월 주가손익"]}
+            align={["left", "right", "right"]}
+            empty={perf.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
+          >
+            {monthly.map((m) => (
+              <tr
+                key={m.month}
+                onClick={() => {
+                  setMonthListOpen(false);
+                  setPickedMonth(m.month);
+                }}
+                className="cursor-pointer border-b border-hairline transition-colors hover:bg-canvas-soft"
+              >
+                <Cell left strong>
+                  {m.month}
+                </Cell>
+                <Cell>{formatKrwString(String(Math.round(m.assets)))}</Cell>
+                <Cell tone={toneOf(String(m.pnl))}>
+                  {formatKrwSigned(String(Math.round(m.pnl)))}
+                </Cell>
+              </tr>
+            ))}
+          </DataTable>
+        </div>
+      </Modal>
 
       <Modal
         open={bridgeOpen}
@@ -271,70 +341,58 @@ export default function ReturnsPage() {
             <BridgeRow label="원화 증감" value={bridge?.asset_change_krw} note="끝자산 − 시작자산 − 순입금" strong />
           </div>
         </div>
-
-        <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
-          <li>
-            <strong>같은 계좌인데 왜 부호가 다른가.</strong> 예탁자산은{" "}
-            <strong>원화 환산액</strong>이고, 증권사가 주는 일별 손익은{" "}
-            <strong>주가 손익</strong>입니다. 환율이 빠지면 종목이 그대로여도 원화
-            자산은 줄어듭니다. 둘 다 맞는 말이고, 재는 것이 다를 뿐입니다.
-          </li>
-          <li>
-            <strong>&apos;환율 등&apos;은 잔차입니다.</strong> 환율이라고 단정하지
-            않았습니다 — 배당·수수료·원장 잡음도 여기로 들어옵니다. 다만 대부분이
-            환율인 것은 확인했습니다: 이 구간 USD/KRW 가 1,530.11 → 1,384.86 으로
-            9.49% 빠졌고, 잔차를 9.49% 로 나누면 구간 평균 주식평가액과 거의
-            같습니다.
-          </li>
-          <li>
-            <strong>연쇄 수익률(TWR)은 주가 기준입니다.</strong> 하루치 수익률을
-            차례로 곱해 구하므로 입금이 있는 날도 왜곡되지 않습니다.
-            {bridge?.twr_days ? ` ${bridge.twr_days}일을 곱했습니다.` : ""}
-            {bridge?.unmeasured_days
-              ? ` 전일 자산이 없어 못 센 날이 ${bridge.unmeasured_days}일 있습니다.`
-              : ""}
-            {bridge?.missing_pnl_days
-              ? ` 손익 칸이 비어 있던 날이 ${bridge.missing_pnl_days}일 있습니다(0 으로 치지 않았습니다).`
-              : ""}{" "}
-            &apos;성과 분석&apos; 화면의 수익률은 <strong>원화 기준</strong>이라
-            숫자가 다릅니다.
-          </li>
-          <li>
-            <strong>첫날은 기준선입니다.</strong> 첫날의 손익도, 첫날의 입금도
-            세지 않습니다 — 둘 다 첫날 마감 자산에 이미 들어 있어서 또 더하면 두 번
-            세는 것이 됩니다.
-          </li>
-          <li>
-            <strong>누적손익 차트는 증권사 누적값을 쓰지 않습니다.</strong>{" "}
-            증권사의 누적손익은 조회 창 경계에서 그날 손익으로 초기화됩니다 —
-            실측으로 2026-09-14 에 2,274,791 에서 −1,836,144 로 뛰는데 그 값이
-            그날 손익과 정확히 같았습니다. 그대로 그리면 없던 절벽이 생기므로,
-            일별 손익을 직접 누적했습니다. 그래서 차트의 끝값이 위 &apos;주가
-            손익&apos;과 정확히 같습니다.
-          </li>
-        </ul>
-      </Modal>
-
-      <Modal
-        open={notesOpen}
-        onClose={() => setNotesOpen(false)}
-        title="이 화면의 범위"
-        subtitle="여기서 하지 않는 것과, 그걸 하는 화면"
-      >
-        {/* ⚠️2026-09-22 정정: 예전엔 "TWR·벤치마크·리스크 지표는 하지 않는다"고
-            적혀 있었는데 **그 뒤에 전부 만들었다.** 화면이 사실과 다른 말을
-            하고 있었다. 안 하는 이유가 아니라 **어디서 하는지**를 적는다. */}
-        <PlannedList
-          items={[
-            "여기는 **금액**을 본다 — 예탁자산과 주가손익의 추이. 입출금이 섞이면 금액은 늘지만 잘 굴린 것은 아니라서, 입출금을 빼고 낸다",
-            "상단의 연쇄 수익률은 **주가 기준(환율 제외)** 이다. 변동성·MDD·샤프와 기간 수익률은 '성과 분석' 화면에서 보는데 그쪽은 **원화 기준**이라 숫자가 다르다 — 기준이 다르면 값도 다르다",
-            "S&P 500·필라델피아 반도체 대비는 '벤치마크 비교' 화면에서 본다 (원화 환산 기준)",
-            "월·분기·연도를 잘라 보는 것은 '기간 리포트' 화면이다",
-            "환차손익을 종목별로 보는 것은 '환노출' 화면이다 — 여기 '환율 등'은 계좌 전체의 잔차다",
-          ]}
-        />
       </Modal>
     </>
+  );
+}
+
+/** 그 달의 일별 행. 막대가 월로 묶어 잃은 '어느 날'을 여기서 돌려준다. */
+function MonthDays({
+  days,
+  firstDate,
+}: {
+  days: DailyPerformancePoint[];
+  firstDate: string | null;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="max-h-[56vh] overflow-y-auto">
+        <DataTable
+          columns={["날짜", "예탁자산", "주가손익", "입금", "출금"]}
+          empty="이 달에는 일별 성과가 없습니다"
+        >
+          {days.map((p) => {
+            // ⚠️첫날은 기준선이다 — 그날 손익은 월 합에 들어가지 않는다.
+            const baseline = p.base_date === firstDate;
+            return (
+              <tr key={p.base_date} className="border-b border-hairline">
+                <Cell left>
+                  {p.base_date}
+                  {baseline && (
+                    <span
+                      title="첫날 손익은 첫날 마감 자산에 이미 들어 있어 세지 않습니다"
+                      className="ml-1.5 rounded bg-canvas-soft px-1 py-0.5 text-[9px] font-bold text-ink-muted"
+                    >
+                      기준선
+                    </span>
+                  )}
+                </Cell>
+                <Cell>{formatKrwString(p.deposit_assets_krw)}</Cell>
+                <Cell tone={baseline ? "muted" : toneOf(p.pnl_krw)}>
+                  {formatKrwSigned(p.pnl_krw)}
+                </Cell>
+                <Cell tone={Number(p.deposit_krw ?? 0) ? "up" : "muted"}>
+                  {formatKrwString(p.deposit_krw)}
+                </Cell>
+                <Cell tone={Number(p.withdrawal_krw ?? 0) ? "down" : "muted"}>
+                  {formatKrwString(p.withdrawal_krw)}
+                </Cell>
+              </tr>
+            );
+          })}
+        </DataTable>
+      </div>
+    </div>
   );
 }
 
@@ -392,28 +450,3 @@ function aggregateMonthly(items: { base_date: string; deposit_assets_krw: string
   return [...acc.values()].reverse();
 }
 
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors",
-        active
-          ? "border-ge-point bg-ge-blue-bg text-ge-point"
-          : "border-hairline bg-white text-ink-muted hover:bg-canvas-soft",
-      )}
-    >
-      {children}
-    </button>
-  );
-}

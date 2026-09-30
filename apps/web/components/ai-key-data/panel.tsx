@@ -75,7 +75,7 @@ export function Panel({
         {top.length === 0 ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
             <span className="text-[13px] font-semibold leading-relaxed text-ink-muted">
-              {emptyMsg ?? "판독 대기 중 — 데이터가 들어오면 자동 표시됩니다."}
+              {emptyMsg ?? "판독 대기 중"}
             </span>
           </div>
         ) : box.w > 0 && box.h > 0 ? (

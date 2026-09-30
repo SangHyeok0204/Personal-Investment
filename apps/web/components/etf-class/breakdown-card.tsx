@@ -251,7 +251,7 @@ export function BreakdownCard({
           <div className="min-h-0 flex-1 overflow-y-auto">
             {detail.length === 0 && (
               <div className="px-3 py-6 text-center text-[12px] text-ink-faint">
-                왼쪽에서 분류를 고르면 그 안의 ETF 가 나옵니다
+                분류를 선택하세요
               </div>
             )}
             {detail.map((e) => (

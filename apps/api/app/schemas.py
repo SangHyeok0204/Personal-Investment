@@ -265,6 +265,9 @@ class HoldingOut(BaseModel):
     tech_l1: str | None
     tech_l2: str | None
     tech_l3: str | None
+    # 배분 '섹터' 축(exposure)의 조각 키. ETF 는 대표 노출, 개별주는 tech_l1.
+    # 화면이 이 규칙을 따로 흉내 내면 도넛 조각과 그 바스켓이 어긋난다.
+    exposure: str | None
     quantity: Decimal
     average_purchase_price: Decimal | None
     current_price: Decimal | None
@@ -1142,6 +1145,23 @@ class FxShockOut(BaseModel):
     delta_krw: Decimal | None
 
 
+class FxRateOut(BaseModel):
+    """현재 USD/KRW. 네이버(하나은행 고시)를 먼저, 못 받으면 증권사 환율.
+
+    ⚠️`source` 로 어느 쪽 값인지 늘 밝힌다 — 두 환율은 몇 원씩 다르다
+      (실측 2026-09-25 네이버 1,358.50 · 증권사 1,367.75).
+    """
+
+    rate: Decimal | None
+    source: str  # "naver" | "broker" | "none"
+    bank: str | None = None
+    round: int | None = None
+    traded_at: str | None = None
+    fetched_at: datetime | None = None
+    stale: bool = False
+    broker_rate: Decimal | None = None
+
+
 class FxExposureOut(BaseModel):
     """환노출 — 원화로 살아가며 달러 자산을 들고 있을 때의 위험.
 
@@ -1936,6 +1956,30 @@ class LedgerFreshnessOut(BaseModel):
     auto: bool
 
 
+class SourceStatusOut(BaseModel):
+    """원천·수집기의 마지막 성공/실패(0019, 계획 P0).
+
+    `state`:
+      - worker: "alive"(최근 2분 안에 생존 신호) / "down"
+      - source: "ok"(마지막이 성공) / "403" · "429" · "timeout" · "config" · "other"(마지막이 실패한 종류)
+                / "unknown"(기록 없음)
+    ⚠️실패 종류를 뭉개지 않는다 — Nasdaq 은 막을 때 응답 없이 붙잡아서 "timeout" 이 곧 차단 신호다.
+    """
+
+    source: str
+    kind: str
+    state: str
+    last_ok_at: datetime | None
+    last_error_at: datetime | None
+    last_error_kind: str | None
+    last_error_message: str | None
+    detail: dict | None
+
+
+class SourceStatusListOut(BaseModel):
+    items: list[SourceStatusOut]
+
+
 class FreshnessOut(BaseModel):
     """"이력을 마지막으로 언제 받았나."
 
@@ -1954,3 +1998,92 @@ class FreshnessOut(BaseModel):
     last_market_close_at: datetime | None
     ledgers: list[LedgerFreshnessOut]
     notes: list[str]
+
+
+# ── 매크로 시계열 ────────────────────────────────────────────────────────────
+
+class MacroHistorySeriesOut(BaseModel):
+    """매크로 지표 한 개의 월간 이력.
+
+    ⚠️`points` 의 값은 `/macro` 의 `value` 와 같은 뜻이다(transform 적용 후).
+      yoy 는 비율(0.029 = +2.9%), mom_diff 는 전월 대비 증감.
+    ⚠️월말 다운샘플 — 한 달의 **마지막 관측치**다(일간 금리는 월말 값).
+    """
+
+    series_id: str
+    name: str
+    category: str
+    transform: str
+    unit: str
+    note: str | None
+    #: [["YYYY-MM", value], ...] 오름차순.
+    points: list[tuple[str, float]]
+
+
+class MacroHistoryOut(BaseModel):
+    range: str
+    #: 차트 x 축 공통 구간(YYYY-MM). 지표끼리 같은 축에 놓아야 비교가 된다.
+    start: str
+    end: str
+    series: list[MacroHistorySeriesOut]
+    #: NBER 경기침체 구간(FRED USREC), [["YYYY-MM", "YYYY-MM"], ...] 양끝 포함.
+    recessions: list[tuple[str, str]]
+    categories: list[str]
+    missing: list[str]
+
+
+# ── AI Key Data v2 (S5) — 소스별 /market/ai/{source} ────────────────────────
+
+class AiSeriesOut(BaseModel):
+    """한 계열. `points` = [["YYYY-MM-DD", value], ...] 오름차순. 결측일은 점이 없다(0 아님)."""
+
+    key: str
+    label: str
+    #: 같은 소스 안의 묶음 — npm 'cli'|'sdk', openrouter 'total'|'model'|'residual' …
+    group: str | None = None
+    unit: str | None = None
+    points: list[tuple[str, float]]
+
+
+class AiTableOut(BaseModel):
+    """시계열이 아닌 표(Epoch 데이터센터·투자 라운드 등)."""
+
+    key: str
+    label: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+class AiSourceOut(BaseModel):
+    source: str
+    #: ok | stale(갱신 실패, 마지막 정상값) | key_missing | error | empty
+    status: str
+    series: list[AiSeriesOut] = []
+    tables: list[AiTableOut] = []
+    #: 원천이 스스로 밝힌 기준 시각(OpenRouter meta.as_of 등). 없으면 None.
+    as_of: str | None = None
+    #: 데이터의 마지막 날짜.
+    latest_date: str | None = None
+    source_url: str
+    attribution: str | None = None
+    note: str | None = None
+    fetched_at: datetime | None = None
+    last_ok: datetime | None = None
+    extra: dict[str, Any] | None = None
+
+
+class AiSourceStatusOut(BaseModel):
+    source: str
+    status: str
+    ok: bool
+    #: 이 프로세스가 캐시를 한 번이라도 채웠나(라이브 소스). 스냅샷 소스는 항상 True.
+    fetched: bool
+    last_ok: datetime | None = None
+    latest_date: str | None = None
+    note: str | None = None
+    as_of: str | None = None
+    key_missing: bool = False
+
+
+class AiStatusOut(BaseModel):
+    items: list[AiSourceStatusOut]

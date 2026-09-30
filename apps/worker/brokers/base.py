@@ -109,6 +109,9 @@ class TradeRow:
 
     trade_date: date
     trade_no: str
+    #: KR / US. ⚠️자연키의 일부다 — 거래번호가 일자별로 리셋되는데 국내·해외가
+    #:  따로 매겨서, 시장을 빼면 같은 날 1번끼리 덮어쓴다(alembic 0018).
+    market: str
     side: str  # BUY / SELL
     ticker: str
     name: str | None

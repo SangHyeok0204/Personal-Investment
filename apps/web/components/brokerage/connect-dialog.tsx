@@ -184,15 +184,6 @@ export function ConnectDialog({
             </div>
           ) : (
             <>
-              <p className="text-[12px] font-medium leading-relaxed text-ink-secondary">
-                키움 REST API 홈페이지에서 발급한 App Key 와 Secret Key 를 넣으면
-                검증 후 저장하고 바로 동기화합니다.
-                <br />
-                <span className="text-ink-faint">
-                  키는 서버에만 저장되고 화면으로 다시 내려오지 않습니다.
-                </span>
-              </p>
-
               <Field label="App Key">
                 <input
                   value={appKey}
@@ -284,9 +275,6 @@ export function ConnectDialog({
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 {phase === "syncing" ? "동기화 중…" : "연결하고 동기화"}
               </button>
-              <p className="text-center text-[11px] font-medium text-ink-faint">
-                처음 동기화는 체결·성과 이력까지 받아오느라 10초 정도 걸립니다.
-              </p>
             </>
           )}
         </div>
@@ -375,13 +363,6 @@ function RegisteredBox({
               </div>
             ))}
           </div>
-          {/* 계좌가 하나뿐이면 고를 것이 없다 — 여럿일 때만 선택 UI 를 쓴다.
-              (상단 바의 계좌 선택기가 동기화 뒤의 실제 선택을 담당한다.) */}
-          {accounts.length > 1 && (
-            <p className="mt-1.5 text-[11px] font-medium text-ink-faint">
-              동기화 후 상단 바에서 계좌를 전환할 수 있습니다.
-            </p>
-          )}
         </div>
       )}
 

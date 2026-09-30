@@ -21,7 +21,7 @@ type Provider = "Claude" | "GPT";
 const GPT_ACTIVE_ACCOUNT = 1;
 
 /* ── 미터 분류 ────────────────────────────────────────────────────────
-   업스트림(192.168.199.120:8002)은 Claude/Codex 웹 UI 문구를 그대로 긁어와 라벨이
+   업스트림(사내 LAN 장비)은 Claude/Codex 웹 UI 문구를 그대로 긁어와 라벨이
    공급자마다 다르고 이름도 바뀐다(Opus→Fable, 2026-07). 라벨을 그대로 쓰면 카드마다
    행 이름·개수·순서가 어긋나므로, 표시 전에 종류로 분류해 구조를 통일한다.
      session — Claude '현재 세션' / Codex '5시간 사용 한도'  → 카드 hero 링
@@ -205,9 +205,7 @@ export default function AiTokenUsagePage() {
             ))}
           </div>
         ) : usage.isError ? (
-          <p className="text-sm text-ink-muted">
-            API가 응답하지 않아 사용량을 표시할 수 없습니다.
-          </p>
+          <p className="text-sm text-ink-muted">API 응답 없음</p>
         ) : cards.length === 0 ? (
           <p className="text-sm text-ink-muted">표시할 계정이 없습니다.</p>
         ) : (

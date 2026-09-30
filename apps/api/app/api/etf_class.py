@@ -3,7 +3,7 @@
 collector 가 `국내상장ETF 모니터링.xlsm` 의 value 시트를 읽어 만든 payload 를 그대로
 나른다. 계산은 전부 collector 쪽이다 — 여기는 ETag 통과와 503 격리만 한다.
 
-`_proxy_collector` 를 inav 에서 가져다 쓰는 건 stock_monitor·macro 와 같은 선례다
+`_proxy_collector` 를 inav 에서 가져다 쓰는 건 ai_key_data·macro 와 같은 선례다
 (헬퍼 안에 "httpx 의 timeout 은 DNS 해석을 안 묶는다" 같은 사연이 들어 있어 복제하면
 한쪽만 고쳐진다).
 

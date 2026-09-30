@@ -7,6 +7,7 @@ import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
 import { Modal } from "@/components/ui/modal";
 import {
+  CardEmpty,
   Cell,
   DataTable,
   Emphasized,
@@ -35,6 +36,14 @@ import { cn } from "@/lib/utils";
 //
 // ⚠️기간 끝을 오늘로 적지 않는다. 일별성과가 들어온 마지막 날까지만 잘라
 //   보여 준다 — "9월"이라고 써 놓고 9/20 까지만 담겨 있으면 그렇게 말해야 한다.
+//
+// ★2026-09-25 사용자 지시(전체 메뉴 공통 패턴): 화면에는 대표 숫자, 누르면 상세.
+//   벤치마크 대비 표는 수익률 칸, 종목별 실현손익 표는 실현손익 칸(과 '전체 목록'),
+//   매매·배당·비용은 현금 칸을 눌러 여는 팝업으로 옮겼다. 본문에는 자산 분해와
+//   신규/청산만 남는다.
+//   ⚠️**월별 막대는 두지 않는다.** 리포트는 기간 하나를 한 번에 받아 오므로 달마다
+//   숫자를 모으려면 달 수만큼 다시 불러야 한다 — 위의 기간 칩(월·분기·연도)이
+//   그 역할을 한다.
 
 function tone(value: string | null | undefined): "up" | "down" | undefined {
   if (value == null) return undefined;
@@ -56,6 +65,7 @@ export default function ReportPage() {
   const [period, setPeriod] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [residualOpen, setResidualOpen] = useState(false);
+  const [panel, setPanel] = useState<"benchmarks" | "realized" | "trading" | null>(null);
 
   const report = useQuery({
     queryKey: ["report", accountId, period],
@@ -70,7 +80,7 @@ export default function ReportPage() {
 
   return (
     <>
-      <Topbar title="기간 리포트" subtitle="그 기간에 무슨 일이 있었나" />
+      <Topbar title="기간 리포트" />
       <PageContainer fit>
         {!connected && !report.isLoading && <NotConnectedBanner what="일별 성과" />}
 
@@ -101,6 +111,8 @@ export default function ReportPage() {
                 ? `${p.start_date} ~ ${p.end_date} · ${data?.trading_days ?? 0}거래일`
                 : "시간가중 수익률"
             }
+            actionHint="눌러서 벤치마크 대비 보기"
+            onClick={() => setPanel("benchmarks")}
             accent="auto"
             loading={report.isLoading}
           />
@@ -120,6 +132,8 @@ export default function ReportPage() {
                 ? `${formatKrwCompactString(data.opening_assets_krw)} → ${formatKrwCompactString(data.closing_assets_krw)}`
                 : "시작 → 끝"
             }
+            actionHint="눌러서 '그 외' 분해 보기"
+            onClick={() => setResidualOpen(true)}
             accent="auto"
             loading={report.isLoading}
           />
@@ -131,6 +145,8 @@ export default function ReportPage() {
                 ? `매수 ${data.buy_count} · 매도 ${data.sell_count}건`
                 : "확정된 손익"
             }
+            actionHint="눌러서 종목별 보기"
+            onClick={() => setPanel("realized")}
             accent="auto"
             loading={report.isLoading}
           />
@@ -142,6 +158,8 @@ export default function ReportPage() {
                 ? `배당 ${formatKrwString(data.dividend_krw)} − 비용 ${formatKrwString(data.cost_krw)}`
                 : "배당 − 수수료·세금"
             }
+            actionHint="눌러서 매매·배당·비용 보기"
+            onClick={() => setPanel("trading")}
             accent="auto"
             loading={report.isLoading}
           />
@@ -157,7 +175,6 @@ export default function ReportPage() {
         >
           <StubCard
             title={p ? `${p.label} 요약` : "요약"}
-            subtitle="자산이 왜 그만큼 바뀌었나"
             scrollBody
             action={
               <button
@@ -170,29 +187,90 @@ export default function ReportPage() {
             }
           >
             {report.isLoading ? (
-              <Empty text="불러오는 중…" />
+              <CardEmpty text="불러오는 중…" />
             ) : data == null || p == null ? (
-              <Empty text="표시할 기간이 없습니다" />
+              <CardEmpty text="표시할 기간이 없습니다" />
             ) : (
               <Summary data={data} onExplain={() => setResidualOpen(true)} />
             )}
           </StubCard>
 
           <StubCard
-            title="종목"
-            subtitle="확정된 손익과 포지션 변화"
+            title="신규 · 청산"
+            subtitle={
+              data ? `포지션 변화 · 실현 ${data.realized.length}종목` : "포지션 변화"
+            }
             scrollBody
+            action={
+              <button
+                type="button"
+                onClick={() => setPanel("realized")}
+                className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
+              >
+                실현 목록
+              </button>
+            }
           >
             {report.isLoading ? (
-              <Empty text="불러오는 중…" />
+              <CardEmpty text="불러오는 중…" />
             ) : data == null ? (
-              <Empty text="표시할 내역이 없습니다" />
+              <CardEmpty text="표시할 내역이 없습니다" />
             ) : (
-              <Tickers data={data} />
+              <Changes data={data} />
             )}
           </StubCard>
         </div>
       </PageContainer>
+
+      {/* ── 요약 칸 → 상세 ───────────────────────────────────────────────── */}
+      <Modal
+        open={panel === "benchmarks"}
+        onClose={() => setPanel(null)}
+        title="벤치마크 대비"
+        subtitle={
+          p ? `${p.label} · 기간 수익률 ${formatPercentString(data?.twr)} · 원화 환산` : undefined
+        }
+        width={560}
+      >
+        {data && <Benchmarks data={data} />}
+      </Modal>
+
+      <Modal
+        open={panel === "realized"}
+        onClose={() => setPanel(null)}
+        title="종목별 실현손익"
+        subtitle={
+          data
+            ? `${p?.label ?? ""} · ${data.realized.length}종목 · 합계 ${formatKrwSigned(data.realized_total_krw)}`
+            : undefined
+        }
+        width={640}
+      >
+        {data && <Realized data={data} />}
+      </Modal>
+
+      <Modal
+        open={panel === "trading"}
+        onClose={() => setPanel(null)}
+        title="매매 · 배당 · 비용"
+        subtitle={p ? `${p.label} · 계좌가 만든 현금 = 배당 − 수수료·세금` : undefined}
+        width={520}
+      >
+        {data && (
+          <div className="space-y-1">
+            <Line
+              label={`매수 ${data.buy_count} · 매도 ${data.sell_count}건`}
+              value={data.turnover_krw}
+              note="거래대금"
+            />
+            <Line label="수수료·세금" value={data.cost_krw} />
+            <Line label="배당" value={data.dividend_krw} />
+            <div className="mt-1 border-t border-ink pt-1">
+              <Line label="계좌가 만든 현금" value={netCash} signed strong />
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={residualOpen}
@@ -207,7 +285,6 @@ export default function ReportPage() {
         open={notesOpen}
         onClose={() => setNotesOpen(false)}
         title="이 리포트의 한계"
-        subtitle="무엇을 넣지 않았나"
       >
         <ul className="space-y-2">
           {(data?.notes ?? []).map((text) => (
@@ -225,7 +302,6 @@ export default function ReportPage() {
 }
 
 function Summary({ data, onExplain }: { data: Report; onExplain: () => void }) {
-  const p = data.period!;
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-hairline bg-canvas-soft px-3 py-2.5">
@@ -260,100 +336,81 @@ function Summary({ data, onExplain }: { data: Report; onExplain: () => void }) {
       </div>
 
       <div>
-        <p className="mb-1.5 text-[11px] font-bold text-ge-navy">벤치마크 대비</p>
-        {data.benchmarks.length === 0 ? (
-          <p className="text-[11px] text-ink-faint">
-            이 기간은 비교할 지수 데이터가 없습니다.
-          </p>
-        ) : (
-          <DataTable columns={["지수", "지수 수익률", "초과"]} align={["left", "right", "right"]}>
-            {data.benchmarks.map((b) => (
-              <tr key={b.name} className="border-b border-hairline">
-                <Cell left strong>
-                  {b.name}
-                </Cell>
-                <Cell tone={tone(b.return_krw)}>{formatPercentString(b.return_krw)}</Cell>
-                {/* ⚠️단위가 %가 아니라 %p 다. 수익률의 차이이기 때문이다. */}
-                <Cell strong tone={tone(b.excess)}>
-                  {pp(b.excess)}
-                </Cell>
-              </tr>
-            ))}
-          </DataTable>
-        )}
-        <p className="mt-1.5 text-[11px] leading-relaxed text-ink-muted">
-          원화 환산 기준입니다 — 지수를 달러로 보면 환율 효과가 빠져 내 계좌와
-          비교가 되지 않습니다.
-        </p>
-      </div>
-
-      <div>
         <p className="mb-1.5 text-[11px] font-bold text-ge-navy">가장 컸던 하루</p>
         <Line label={data.best_day ?? "—"} value={data.best_day_krw} signed />
         <Line label={data.worst_day ?? "—"} value={data.worst_day_krw} signed />
       </div>
-
-      <div>
-        <p className="mb-1.5 text-[11px] font-bold text-ge-navy">매매</p>
-        <Line
-          label={`매수 ${data.buy_count} · 매도 ${data.sell_count}건`}
-          value={data.turnover_krw}
-        />
-        <Line label="수수료·세금" value={data.cost_krw} />
-        <Line label="배당" value={data.dividend_krw} />
-      </div>
-
-      {/* ⚠️"9월"이라고 써 놓고 9/20 까지만 담겨 있으면 그렇게 말해야 한다. */}
-      <p className="text-[11px] leading-relaxed text-ink-faint">
-        이 리포트는 <strong>{p.start_date} ~ {p.end_date}</strong> 의 일별 성과를
-        담고 있습니다({data.trading_days}거래일). 증권사 일별 성과가 들어온
-        마지막 날까지만 집계합니다.
-      </p>
     </div>
   );
 }
 
-function Tickers({ data }: { data: Report }) {
-  const news = data.changes.filter((c) => c.kind === "NEW");
-  const closed = data.changes.filter((c) => c.kind === "CLOSED");
-
+/** 기간 수익률과 지수 수익률(원화 환산). 옛 요약 카드의 '벤치마크 대비'. */
+function Benchmarks({ data }: { data: Report }) {
   return (
-    <div className="space-y-3">
-      <div>
-        <p className="mb-1.5 text-[11px] font-bold text-ge-navy">
-          실현손익 · {data.realized.length}종목
+    <div>
+      {data.benchmarks.length === 0 ? (
+        <p className="text-[11px] text-ink-faint">
+          이 기간은 비교할 지수 데이터가 없습니다.
         </p>
-        <DataTable
-          columns={["종목", "매도", "실현손익", "환차"]}
-          align={["left", "right", "right", "right"]}
-          empty="이 기간에 매도한 종목이 없습니다"
-        >
-          {data.realized.map((r) => (
-            <tr key={r.ticker} className="border-b border-hairline">
+      ) : (
+        <DataTable columns={["지수", "지수 수익률", "초과"]} align={["left", "right", "right"]}>
+          {data.benchmarks.map((b) => (
+            <tr key={b.name} className="border-b border-hairline">
               <Cell left strong>
-                <span className="flex items-center gap-1.5">
-                  <span className="max-w-[110px] truncate">{r.name ?? r.ticker}</span>
-                  <span className="shrink-0 text-[10px] font-bold text-ink-faint">
-                    {r.ticker}
-                  </span>
-                </span>
+                {b.name}
               </Cell>
-              <Cell tone="muted">{r.sell_count}</Cell>
-              <Cell strong tone={tone(r.pnl_krw)}>
-                {formatKrwSigned(r.pnl_krw)}
+              <Cell tone={tone(b.return_krw)}>{formatPercentString(b.return_krw)}</Cell>
+              {/* ⚠️단위가 %가 아니라 %p 다. 수익률의 차이이기 때문이다. */}
+              <Cell strong tone={tone(b.excess)}>
+                {pp(b.excess)}
               </Cell>
-              {/* ⚠️환차를 주가 손익과 더하지 않는다 — 종목이 올라서 번 건지
-                  환율로 번 건지 구분이 사라진다. */}
-              <Cell tone={tone(r.fx_pnl_krw)}>{formatKrwSigned(r.fx_pnl_krw)}</Cell>
             </tr>
           ))}
         </DataTable>
-      </div>
+      )}
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-2 gap-2">
-        <ChangeList title="신규 편입" items={news} empty="없음" kind="NEW" />
-        <ChangeList title="전량 청산" items={closed} empty="없음" kind="CLOSED" />
-      </div>
+function Realized({ data }: { data: Report }) {
+  return (
+    <div className="max-h-[60vh] overflow-y-auto">
+      <DataTable
+        columns={["종목", "매도", "실현손익", "환차"]}
+        align={["left", "right", "right", "right"]}
+        empty="이 기간에 매도한 종목이 없습니다"
+      >
+        {data.realized.map((r) => (
+          <tr key={r.ticker} className="border-b border-hairline">
+            <Cell left strong>
+              <span className="flex items-center gap-1.5">
+                <span className="max-w-[220px] truncate">{r.name ?? r.ticker}</span>
+                <span className="shrink-0 text-[10px] font-bold text-ink-faint">
+                  {r.ticker}
+                </span>
+              </span>
+            </Cell>
+            <Cell tone="muted">{r.sell_count}</Cell>
+            <Cell strong tone={tone(r.pnl_krw)}>
+              {formatKrwSigned(r.pnl_krw)}
+            </Cell>
+            {/* ⚠️환차를 주가 손익과 더하지 않는다 — 종목이 올라서 번 건지
+                환율로 번 건지 구분이 사라진다. */}
+            <Cell tone={tone(r.fx_pnl_krw)}>{formatKrwSigned(r.fx_pnl_krw)}</Cell>
+          </tr>
+        ))}
+      </DataTable>
+    </div>
+  );
+}
+
+function Changes({ data }: { data: Report }) {
+  const news = data.changes.filter((c) => c.kind === "NEW");
+  const closed = data.changes.filter((c) => c.kind === "CLOSED");
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <ChangeList title="신규 편입" items={news} empty="없음" kind="NEW" />
+      <ChangeList title="전량 청산" items={closed} empty="없음" kind="CLOSED" />
     </div>
   );
 }
@@ -420,7 +477,6 @@ function ChangeList({
 
 function ResidualDetail({ data }: { data: Report }) {
   const r = data.residual;
-  const unknown = r.fx_estimate_krw == null;
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-hairline bg-canvas-soft/60 p-3">
@@ -442,39 +498,6 @@ function ResidualDetail({ data }: { data: Report }) {
           <Line label="그 외 (합)" value={r.total_krw} signed strong />
         </div>
       </div>
-
-      <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
-        <li>
-          <strong>환율만 추정입니다.</strong> 전일 주식평가액 × 그날 환율
-          변동률로 만든 값입니다 — 증권사가 주는 일별 환율 칸이 532행 전부 비어
-          있어 달리 방법이 없습니다. 배당과 수수료는 증권사 실측입니다.
-          {r.fx_missing_days > 0 && (
-            <> 환율을 못 읽은 날이 {r.fx_missing_days}일 있습니다(0 으로 치지 않았습니다).</>
-          )}
-        </li>
-        <li>
-          <strong>외화 예수금은 빼고 셌습니다.</strong> 예수금 중 얼마가 달러인지
-          따로 주지 않아 전액 원화로 보았습니다 — 그만큼 환율 영향이 실제보다
-          작게 잡힙니다.
-        </li>
-        <li>
-          <strong>월 단위 숫자를 &apos;이만큼이 환율&apos;로 읽지 마세요.</strong>{" "}
-          남는 것이 월별로 +25만 / +26만 / -37만 / -26만 으로 흔들리는데 전체를
-          합치면 -11만입니다. 부호가 번갈아 나며 상쇄되는 모양이라, 우리가 쓰는
-          종가 환율과 증권사의 환산 시점이 달라 월 경계에서 하루씩 밀리는 것으로
-          보입니다. <strong>전체 구간에서는 잔차의 3.5% 까지 닫힙니다.</strong>
-        </li>
-        <li>
-          <strong>남는 것을 0 으로 맞추지 않았습니다.</strong> 맞춰 놓으면 모형이
-          틀렸을 때 알 길이 없습니다.
-        </li>
-        {unknown && (
-          <li>
-            이 기간은 환율을 읽지 못해 분해하지 못했습니다 — 남는 것도 낼 수
-            없습니다.
-          </li>
-        )}
-      </ul>
     </div>
   );
 }
@@ -525,10 +548,3 @@ function Line({
 
 /** 서버 문구의 `**강조**` 만 굵게. dangerouslySetInnerHTML 을 쓰지 않는다. */
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center px-4 text-center">
-      <span className="text-[12px] font-semibold text-ink-faint">{text}</span>
-    </div>
-  );
-}

@@ -18,6 +18,7 @@ from .schemas.domestic import (
 API_ACCOUNT_LIST = "ka00001"  # 계좌목록/계좌번호 조회
 API_DEPOSIT = "kt00001"  # 예수금상세현황요청
 API_BALANCE = "kt00018"  # 계좌평가잔고내역요청
+API_TRADE_HISTORY = "kt00015"  # 위탁종합거래내역요청 (국내 체결)
 
 # Request enum values — CONFIRMED (live 2026-07-12): all three return return_code=0
 # with complete data. For kt00018 the returned holdings sum exactly to tot_evlt_amt
@@ -31,6 +32,20 @@ DEPOSIT_QRY_TP = "3"  # kt00001 조회구분
 
 # ka00001 takes no request body. CONFIRMED (live 2026-07-12).
 ACCOUNT_LIST_BODY = {}
+
+# ---- kt00015 위탁종합거래내역 (체결) ------------------------------------------
+# 해외 체결(ust21100)과 뜻을 맞춘 값들이다. TO-VERIFY(라이브 국내 체결 없음).
+#
+# ⚠️tp 는 반드시 "3"(매매)이다. "0"(전체)로 두면 입출금·환전·대출이 같이 와서
+#   "체결 내역"이 아니게 된다 — 해외 쪽에서 krw_repl_skip_yn="Y" 로 막는 것과
+#   같은 이유다.
+TRADE_HISTORY_TP = "3"  # 0:전체 1:입출금 2:입출고 3:매매 4:매수 5:매도 6:입금 7:출금 ...
+# ⚠️gds_tp 는 "1"(국내주식)이다. "0"(전체)로 두면 해외주식이 같이 와서
+#   ust21100 으로 이미 받은 체결과 **겹친다**.
+TRADE_HISTORY_GDS_TP = "1"  # 0:전체 1:국내주식 2:수익증권 3:해외주식 4:금융상품
+TRADE_HISTORY_SORT_TP = "2"  # 1:최근거래순 2:과거거래순
+# %:전체. KRX 만 주면 NXT(넥스트트레이드) 체결이 조용히 빠진다.
+TRADE_HISTORY_DMST_STEX_TP = "%"
 
 # The appkey is bound to a single account, and kt00018/kt00001 both answer correctly
 # with NO account number in the request. CONFIRMED (live 2026-07-12) — None = don't
@@ -131,6 +146,26 @@ def parse_account_list(pages):
             }
         )
     return accounts
+
+
+# ---- kt00015 위탁종합거래내역 --------------------------------------------------
+
+def trade_history_body(start, end):
+    """kt00015 요청 본문. 날짜는 YYYYMMDD.
+
+    stk_cd·crnc_cd·frgn_stex_code 는 빈 값이 '전체' 다.
+    """
+    return {
+        "strt_dt": start.strftime("%Y%m%d"),
+        "end_dt": end.strftime("%Y%m%d"),
+        "tp": TRADE_HISTORY_TP,
+        "stk_cd": "",
+        "crnc_cd": "",
+        "gds_tp": TRADE_HISTORY_GDS_TP,
+        "frgn_stex_code": "",
+        "dmst_stex_tp": TRADE_HISTORY_DMST_STEX_TP,
+        "qry_sort_tp": TRADE_HISTORY_SORT_TP,
+    }
 
 
 # ---- kt00001 예수금 -----------------------------------------------------------

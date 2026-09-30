@@ -8,3 +8,9 @@ pydantic-settings==2.7.0
 python-multipart==0.0.20
 pytest==8.3.4
 httpx==0.28.1
+# 계절성(C2) — 원본이 pandas 기반. scipy 가 없으면 p 값이 정규근사로 과대평가된다(★ 오판).
+pandas==2.2.3
+numpy==2.1.3
+scipy==1.14.1
+openpyxl==3.1.5
+rdflib>=7.1

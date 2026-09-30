@@ -6,7 +6,7 @@ import { getToolCalling, type AiSeries, type ToolCalling } from "@/lib/api";
 import { TimeSeriesChart } from "@/components/ai-key-data/timeseries-chart";
 import { StaleBadge } from "@/components/ai-key-data/stale-badge";
 import { POLL_MS } from "@/components/ai-key-data/poll";
-import { EMDASH } from "@/components/stock-monitor/format";
+import { EMDASH } from "@/components/format";
 import { cn } from "@/lib/utils";
 import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
 

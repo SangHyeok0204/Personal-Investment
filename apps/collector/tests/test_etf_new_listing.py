@@ -4,7 +4,7 @@
   1) 신규상장 txt 는 **UTF-8** 이다(같은 폴더의 일별 분석 txt 는 cp949). cp949 로 고정하면
      이름이 깨지는 데 그치지 않고 `거래대금:` 머리글까지 깨져 금액이 전부 결측이 된다.
   2) DART 는 상장일을 **범위**로만 준다 — 지난 건은 '임박'에서 빠져야 한다.
-  3) CHECK newEtfs 의 단위가 섞여 있다(억/주/%/원). etf_flows 와 달리 억을 그대로 쓴다.
+  3) CHECK newEtfs 의 단위가 섞여 있다(억/주/%/원). 이 화면은 억을 그대로 쓴다.
 """
 from __future__ import annotations
 
@@ -109,8 +109,8 @@ def test_upcoming_survives_a_missing_or_broken_folder(tmp_path, monkeypatch):
 # ── 3) CHECK 실시간 ─────────────────────────────────────────────────────────
 
 def test_realtime_keeps_eok_units_and_reads_change():
-    """★`etf_flows` 는 억을 원으로(×1e8) 바꾸지만 여기는 억을 그대로 쓴다.
-    그리고 `change`(등락률)는 etf_flows 가 아예 안 꺼내는 필드다."""
+    """★억을 원으로(×1e8) 바꾸던 카드가 따로 있었지만 여기는 억을 그대로 쓴다.
+    그리고 `change`(등락률)는 그 카드가 아예 안 꺼내던 필드다."""
     hoga = {"payload": {"newEtfs": [{
         "code": "0234N0", "name": "KIWOOM 삼성SK그룹TOP4+", "listedDate": "2026-09-01",
         "tradeAmt": 5.26, "volume": 53664, "change": -2.32, "price": 9320,

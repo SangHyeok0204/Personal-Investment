@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getComputeIndex, type ComputeIndexSeries } from "@/lib/api";
-import { EMDASH } from "@/components/stock-monitor/format";
+import { EMDASH } from "@/components/format";
 import { cn } from "@/lib/utils";
 import { POLL_MS } from "@/components/ai-key-data/poll";
 import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
@@ -379,7 +379,7 @@ export function ComputeIndexCard() {
           <Center
             msg={
               data?.note ??
-              "GPU선물지수.xlsx 판독 대기 중 — 데이터가 들어오면 자동 표시됩니다."
+              "GPU선물지수.xlsx 판독 대기 중"
             }
             tone={data?.note ? "text-amber-600" : undefined}
           />

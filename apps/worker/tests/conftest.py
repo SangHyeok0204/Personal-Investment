@@ -45,6 +45,23 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_jobs_status_created_at ON jobs (status, created_at);
+-- 0019: 큐·심장박동·재시도 횟수. 테스트 DB 는 세션마다 새로 만들지 않고 재사용하므로
+-- CREATE TABLE IF NOT EXISTS 만으로는 기존 표에 열이 붙지 않는다 — 따로 더한다.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS queue VARCHAR NOT NULL DEFAULT 'default';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS ix_jobs_queue_status_created_at ON jobs (queue, status, created_at);
+
+CREATE TABLE IF NOT EXISTS source_status (
+    source VARCHAR PRIMARY KEY,
+    kind VARCHAR NOT NULL,
+    last_ok_at TIMESTAMPTZ,
+    last_error_at TIMESTAMPTZ,
+    last_error_kind VARCHAR,
+    last_error_message TEXT,
+    detail JSONB,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS job_logs (
     id UUID PRIMARY KEY,
@@ -226,7 +243,7 @@ HISTORY_DDL = """
 CREATE TABLE IF NOT EXISTS trades (
     id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
     ticker VARCHAR NOT NULL, asset_name VARCHAR, trade_date DATE NOT NULL,
-    trade_no VARCHAR NOT NULL, side VARCHAR NOT NULL,
+    trade_no VARCHAR NOT NULL, market VARCHAR NOT NULL, side VARCHAR NOT NULL,
     quantity NUMERIC(20,6) NOT NULL, price NUMERIC(20,6),
     currency VARCHAR NOT NULL, amount_local NUMERIC(20,4),
     settlement_amount_local NUMERIC(20,4), commission_local NUMERIC(20,4),
@@ -234,7 +251,8 @@ CREATE TABLE IF NOT EXISTS trades (
     channel VARCHAR, processed_at VARCHAR, source_job_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_trades_account_date_no UNIQUE (account_id, trade_date, trade_no)
+    CONSTRAINT uq_trades_account_market_date_no
+        UNIQUE (account_id, market, trade_date, trade_no)
 );
 
 CREATE TABLE IF NOT EXISTS account_daily_performance (
@@ -333,7 +351,7 @@ def db(test_engine):
     with test_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE jobs, job_logs, imports, brokers, brokerage_connections, "
+                "TRUNCATE jobs, job_logs, imports, source_status, brokers, brokerage_connections, "
                 "accounts, assets, current_positions, account_balances, "
                 "portfolio_snapshots, position_snapshots, broker_api_raw_responses, "
                 # ⚠️이력 표도 비운다. 안 비우면 앞 시험이 남긴 행이 다음 시험의

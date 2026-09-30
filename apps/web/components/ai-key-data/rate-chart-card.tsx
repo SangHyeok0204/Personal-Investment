@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getRateTopics, type RateSeries, type RateTopics } from "@/lib/api";
-import { EMDASH } from "@/components/stock-monitor/format";
+import { EMDASH } from "@/components/format";
 import { cn } from "@/lib/utils";
 import { POLL_MS } from "@/components/ai-key-data/poll";
 import { useCardZoom, ZoomButton } from "@/components/ai-key-data/card-zoom";
@@ -340,7 +340,7 @@ export function RateChartCard({
           <Center msg="collector 에 못 닿았습니다." tone="text-rose-600" />
         ) : plotted.length === 0 ? (
           <Center
-            msg={data?.note ?? "금리_2.xlsx 판독 대기 중 — 데이터가 들어오면 자동 표시됩니다."}
+            msg={data?.note ?? "금리_2.xlsx 판독 대기 중"}
             tone={data?.note ? "text-amber-600" : undefined}
           />
         ) : box.w > 0 && box.h > 0 ? (

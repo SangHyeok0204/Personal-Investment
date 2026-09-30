@@ -10,8 +10,8 @@
   ③ 구성종목  펀드공시모니터 cache/holdings/{상장일}.json  ← 그쪽이 07:30 에 KRX+claude 로 굽는다
                 ⚠️같은 파일의 fee·company 는 **비어 있다**(실측 09-01). 그래서 ②에서 채운다.
   ④ 실시간   CHECK 호가 envelope 의 newEtfs   ← 거래대금·거래량·등락률
-                ⚠️`etf_flows.py` 는 이 배열에서 세 필드만 꺼내 쓴다. 원본에는 change(등락률)·
-                price·marketCap 도 들어 있다 — 여기서는 원본을 다시 읽는다.
+                ⚠️이 배열에는 change(등락률)·price·marketCap 도 들어 있다 —
+                세 필드만 쓰지 말고 원본을 그대로 읽는다.
 
 ★★"자정에 DART 로 금일 상장을 판단한다"는 지시대로 할 수 없는 부분이 하나 있다. DART
   예비투자설명서가 주는 건 **예상 상장일 범위**(est_listing_from~to)지 확정일이 아니다
@@ -366,9 +366,9 @@ def realtime(hoga: dict | None) -> dict[str, dict]:
     """{티커: {price, change, trade_value, volume, market_cap, indiv_net}}.
 
     ⚠️단위가 섞여 있다 — tradeAmt·marketCap 은 **억원**, volume 은 **주**,
-      change 는 **%**, price 는 원. `etf_flows.py` 는 웹 포맷터에 맞추려고 억을 원으로
-      환산하지만(×1e8), 이 화면은 억을 그대로 쓴다. 두 카드가 같은 필드를 다른 단위로
-      쓰므로 옮겨 붙일 때 주의할 것.
+      change 는 **%**, price 는 원. 이 화면은 **억을 그대로** 쓴다 — 웹 포맷터에
+      맞추려고 억을 원으로(×1e8) 환산하던 카드가 따로 있었으므로(2026-09-23 철거),
+      다른 화면에서 옮겨 붙일 때 단위를 반드시 확인할 것.
     """
     out: dict[str, dict] = {}
     payload = (hoga or {}).get("payload") or {}

@@ -448,10 +448,6 @@ export default function InavPage() {
             <AlertTriangle className="h-5 w-5 shrink-0" strokeWidth={2} />
             <div>
               <div className="text-sm font-bold">collector 미기동</div>
-              <div className="mt-0.5 text-[13px] text-amber-700/80">
-                수집 서비스가 실행 중이 아닙니다. 재기동 시 자동으로 다시
-                표시됩니다.
-              </div>
             </div>
           </div>
         )}

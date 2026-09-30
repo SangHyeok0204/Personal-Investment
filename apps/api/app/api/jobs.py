@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import func, select
@@ -6,13 +7,15 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.db.session import get_db
-from app.models import Job, JobLog
+from app.models import Job, JobLog, SourceStatus
 from app.schemas import (
     JobDetailOut,
     JobListOut,
     JobLogOut,
     JobOut,
     JobStatsOut,
+    SourceStatusListOut,
+    SourceStatusOut,
     TestJobRequest,
 )
 
@@ -72,6 +75,41 @@ def job_stats(db: Session = Depends(get_db)) -> JobStatsOut:
         running=counts.get("RUNNING", 0),
         success=counts.get("SUCCESS", 0),
         failed=counts.get("FAILED", 0),
+    )
+
+
+# worker 는 30초마다 생존 신호를 남긴다. 그 네 배 동안 소식이 없으면 멈춘 것으로 본다.
+WORKER_ALIVE_WINDOW = timedelta(minutes=2)
+
+
+def _state(row: SourceStatus, now: datetime) -> str:
+    if row.kind == "worker":
+        return "alive" if row.last_ok_at and now - row.last_ok_at <= WORKER_ALIVE_WINDOW else "down"
+    if row.last_error_at and (not row.last_ok_at or row.last_error_at > row.last_ok_at):
+        return row.last_error_kind or "other"
+    return "ok" if row.last_ok_at else "unknown"
+
+
+# ⚠️`/{job_id}` 보다 **먼저** 선언한다. 뒤에 두면 "sources" 가 job_id 로 잡혀 422 가 난다.
+@router.get("/sources", response_model=SourceStatusListOut)
+def list_sources(db: Session = Depends(get_db)) -> SourceStatusListOut:
+    """수집기(worker)와 외부 원천의 상태 — /data-operations 가 쓴다."""
+    now = datetime.now(timezone.utc)
+    rows = db.execute(select(SourceStatus).order_by(SourceStatus.kind.desc(), SourceStatus.source)).scalars()
+    return SourceStatusListOut(
+        items=[
+            SourceStatusOut(
+                source=r.source,
+                kind=r.kind,
+                state=_state(r, now),
+                last_ok_at=r.last_ok_at,
+                last_error_at=r.last_error_at,
+                last_error_kind=r.last_error_kind,
+                last_error_message=r.last_error_message,
+                detail=r.detail,
+            )
+            for r in rows
+        ]
     )
 
 

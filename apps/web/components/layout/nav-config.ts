@@ -32,7 +32,7 @@ import type { LucideIcon } from "lucide-react";
 //
 // ★2026-09-22 메뉴에서 **뺀 것** (라우트는 남겨 둔다):
 //   · 종토방(/stock-discussion) · AI token usage(/ai-token-usage)
-//   둘 다 원본 GE 팀의 **LAN 장비**(192.168.199.120:8002, collector:8100)를
+//   둘 다 원본 GE 팀의 **LAN 장비**(사내 IP, collector:8100)를
 //   본다. 이 환경에서 실측하면 연결 자체가 안 된다(curl 000). 켜질 수 없는
 //   메뉴를 남겨 두면 계속 "언젠가 되겠지"로 읽히고, 그 사이 메뉴가 거짓말을
 //   한다. 장비가 생기면 이 두 줄을 되살리면 된다 — 화면 코드는 그대로 있다.
@@ -46,6 +46,12 @@ export type NavChild = {
   status?: NavStatus;
   /** 플라이아웃에서 항목 아래 한 줄로 붙는 설명. 없으면 라벨만. */
   hint?: string;
+  /** 이 경로들에 있을 때도 이 항목이 활성으로 표시된다(정확 일치만, 하위 경로 아님).
+   *  ★2026-09-27 계획 S1 — "기타" 허브가 흡수한 화면들(리서치 라이브러리 등)에
+   *    있을 때 사이드바에서 "기타"가 켜지도록. */
+  match?: string[];
+  /** 하위 경로(`{href}/…`)에서도 이 항목을 켠다. 상세 화면이 딸린 허브용(산업 밸류체인). */
+  prefix?: boolean;
 };
 
 export type NavItem = {
@@ -72,13 +78,8 @@ export const navItems: NavItem[] = [
         label: "보유 종목",
         href: "/portfolio/holdings",
         status: "live",
-        hint: "종목별 수량 · 평단 · 손익",
-      },
-      {
-        label: "편입비",
-        href: "/portfolio/inclusion",
-        status: "live",
-        hint: "비중 변화 · 신규 편입 · 청산",
+        // ★2026-09-25 편입비 화면을 여기로 합쳤다(편입비·최초 편입·보유기간 열).
+        hint: "종목별 수량 · 평단 · 손익 · 편입비",
       },
       {
         label: "섹터/자산 배분",
@@ -87,19 +88,14 @@ export const navItems: NavItem[] = [
         hint: "섹터 · 자산군 · 통화 비중",
       },
       {
-        // ★알림이 "비중 초과"를 잡아 주는데 **그래서 몇 주를 팔아야 하나**에
-        //   답하는 자리가 없었다. 그 자리를 만든다.
+        // ★2026-09-25 모델 포트폴리오 자리로 바꿨다(탑다운: 자산군 배분 →
+        //   종목 선정 → 리밸런싱). 아직 화면 골격만 있다.
         label: "리밸런싱",
         href: "/portfolio/rebalance",
-        status: "live",
-        hint: "목표 비중 대비 — 몇 주를 사고팔아야 하나",
+        status: "placeholder",
+        hint: "모델 포트폴리오 · 자산군 배분 → 종목 선정",
       },
-      {
-        label: "환노출",
-        href: "/portfolio/fx",
-        status: "live",
-        hint: "USD/KRW 노출 · 환차손익 · 민감도",
-      },
+      // ★2026-09-25 환노출 화면은 없앴다 — 보유 종목 표의 환노출 ON/OFF 토글로 옮겼다.
     ],
   },
   {
@@ -118,41 +114,12 @@ export const navItems: NavItem[] = [
         hint: "종목 수익 · 배당 · 수수료 · 세금으로 분해",
       },
       {
-        label: "매매일지",
-        href: "/trading/journal",
+        // ★2026-09-25 배당 이력 · 입출금 · 월별 현금흐름 · 수수료/세금 · 세금 다섯
+        //   화면을 하나로 합쳤다(사용자 지시). 매매일지는 메뉴에서 뺐다.
+        label: "현금유출입",
+        href: "/income/cashflow",
         status: "live",
-        hint: "진입 근거 · 복기 — 계획 대비 결과까지",
-      },
-      {
-        label: "배당 이력",
-        href: "/income/dividends",
-        status: "live",
-        // ⚠️'캘린더'가 아니다 — 키움은 **받은 배당**만 준다(예상·배당락 없음).
-        hint: "수령한 배당 · 월별 · 종목별",
-      },
-      {
-        label: "입출금",
-        href: "/income/transfers",
-        status: "live",
-        hint: "납입 · 인출 이력",
-      },
-      {
-        label: "월별 현금흐름",
-        href: "/income/monthly",
-        status: "live",
-        hint: "배당 − 비용 · 순납입 · 매매 회전",
-      },
-      {
-        label: "수수료/세금",
-        href: "/trading/costs",
-        status: "live",
-        hint: "거래비용 · 비용률 · 종목별",
-      },
-      {
-        label: "세금",
-        href: "/income/tax",
-        status: "live",
-        hint: "해외주식 양도소득 · 배당소득 (추정)",
+        hint: "입출금 · 배당 · 계좌 현금 · 거래비용 · 세금",
       },
     ],
   },
@@ -170,7 +137,7 @@ export const navItems: NavItem[] = [
         label: "벤치마크 비교",
         href: "/performance/benchmark",
         status: "live",
-        hint: "S&P 500 · 반도체(SOX) 대비 — 원화 환산",
+        hint: "S&P 500 · 반도체(SOX) 대비 · 원화 환산",
       },
       {
         label: "성과 분석",
@@ -183,7 +150,7 @@ export const navItems: NavItem[] = [
         href: "/performance/report",
         status: "live",
         // 다른 화면과 겹치지 않는 부분은 **기간을 고른다**는 것이다.
-        hint: "월·분기·연도별 — 무슨 일이 있었나",
+        hint: "월·분기·연도별",
       },
     ],
   },
@@ -192,25 +159,10 @@ export const navItems: NavItem[] = [
     label: "시장 모니터링",
     icon: TrendingUp,
     children: [
-      {
-        label: "관심종목",
-        href: "/watchlist",
-        status: "live",
-        hint: "실시간 시세 · 목표가 · 52주 위치",
-      },
-      {
-        label: "시장 지표",
-        href: "/market",
-        status: "live",
-        hint: "지수 · 금리 · 환율 · 원자재 · 크립토",
-      },
+      // ★2026-09-27 계획 S1 — 관심종목·시장 지표·계절성·AI Key Data 는 리서치
+      //   그룹의 "시장 리서치"(/research/market, S2) 로 흡수된다. 여기 남기면
+      //   같은 화면이 두 메뉴에서 보여 어느 쪽이 정본인지 헷갈린다.
       { label: "매크로", href: "/macro", status: "live", hint: "물가 · 고용 · 금리 · 성장 (FRED)" },
-      {
-        label: "AI Key Data",
-        href: "/ai-key-data",
-        status: "live",
-        hint: "AI 가속기 · SDK 채택 (Epoch AI · npm)",
-      },
     ],
   },
   {
@@ -219,45 +171,69 @@ export const navItems: NavItem[] = [
     //   원래 IA 에는 후자의 자리가 없었다. 반도체·AI 학습이 당장의 목표다.
     label: "리서치",
     icon: BookOpen,
-    href: "/research",
+    // ★2026-09-27 계획 S1 §12-7 — 그룹 첫 화면을 "시장 리서치"로 바꿨다.
+    //   리서치 라이브러리는 "기타" 허브로 옮겨 더는 그룹의 얼굴이 아니다.
+    href: "/research/market",
     children: [
       {
-        label: "리서치 라이브러리",
-        href: "/research",
-        status: "placeholder",
-        hint: "보유 자료 인덱스 (05_리서치)",
+        // ★2026-09-27 계획 S1 — 관심종목·시장 지표·계절성·AI Key Data 를 탭으로 통합.
+        label: "시장 리서치",
+        href: "/research/market",
+        status: "live",
+        hint: "관심종목 · 시장지표 · 계절성 · AI Key Data",
       },
       {
-        label: "종목 리서치",
+        // 대분류 → 중분류 → 기업 카드 뷰. 데이터: storage/valuechain/*.ttl.
+        label: "산업 밸류체인",
+        href: "/research/valuechain",
+        // 섹터 상세(/research/valuechain/bio)에서도 이 항목이 켜지게.
+        prefix: true,
+        status: "live",
+        hint: "섹터 허브 → 섹터별 카드 뷰",
+      },
+      {
+        // ★보유·관심 종목별 실적/거장/Form4/공시 보유 현황 패널(현황판)이 붙었다.
+        label: "종목 단위 리서치",
         href: "/research/stocks",
-        status: "placeholder",
-        hint: "종목별 노트 · 투자 아이디어",
+        status: "live",
+        hint: "보유·관심 종목별 데이터 보유 현황",
       },
       {
-        label: "산업 리서치",
-        href: "/research/industry",
-        status: "placeholder",
-        hint: "반도체 · AI · 2차전지",
+        // ★2026-09-27 계획 A5 — 원본 13F기관내부자(collector 프록시)를 API 로 옮겼다.
+        label: "거장 포트폴리오(13F)",
+        href: "/research/guru",
+        status: "live",
+        hint: "거장 23명 분기 변동 · 내 보유 × 거장",
       },
       {
-        label: "영상 분석",
-        href: "/research/video",
-        status: "placeholder",
-        hint: "YouTube 자막 수집 · 요약",
+        // ★2026-09-27 계획 B — 어닝모니터 이식. B6 에서 `/stock/us` 를 대체한다.
+        label: "어닝 콜 / 이슈",
+        href: "/research/earnings",
+        status: "live",
+        hint: "보유·관심종목 발표 · EPS 서프라이즈 · 관전포인트",
       },
       {
-        label: "학습 노트",
-        href: "/research/notes",
-        status: "placeholder",
-        hint: "반도체 · AI 개념 정리",
-      },
-      { label: "미국 어닝/이슈", href: "/stock/us", status: "live" },
-      {
-        label: "공시",
+        label: "종목 공시",
         href: "/research/filings",
         status: "live",
         // DART 는 넣지 않았다 — 보유 17종목이 전부 미국 주식이라 대상이 없다.
         hint: "보유 종목 SEC 공시 · 8-K 항목별",
+      },
+      {
+        // ★2026-09-27 계획 S1 §12-7 — 그룹 3단계 중첩 대신 허브 페이지로.
+        //   여기 흡수된 화면(리서치 라이브러리·산업 리서치·학습 노트·내부자
+        //   거래·미국 어닝)에 있을 때도 이 항목이 켜지도록 `match` 를 준다.
+        label: "기타",
+        href: "/research/etc",
+        status: "live",
+        hint: "리서치 라이브러리 · 산업 리서치 · 학습 노트 · 내부자 거래 · 미국 어닝(구)",
+        match: [
+          "/research",
+          "/research/industry",
+          "/research/notes",
+          "/research/insiders",
+          "/stock/us",
+        ],
       },
     ],
   },
@@ -266,7 +242,7 @@ export const navItems: NavItem[] = [
     icon: Newspaper,
     children: [
       { label: "텔레그램", href: "/telegram-news", status: "placeholder",
-        hint: "collector 필요 — 현재 미가동",
+        hint: "collector 필요 · 미가동",
       },
       {
         // ★"기사"를 **시장 뉴스**로 바꿨다. 그대로 만들면 보유종목 뉴스와
@@ -281,7 +257,15 @@ export const navItems: NavItem[] = [
         label: "보유종목 뉴스",
         href: "/news/holdings",
         status: "live",
-        hint: "내 포지션에 걸린 일 — 제목에 언급된 기사만",
+        hint: "내 포지션에 걸린 일",
+      },
+      {
+        // ★2026-09-27 계획 S1 — 리서치 그룹의 "영상 분석"을 뉴스로 옮겼다.
+        //   유튜브 시장 코멘터리는 리서치 자료보다 뉴스에 더 가깝다.
+        label: "유튜브 분석",
+        href: "/news/video",
+        status: "placeholder",
+        hint: "YouTube 자막 수집 · 요약",
       },
     ],
   },
@@ -308,7 +292,7 @@ export const navItems: NavItem[] = [
         href: "/settings/alerts",
         status: "live",
         // ⚠️아직 **보내지 않는다** — 조건을 세우고 판정하는 데까지다.
-        hint: "조건 판정 — 전달은 아직 없음",
+        hint: "조건 판정 · 전달 없음",
       },
     ],
   },

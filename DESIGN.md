@@ -282,7 +282,7 @@ Surfaces are defined by hairlines and the faintest layered shadows rather than h
 
 ## Colors
 
-> 출처: GE 하우스 스타일 정본 `S:\GE\_Team\07_회의자료\기타\GE_template.md`. 대부분을 회색·네이비로 조용히 두고, 강조는 오직 블루 한 계열로만 준다.
+> 대부분을 회색·네이비로 조용히 두고, 강조는 오직 블루 한 계열로만 준다.
 
 ### 브랜드 & 포인트
 - **메인 블루** (`{colors.main-blue}` — #6390BF): 상단 헤더 밴드와 브랜드 대표색. 화면·리포트의 얼굴.

@@ -797,7 +797,7 @@ function ServerModal({
                   className={inputClass}
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="192.168.194.121"
+                  placeholder="10.0.0.10"
                 />
               </Field>
             </>
@@ -808,7 +808,7 @@ function ServerModal({
                   className={inputClass}
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="192.168.0.10"
+                  placeholder="10.0.0.10"
                 />
               </Field>
               <Field label="Port">

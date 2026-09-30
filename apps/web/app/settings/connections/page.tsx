@@ -81,7 +81,7 @@ export default function ConnectionsPage() {
               connections.isLoading
                 ? "불러오는 중…"
                 : items.length > 0
-                  ? `${items.length}건 — 무엇을 얼마나 들고 있나`
+                  ? `${items.length}건`
                   : "아직 등록된 연동 없음"
             }
           >
@@ -109,7 +109,7 @@ export default function ConnectionsPage() {
                     <p className="mt-0.5 text-[11px] font-medium text-ink-faint">
                       {connections.isError
                         ? "API 서버에 연결하지 못했습니다."
-                        : "REST OpenAPI — 서버 .env 에 키를 넣고 동기화하면 등록됩니다."}
+                        : "REST OpenAPI"}
                     </p>
                   </div>
                   <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-extrabold text-ink-muted">
@@ -135,7 +135,6 @@ export default function ConnectionsPage() {
           {/* 시세 소스 — 계좌와 다른 관심사다. */}
           <StubCard
             title="시세 소스"
-            subtitle="보유 종목이 지금 얼마인가"
             className="xl:col-span-2"
           >
             <div className="grid gap-2.5 xl:grid-cols-2">
@@ -180,11 +179,6 @@ export default function ConnectionsPage() {
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-[11px] font-medium leading-snug text-ink-faint">
-              시세 소스는 여러 개를 순서대로 시도합니다 — 앞의 소스가 못 준 종목만
-              다음 소스로 넘어갑니다. 한 소스가 막혀도(예: IP 허용목록) 화면이 통째로
-              비지 않습니다.
-            </p>
           </StubCard>
         </div>
       </PageContainer>

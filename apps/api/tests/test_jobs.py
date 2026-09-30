@@ -123,3 +123,36 @@ def test_job_stats(client):
         "success": 0,
         "failed": 0,
     }
+
+
+def test_sources_state(client, db):
+    """/jobs/sources: worker 생존 여부와 원천의 마지막 실패 종류를 그대로 보여 준다."""
+    from app.models import SourceStatus
+
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            SourceStatus(source="worker:sec_crawl", kind="worker", last_ok_at=now - timedelta(seconds=40)),
+            SourceStatus(source="worker:llm", kind="worker", last_ok_at=now - timedelta(minutes=10)),
+            # 성공 뒤에 시간초과 — Nasdaq 식 차단 신호가 '마지막 상태'로 보여야 한다.
+            SourceStatus(
+                source="nasdaq",
+                kind="source",
+                last_ok_at=now - timedelta(hours=2),
+                last_error_at=now - timedelta(minutes=5),
+                last_error_kind="timeout",
+            ),
+            SourceStatus(source="sec", kind="source", last_ok_at=now, last_error_at=now - timedelta(hours=1),
+                         last_error_kind="403"),
+        ]
+    )
+    db.commit()
+
+    body = client.get("/api/v1/jobs/sources").json()
+    states = {i["source"]: i["state"] for i in body["items"]}
+    assert states == {
+        "worker:sec_crawl": "alive",
+        "worker:llm": "down",
+        "nasdaq": "timeout",
+        "sec": "ok",
+    }

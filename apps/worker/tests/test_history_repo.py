@@ -45,7 +45,7 @@ def _account(db):
 
 def _trade(**kw):
     defaults = dict(
-        trade_date=date(2026, 9, 16), trade_no="000000001", side="BUY",
+        trade_date=date(2026, 9, 16), trade_no="000000001", market="US", side="BUY",
         ticker="HUT", name="허트8", currency="USD", quantity=Decimal("1"),
         price=Decimal("95.43"), amount_local=Decimal("95.43"),
     )

@@ -5,14 +5,15 @@ collector 가 `input/raw` 마운트(:ro)에서 CSV·zip 을 직독해 만든 pay
 
 ⚠️**동거 상태**: 같은 [AI Key Data] 페이지의 기존 카드 셋(`compute-index` · `policy-rate` ·
   `rate-topics`)은 아직 `/api/v1/stock-monitor` 밑에 있다. 역사적 표류(컴퓨팅 지수가 종목
-  모니터에서 이 탭으로 이사했다)인데, 이번에 같이 옮기면 `lib/api.ts` 3곳과 컴포넌트 4개를
+  모니터에서 이 탭으로 이사했다)인데, 같이 옮기면 `lib/api.ts` 3곳과 컴포넌트 4개를
   동시에 고치는 breaking rename 이 되고 이번 기능과 무관한 회귀 위험이 생긴다.
-  → **신규만 여기에 붙이고 기존 이전은 별도 작업으로 분리한다.** 다음 사람이 두 군데를
-  헤매지 않도록 여기 적어 둔다.
+  → 경로는 그대로 두고 **핸들러만** 이 파일 아래쪽 `legacy_router` 로 모아 뒀다
+  ([종목 모니터] 화면 철거, 2026-09-23 — 그 화면의 `stock_monitor.py` 는 없어졌다).
+  경로 이전은 여전히 별도 작업이다(ws2 설계 §2.3).
 
-★`_proxy_collector` 는 `inav` 에서 가져다 쓴다. `stock_monitor.py` · `macro.py` 가 같은
-  선례다 — 헬퍼 안에 "httpx 의 timeout 은 DNS 해석을 안 묶는다" 같은 사연이 들어 있어서
-  복제하면 한쪽만 고쳐진다.
+★`_proxy_collector` 는 `inav` 에서 가져다 쓴다. `macro.py` 가 같은 선례다 — 헬퍼 안에
+  "httpx 의 timeout 은 DNS 해석을 안 묶는다" 같은 사연이 들어 있어서 복제하면 한쪽만
+  고쳐진다.
 """
 from fastapi import APIRouter, Header, Response
 
@@ -117,3 +118,48 @@ async def get_tool_calling(
       둘뿐이고, 비중은 `stats.share_pct` 에 숫자 한 개로만 실린다.
     """
     return await _proxy_collector("/tool-calling", if_none_match)
+
+
+# ── 레거시 경로(`/api/v1/stock-monitor/…`) ───────────────────────────────────
+# 이 세 카드는 [AI Key Data] 화면 것이지만 경로만 옛 [종목 모니터] 프리픽스에 남아
+# 있다(파일 맨 위 "동거 상태" 참조). 그 화면을 철거하면서 핸들러를 여기로 옮겼다 —
+# 경로를 같이 바꾸면 `lib/api.ts` 와 컴포넌트를 동시에 고치는 breaking rename 이라
+# 화면 철거와 분리했다.
+legacy_router = APIRouter(prefix="/api/v1/stock-monitor", tags=["ai-key-data"])
+
+
+@legacy_router.get("/compute-index")
+async def get_compute_index(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """[컴퓨팅 지수 모니터링] — GPU 렌탈 지수 3분할(H100 · B200 · B200/H100 배수).
+
+    원천은 AI Key Data의 GPU임대지수_주가_통합.xlsx (블룸버그 내보내기).
+    지수 목록의 정본은 collector compute_index.INDICES.
+    """
+    return await _proxy_collector("/compute-index", if_none_match)
+
+
+@legacy_router.get("/policy-rate")
+async def get_policy_rate(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """[정책금리] — FOMC 금리 결정(수준 %) 시계열.
+
+    원천은 AI Key Data의 macro_releases.csv 중 event=RATE 행. 회의와 회의
+    사이엔 금리가 유지되므로 화면은 계단으로 그린다(payload 는 결정 시점만 담는다).
+    """
+    return await _proxy_collector("/policy-rate", if_none_match)
+
+
+@legacy_router.get("/rate-topics")
+async def get_rate_topics(
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """[금리 5주제] — 하이퍼스케일러 채권발행 · 인플레지표 · WTI · ADP · FOMC 내재확률.
+
+    원천은 AI Key Data 의 `input/raw/금리/금리_2.xlsx` 한 장(신상품팀 공모손차 데이터
+    사본). 다섯 카드가 같은 파일을 보므로 엔드포인트도 하나로 둔다 — 주제별로 나누면
+    같은 1.6MB 워크북을 다섯 번 연다.
+    """
+    return await _proxy_collector("/rate-topics", if_none_match)

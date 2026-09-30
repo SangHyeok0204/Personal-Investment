@@ -2,19 +2,25 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
 import { Modal } from "@/components/ui/modal";
+import { StackedBarChart, type StackColumn } from "@/components/charts/stacked-bar-chart";
+import { CHART_MUTED } from "@/components/charts/donut-chart";
 import {
+  CardEmpty,
   Cell,
   DataTable,
+  ListButton,
   NotConnectedBanner,
   SourceDownBanner,
   StatTile,
   StubCard,
 } from "@/components/stub";
-import { getFilings, type Filings } from "@/lib/api";
+import { getFilings, type Filing, type Filings } from "@/lib/api";
+import { CoveragePanel } from "@/components/research/coverage-panel";
 import { cn } from "@/lib/utils";
 
 // 공시 — 보유 종목이 SEC 에 무엇을 신고했나.
@@ -29,6 +35,18 @@ import { cn } from "@/lib/utils";
 //   6개가 여기 해당한다 — "공시 없음"으로 적으면 거짓말이 된다.
 //   ⚠️단, 전부 그런 건 아니다 — GLD(금 SPDR)는 상품신탁이라 10-K 를 낸다.
 //     ETF 라고 하드코딩하지 않고 SEC 에 CIK 가 있는지로만 판단한다.
+//
+// ★2026-09-25 사용자 지시(전체 메뉴 공통 패턴): 본문은 **월별 막대**(서식 성격별
+//   누적), 목록은 막대·요약 칸·종목 행을 눌러 여는 팝업. 조회 구간이 180일이라
+//   월 단위가 맞다 — 일 단위로 쪼개면 막대가 180개라 읽히지 않는다.
+
+// 막대 색은 아래 배지 색과 같은 계열로 둔다 — 막대와 목록의 배지를 눈이 잇도록.
+const CATEGORY_COLORS: Record<string, string> = {
+  "실적·정기": "#4C2C19",
+  수시: "#6390BF",
+  지분: "#A33A2A",
+  기타: CHART_MUTED,
+};
 
 const CATEGORY_TONE: Record<string, string> = {
   "실적·정기": "bg-ge-navy/10 text-ge-navy",
@@ -51,9 +69,11 @@ function whenLabel(iso: string): string {
 }
 
 export default function FilingsPage() {
+  const router = useRouter();
   const { accountId, connected } = useAccount();
   const [category, setCategory] = useState<string | null>(null);
-  const [notesOpen, setNotesOpen] = useState(false);
+  // 막대·요약 칸·종목 행 → 그 범위의 공시 목록. null 이면 닫힘.
+  const [scope, setScope] = useState<ListScope | null>(null);
 
   const filings = useQuery({
     queryKey: ["filings", accountId],
@@ -63,27 +83,56 @@ export default function FilingsPage() {
   });
 
   const data = filings.data;
-  const rows = useMemo(
-    () =>
-      (data?.filings ?? []).filter(
-        (f) => category == null || f.category === category,
-      ),
-    [data, category],
-  );
+  const all = data?.filings ?? [];
+  const inScope = all.filter((f) => scope != null && matchScope(f, scope));
+  const rows = inScope.filter((f) => category == null || f.category === category);
+
+  const monthColumns: StackColumn[] = useMemo(() => {
+    const acc = new Map<string, Map<string, number>>();
+    for (const f of data?.filings ?? []) {
+      const m = f.filed_date.slice(0, 7);
+      const e = acc.get(m) ?? new Map<string, number>();
+      e.set(f.category, (e.get(f.category) ?? 0) + 1);
+      acc.set(m, e);
+    }
+    const order = data?.categories ?? [];
+    return [...acc.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([m, e]) => ({
+        key: m,
+        label: m,
+        total: [...e.values()].reduce((sum, v) => sum + v, 0),
+        segments: order
+          .map((c) => ({ key: c, label: c, value: e.get(c) ?? 0 }))
+          .filter((x) => x.value > 0),
+      }));
+  }, [data]);
+
+  const openScope = (next: ListScope) => {
+    setCategory(null);
+    setScope(next);
+  };
 
   const recent30 = (data?.filings ?? []).filter((f) => daysAgo(f.filed_date) <= 30);
   const sourceDown = !filings.isLoading && (filings.isError || data?.source_ok === false);
-  const notCovered = (data?.tickers ?? []).filter((t) => t.cik == null);
+  const emptyText = filings.isLoading
+    ? "불러오는 중…"
+    : sourceDown
+      ? "SEC 에서 받지 못했습니다"
+      : connected
+        ? "이 구간에 공시가 없습니다"
+        : "계좌를 연동하면 보유 종목 공시가 표시됩니다";
 
   return (
     <>
-      <Topbar title="공시" subtitle="보유 종목이 SEC 에 무엇을 신고했나" />
+      <Topbar title="종목 공시" />
       <PageContainer fit>
+        <CoveragePanel kind="filings" />
         {!connected && !filings.isLoading && <NotConnectedBanner what="보유 종목" />}
         {sourceDown && connected && (
           <SourceDownBanner
             source="SEC EDGAR"
-            detail="미국 공시 원천입니다. 받지 못했으므로 아래가 비어 있어도 '공시 없음'이 아닙니다."
+            detail="수집 실패"
           />
         )}
 
@@ -96,6 +145,8 @@ export default function FilingsPage() {
                 ? `${data.window_days}일 내 전체 ${data.filings.length}건`
                 : "내부자 서식 제외"
             }
+            actionHint="눌러서 목록 보기"
+            onClick={() => openScope({ kind: "recent" })}
             loading={filings.isLoading}
           />
           <StatTile
@@ -106,6 +157,8 @@ export default function FilingsPage() {
                 : null
             }
             hint="10-K · 10-Q · 20-F"
+            actionHint="눌러서 목록 보기"
+            onClick={() => openScope({ kind: "category", category: "실적·정기" })}
             loading={filings.isLoading}
           />
           <StatTile
@@ -114,6 +167,8 @@ export default function FilingsPage() {
               data ? `${data.filings.filter((f) => f.category === "수시").length}건` : null
             }
             hint="8-K · 증권신고 · 주총"
+            actionHint="눌러서 목록 보기"
+            onClick={() => openScope({ kind: "category", category: "수시" })}
             loading={filings.isLoading}
           />
           <StatTile
@@ -124,8 +179,9 @@ export default function FilingsPage() {
                 ? `최근 ${data.insider_window_days}일 · 그중 30일 내 ${data.insider_recent_total}건`
                 : "3 · 4 · 5 · 144"
             }
-            actionHint="눌러서 왜 안 보여주는지"
-            onClick={() => setNotesOpen(true)}
+            // ★계획 A6 — 판단이 담긴 거래만 센 순매수는 `내부자 거래` 화면에 있다.
+            actionHint="눌러서 내부자 거래 화면"
+            onClick={() => router.push("/research/insiders")}
             loading={filings.isLoading}
           />
         </div>
@@ -139,89 +195,36 @@ export default function FilingsPage() {
           )}
         >
           <StubCard
-            title="공시"
-            subtitle={`${rows.length}건 · 최근이 위 · 눌러서 SEC 원문`}
+            title="월별 공시"
+            subtitle={`${all.length}건 · 막대를 누르면 그 달 공시`}
+            action={<ListButton onClick={() => openScope({ kind: "all" })} />}
             scrollBody
-            action={
-              <div className="flex shrink-0 gap-1">
-                <Chip active={category == null} onClick={() => setCategory(null)}>
-                  전체
-                </Chip>
-                {(data?.categories ?? []).map((c) => (
-                  <Chip
-                    key={c}
-                    active={category === c}
-                    onClick={() => setCategory(c)}
-                  >
-                    {c}
-                  </Chip>
-                ))}
-              </div>
-            }
           >
-            <DataTable
-              columns={["종목", "공시", "내용", "제출일"]}
-              align={["left", "left", "left", "right"]}
-              empty={
-                filings.isLoading
-                  ? "불러오는 중…"
-                  : sourceDown
-                    ? "SEC 에서 받지 못했습니다"
-                    : connected
-                      ? "이 구간에 공시가 없습니다"
-                      : "계좌를 연동하면 보유 종목 공시가 표시됩니다"
-              }
-            >
-              {rows.map((f) => (
-                <tr
-                  key={`${f.ticker}-${f.url}`}
-                  className="border-b border-hairline transition-colors hover:bg-canvas-soft"
-                >
-                  <Cell left strong>
-                    <span className="flex items-center gap-1.5">
-                      <span className="max-w-[110px] truncate">
-                        {f.company ?? f.ticker}
-                      </span>
-                      <span className="shrink-0 text-[10px] font-bold text-ink-faint">
-                        {f.ticker}
-                      </span>
-                    </span>
-                  </Cell>
-                  <Cell left>
-                    <span className="flex items-center gap-1.5">
-                      <span
-                        className={cn(
-                          "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold",
-                          CATEGORY_TONE[f.category] ?? CATEGORY_TONE["기타"],
-                        )}
-                      >
-                        {f.form}
-                      </span>
-                      <span className="truncate text-[11px] font-semibold text-ink-secondary">
-                        {f.form_label}
-                      </span>
-                    </span>
-                  </Cell>
-                  <Cell left tone="muted">
-                    {/* 8-K 는 항목 코드가 곧 내용이다. 없으면 비워 둔다 —
-                        "내용 없음"이라고 적으면 틀린 말이 된다. */}
-                    <span className="block max-w-[260px] truncate text-[11px]">
-                      {f.item_labels.length > 0 ? f.item_labels.join(" · ") : "—"}
-                    </span>
-                  </Cell>
-                  <Cell>
-                    <a
-                      href={f.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold text-ge-point underline-offset-2 hover:underline"
-                    >
-                      {whenLabel(f.filed_date)} ↗
-                    </a>
-                  </Cell>
-                </tr>
+            {filings.isLoading || all.length === 0 ? (
+              <CardEmpty text={emptyText} />
+            ) : (
+              <StackedBarChart
+                columns={monthColumns}
+                colors={CATEGORY_COLORS}
+                height={420}
+                formatTotal={(v) => `${v}건`}
+                selected={scope?.kind === "month" ? scope.month : null}
+                onSelect={(key, sticky) => {
+                  if (sticky && key) openScope({ kind: "month", month: key });
+                }}
+              />
+            )}
+            <p className="mt-2 text-[11px] leading-snug text-ink-muted">
+              {(data?.categories ?? []).map((c) => (
+                <span key={c} className="mr-2 inline-flex items-center gap-1">
+                  <span style={{ color: CATEGORY_COLORS[c] ?? CHART_MUTED }} className="font-bold">
+                    ■
+                  </span>
+                  {c}
+                </span>
               ))}
-            </DataTable>
+              · 제출일 기준 · 첫/이번 달은 일부만 · 내부자 서식(3·4·5·144) 제외
+            </p>
           </StubCard>
 
           <StubCard
@@ -234,84 +237,107 @@ export default function FilingsPage() {
             scrollBody
           >
             {filings.isLoading ? (
-              <Empty text="불러오는 중…" />
+              <CardEmpty text="불러오는 중…" />
             ) : (data?.tickers.length ?? 0) === 0 ? (
-              <Empty text="보유 종목이 없습니다" />
+              <CardEmpty text="보유 종목이 없습니다" />
             ) : (
-              <Coverage data={data!} onExplain={() => setNotesOpen(true)} />
+              <Coverage
+                data={data!}
+                onPick={(ticker) => openScope({ kind: "ticker", ticker })}
+              />
             )}
           </StubCard>
         </div>
       </PageContainer>
 
       <Modal
-        open={notesOpen}
-        onClose={() => setNotesOpen(false)}
-        title="이 화면 읽는 법"
-        subtitle="무엇을 빼고 무엇을 남겼나"
+        open={scope != null}
+        onClose={() => setScope(null)}
+        title={scope ? scopeTitle(scope, data) : ""}
+        subtitle={`${rows.length}건 · 최근이 위 · 제출일을 누르면 SEC 원문`}
+        width={820}
       >
-        <ul className="space-y-2.5 text-[12px] leading-relaxed text-ink-secondary">
-          <li>
-            <strong>내부자 서식을 나열하지 않았습니다.</strong> 엔비디아의 최근 공시
-            1,001건 중 <strong>803건이 Form 4·144</strong>(임원 주식 거래
-            서류)였습니다. 실제로 읽을 만한 건 8-K 62건 · 10-Q 19건 · 10-K 6건
-            뿐입니다. 그대로 쏟으면 중요한 공시가 서류 더미에 묻히므로 건수로만
-            보여 줍니다{data ? ` (최근 ${data.insider_window_days}일 ${data.insider_total}건)` : ""}.
-          </li>
-          <li>
-            <strong>대신 &quot;몰렸나&quot;는 봅니다.</strong> 고르게 났다면 최근
-            1/3 구간(30일)에 33% 쯤 들어옵니다 — 그보다 한참 높으면 무슨 일이
-            있었다는 뜻입니다(락업 해제·베스팅·정기 매도 계획 개시 등).
-            종목별 표의 <strong>최근 30일</strong> 칸이 그 몫이고, 60% 를 넘으면
-            진하게 적습니다.
-          </li>
-          <li>
-            <strong>다만 방향은 모릅니다.</strong> 서식 4 는 매수·매도·부여를 모두
-            담는데 SEC <strong>제출 목록에는 그 구분도, 누가 냈는지도 없습니다</strong>
-            — 그건 서식 원문을 건마다 받아야 나옵니다. 그래서 이 화면은 &quot;내부자가
-            팔고 있다&quot;고 말하지 않습니다. 궁금하면 그 종목의 SEC 페이지를 직접
-            여세요.
-          </li>
-          <li>
-            <strong>ETF 는 &quot;공시 없음&quot;이 아닙니다.</strong> 개별 기업 공시
-            대상이 아니라 신탁 단위로 냅니다. 다만 전부 그런 건 아니라{" "}
-            <strong>ETF 라고 하드코딩하지 않고</strong> SEC 에 CIK 가 있는지로만
-            판단합니다 — 실제로 GLD(금 SPDR)는 상품신탁이라 10-K 를 냅니다.
-          </li>
-          <li>
-            <strong>8-K 의 항목 코드를 한국어로 옮겼습니다.</strong>
-            &quot;8-K 2.02&quot;는 아무 뜻도 전달하지 못합니다 — &quot;실적
-            발표&quot;여야 읽힙니다. 모르는 코드는 지어내지 않고 숫자 그대로 둡니다.
-          </li>
-          <li>
-            <strong>중요도를 우리가 매기지 않았습니다.</strong> 어떤 8-K 가 중요한지는
-            내용을 읽어야 알 수 있고, 우리는 그걸 모릅니다. 서식의 성격으로만
-            나눕니다.
-          </li>
-          <li>
-            <strong>SEC 는 연락처가 담긴 User-Agent 를 요구합니다.</strong>{" "}
-            {data?.user_agent_is_default ? (
-              <>
-                지금은 앱 이름만으로 요청하고 있습니다 —{" "}
-                <strong>회원님 이메일을 말없이 보내지 않습니다.</strong> 정식으로
-                요청하려면 <code className="rounded bg-canvas-soft px-1">.env</code> 의{" "}
-                <code className="rounded bg-canvas-soft px-1">SEC_USER_AGENT</code> 에
-                본인 연락처를 넣으세요.
-              </>
-            ) : (
-              <>
-                <code className="rounded bg-canvas-soft px-1">SEC_USER_AGENT</code> 가
-                설정돼 있습니다.
-              </>
-            )}
-          </li>
-        </ul>
+        <div className="mb-2 flex flex-wrap gap-1">
+          <ModalChip active={category == null} onClick={() => setCategory(null)}>
+            전체 {inScope.length}
+          </ModalChip>
+          {(data?.categories ?? [])
+            .filter((c) => scope?.kind !== "category" || scope.category === c)
+            .map((c) => (
+              <ModalChip key={c} active={category === c} onClick={() => setCategory(c)}>
+                {c} {inScope.filter((f) => f.category === c).length}
+              </ModalChip>
+            ))}
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto">
+          <DataTable
+            columns={["종목", "공시", "내용", "제출일"]}
+            align={["left", "left", "left", "right"]}
+            empty={emptyText}
+          >
+            {rows.map((f) => (
+              <tr
+                key={`${f.ticker}-${f.url}`}
+                className="border-b border-hairline transition-colors hover:bg-canvas-soft"
+              >
+                <Cell left strong>
+                  <span className="flex items-center gap-1.5">
+                    <span className="max-w-[140px] truncate">
+                      {f.company ?? f.ticker}
+                    </span>
+                    <span className="shrink-0 text-[10px] font-bold text-ink-faint">
+                      {f.ticker}
+                    </span>
+                  </span>
+                </Cell>
+                <Cell left>
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold",
+                        CATEGORY_TONE[f.category] ?? CATEGORY_TONE["기타"],
+                      )}
+                    >
+                      {f.form}
+                    </span>
+                    <span className="truncate text-[11px] font-semibold text-ink-secondary">
+                      {f.form_label}
+                    </span>
+                  </span>
+                </Cell>
+                <Cell left tone="muted">
+                  {/* 8-K 는 항목 코드가 곧 내용이다. 없으면 비워 둔다 —
+                      "내용 없음"이라고 적으면 틀린 말이 된다. */}
+                  <span className="block max-w-[280px] truncate text-[11px]">
+                    {f.item_labels.length > 0 ? f.item_labels.join(" · ") : "—"}
+                  </span>
+                </Cell>
+                <Cell>
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-ge-point underline-offset-2 hover:underline"
+                  >
+                    {whenLabel(f.filed_date)} ↗
+                  </a>
+                </Cell>
+              </tr>
+            ))}
+          </DataTable>
+        </div>
       </Modal>
     </>
   );
 }
 
-function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void }) {
+function Coverage({
+  data,
+  onPick,
+}: {
+  data: Filings;
+  onPick: (ticker: string) => void;
+}) {
   const covered = data.tickers.filter((t) => t.cik != null);
   const notCovered = data.tickers.filter((t) => t.cik == null);
   const failed = data.tickers.filter((t) => !t.ok);
@@ -320,8 +346,7 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
     <div className="space-y-3">
       {failed.length > 0 && (
         <p className="rounded-lg bg-ask-soft px-2.5 py-2 text-[11px] font-semibold leading-snug text-ask">
-          {failed.map((t) => t.ticker).join(", ")} 은(는) 받지 못했습니다 —
-          공시가 없는 것이 아닙니다.
+          {failed.map((t) => t.ticker).join(", ")} 받지 못함 · 공시 없음과는 다름
         </p>
       )}
 
@@ -331,7 +356,11 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
         empty="표시할 종목이 없습니다"
       >
         {covered.map((t) => (
-          <tr key={t.ticker} className="border-b border-hairline">
+          <tr
+            key={t.ticker}
+            onClick={() => onPick(t.ticker)}
+            className="cursor-pointer border-b border-hairline transition-colors hover:bg-canvas-soft"
+          >
             <Cell left strong>
               <span className="flex items-center gap-1.5">
                 <span className="max-w-[110px] truncate">{t.name ?? t.ticker}</span>
@@ -377,7 +406,7 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
             SEC 개별 공시 대상 아님 ({notCovered.length})
           </p>
           <p className="mb-1.5 text-[11px] leading-snug text-ink-muted">
-            신탁 단위로 공시합니다. <strong>공시가 없는 것이 아닙니다.</strong>
+            신탁 단위 공시 · <strong>공시 없음 아님</strong>
           </p>
           <div className="flex flex-wrap gap-1">
             {notCovered.map((t) => (
@@ -390,20 +419,53 @@ function Coverage({ data, onExplain }: { data: Filings; onExplain: () => void })
               </span>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={onExplain}
-            className="mt-2 text-[11px] font-bold text-ge-point underline-offset-2 hover:underline"
-          >
-            왜 이렇게 나누나 →
-          </button>
         </div>
       )}
     </div>
   );
 }
 
-function Chip({
+type ListScope =
+  | { kind: "all" }
+  | { kind: "recent" }
+  | { kind: "month"; month: string }
+  | { kind: "category"; category: string }
+  | { kind: "ticker"; ticker: string };
+
+function matchScope(f: Filing, scope: ListScope): boolean {
+  switch (scope.kind) {
+    case "all":
+      return true;
+    case "recent":
+      return daysAgo(f.filed_date) <= 30;
+    case "month":
+      return f.filed_date.startsWith(scope.month);
+    case "category":
+      return f.category === scope.category;
+    case "ticker":
+      return f.ticker === scope.ticker;
+  }
+}
+
+function scopeTitle(scope: ListScope, data: Filings | undefined): string {
+  switch (scope.kind) {
+    case "all":
+      return `공시 전체 (최근 ${data?.window_days ?? "—"}일)`;
+    case "recent":
+      return "최근 30일 공시";
+    case "month":
+      return `${scope.month} 공시`;
+    case "category":
+      return `${scope.category} 공시`;
+    case "ticker": {
+      const t = data?.tickers.find((x) => x.ticker === scope.ticker);
+      return `${t?.name ?? scope.ticker} (${scope.ticker}) 공시`;
+    }
+  }
+}
+
+/** 팝업 안(밝은 바탕)의 서식 성격 필터. */
+function ModalChip({
   active,
   onClick,
   children,
@@ -416,9 +478,12 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
         "rounded-full px-2.5 py-1 text-[11px] font-bold transition-colors",
-        active ? "bg-white text-ge-navy" : "bg-white/15 text-white hover:bg-white/25",
+        active
+          ? "bg-ge-header text-white"
+          : "bg-canvas-soft text-ink-secondary hover:bg-ge-blue-bg",
       )}
     >
       {children}
@@ -426,10 +491,3 @@ function Chip({
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center px-4 text-center">
-      <span className="text-[12px] font-semibold text-ink-faint">{text}</span>
-    </div>
-  );
-}

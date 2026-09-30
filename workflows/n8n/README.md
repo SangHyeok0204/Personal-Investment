@@ -59,7 +59,7 @@ n8n  →  /files/trigger/{job}.request.json   (컨테이너)
 n8n  ←  /files/trigger/{job}.result.json    ← 윈도우 워처가 기록
 ```
 
-**트리거 폴더는 S: 가 아니라 WSL ext4 다**(2026-08-12 이전). 처음엔 `S:\GE\raw\data\주간가격모니터\_trigger`
+**트리거 폴더는 S: 가 아니라 WSL ext4 다**(2026-08-12 이전). 처음엔 (사내 PC 경로)의 `_trigger`
 였는데 n8n 이 `The file "..." is not writable` 로 거부했다. SMB/9p 탓이라 짐작하고 옮겼지만 **그 짐작은
 틀렸다** — ext4 에서도 같은 오류가 났다. 진짜 원인은 `N8N_RESTRICT_FILE_ACCESS_TO` 의 기본값이 빈 값이
 아니라 `~/.n8n-files` 인 것이었고, compose 에서 `/files` 로 지정해 풀었다. 지금 자리를 유지하는 건 이 폴더가
@@ -69,7 +69,7 @@ n8n  ←  /files/trigger/{job}.result.json    ← 윈도우 워처가 기록
 **윈도우 쪽에 상주 워처가 하나 필요하다**: `주간가격모니터\run_trigger_watch.bat` 을 **claude CLI 가 있는 PC**
 에서 창 하나 켜 둔다(2026-08-12 재기동 기준 호스트명 `글로벌주식파트3H`, 생존 포트 59323). 20초마다 트리거
 폴더를 본다. 수집 워처(`run_watch.bat`, .199.120)와는 별개이고 같은 기계일 필요도 없다 — 둘 다 S: 를 공유한다.
-살아 있는지는 `S:\GE\raw\data\주간가격모니터\cache\trigger_log.txt` 꼬리로 확인한다.
+살아 있는지는 (사내 PC 경로)의 `trigger_log.txt` 꼬리로 확인한다.
 
 **등록된 작업만 돈다**: `pipeline/trigger_watch.py` 의 `JOBS`(`weekly-report` · `macro-daily`)에 없는 job
 이름은 거부한다. 트리거 폴더에 아무 파일이나 떨어뜨려 임의 명령을 돌리는 길을 막는다. 요청 파일은 **읽자마자
@@ -82,7 +82,7 @@ n8n  ←  /files/trigger/{job}.result.json    ← 윈도우 워처가 기록
   - `평일 08:30~10:30 · 10분` → 요청 파일을 떨어뜨리기만 하고 끝난다(하루 13회). 결과를 기다리지 않는다.
   - `평일 10:35 · 결과 점검` → 결과 파일을 읽어 알림 여부만 판정한다. Wait 노드를 안 써서 경쟁 조건이 없다.
 - **실행**: `python -m pipeline.report_from_processed --if-fresh --json --date {오늘}` (cwd = 주간가격모니터 프로젝트 루트)
-- **산출물**: `S:\GE\raw\data\주간가격모니터\output\results\{기준일}\`
+- **산출물**: (사내 PC 경로)
 - **왜 13번이나 부르는가**: 소스가 블룸버그 BDH 워크북이라 **사람이 엑셀에서 열어 저장해야** 새 종가가
   들어오고, 그 시각이 07:5x~09:4x 로 흔들린다. 도착할 때까지 두드리는 구조다.
 - **중복은 윈도우가 막는다**: `pipeline/gate.py` 가 `시트 최신 행 >= 기준일` 이고 `기준일 산출물이 아직 없을`
@@ -95,10 +95,10 @@ n8n  ←  /files/trigger/{job}.result.json    ← 윈도우 워처가 기록
 
 - **트리거**: `평일 07:50` **1회**. 게이트가 없다 — 소스가 investing.com 크롤이라 '갱신을 기다릴' 신호 자체가
   없어서, 사용자 지정 시각에 무조건 돈다.
-- **실행**: `python -X utf8 main.py {오늘}` (cwd = `S:\GE\raw\모니터링\실시간 모니터링\매크로모니터`).
+- **실행**: `python -X utf8 main.py {오늘}` (cwd = (사내 PC 경로)).
   날짜는 **위치 인자**다 — 안 주면 "오늘 일자로 생성하시겠습니까? [Y/n]" 프롬프트가 stdin 없이 EOFError 로
   빠지는 우연에 기대게 된다.
-- **산출물**: `S:\GE\raw\data\매크로모니터\output\results\매크로캘린더_{YYMMDD}_{1,2}.html` (2장)
+- **산출물**: (사내 PC 경로) (2장)
 - **성패 판정은 종료 코드뿐이다**: `main.py` 가 결과 JSON 을 안 뱉어서 `JOBS` 에 `json: False` 로 걸려 있다.
   exit 0 이면 `status: ok`, 아니면 `error`.
 - ⚠️ **결과를 아무도 안 읽는다**: 10:35 점검 노드는 `weekly-report.result.json` **하나만** 읽는다.

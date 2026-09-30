@@ -35,6 +35,7 @@ from . import us_equities
 from .adapter import (
     mask_account_number,
     normalize_account,
+    normalize_ticker,
     percent_to_ratio as _percent_to_ratio,
     to_decimal,
 )
@@ -175,14 +176,27 @@ class KiwoomAdapter(BrokerAdapter):
         return refs
 
     def fetch_trades(self, account: AccountRef, start: date, end: date) -> list[TradeRow]:
-        """기간 내 체결 내역(해외). 1년 상한이 있어 창을 나눠 이어 붙인다.
+        """기간 내 체결 내역. 국내(kt00015)·해외(ust21100)를 각각 받아 합친다.
+
+        ⚠️거래번호는 **일자별로 1 부터 리셋**되고 국내·해외가 따로 매긴다. 같은
+          날 양쪽을 거래하면 1번이 둘 나온다 — 그래서 중복 제거도 저장도
+          시장(market)까지 넣어서 한다(alembic 0018). 시장을 빼면 한쪽이 조용히
+          덮인다.
+        """
+        rows: list[TradeRow] = []
+        if "US" in self._markets:
+            rows.extend(self._fetch_us_trades(start, end))
+        if "KR" in self._markets:
+            rows.extend(self._fetch_kr_trades(start, end))
+        rows.sort(key=lambda r: (r.trade_date, r.market, r.trade_no))
+        return rows
+
+    def _fetch_us_trades(self, start: date, end: date) -> list[TradeRow]:
+        """해외 체결(ust21100). 1년 상한이 있어 창을 나눠 이어 붙인다.
 
         ⚠️`krw_repl_skip_yn="Y"` — 원화대용 입출금을 제외한다. 매매가 아닌 자금
           이동까지 섞이면 "체결 내역"이 아니게 된다.
         """
-        if "US" not in self._markets:
-            return []
-
         rows: list[TradeRow] = []
         seen: set[tuple] = set()
         window_start = start
@@ -212,8 +226,46 @@ class KiwoomAdapter(BrokerAdapter):
                     seen.add(key)
                     rows.append(row)
             window_start = window_end + timedelta(days=1)
+        return rows
 
-        rows.sort(key=lambda r: (r.trade_date, r.trade_no))
+    def _fetch_kr_trades(self, start: date, end: date) -> list[TradeRow]:
+        """국내 체결(kt00015 위탁종합거래내역).
+
+        ⚠️조회기간 상한이 명세에 적혀 있지 않다. 해외 거래내역과 같은 1년으로
+          보고 창을 나눈다 — 상한이 더 짧으면 에러로 드러나고, 더 길면 그냥
+          호출이 몇 번 더 나갈 뿐이다. TO-VERIFY(2년치 한 번에 되는지 미확인).
+
+        ⚠️응답 배열 키가 해외와 다르다(`trst_ovrl_trde_prps_array`). 해외 키로
+          찾으면 **에러 없이 0건**이 된다.
+        """
+        rows: list[TradeRow] = []
+        seen: set[tuple] = set()
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=_TRADE_WINDOW_DAYS), end)
+            try:
+                pages = self._client.request_tr(
+                    domestic.API_TRADE_HISTORY,
+                    domestic.trade_history_body(window_start, window_end),
+                )
+            except KiwoomApiError as exc:
+                if _is_no_data(exc):
+                    window_start = window_end + timedelta(days=1)
+                    continue  # 이 창에는 매매가 없었다 — 실패가 아니다.
+                raise
+            for page in pages:
+                for raw in self._rows(
+                    page, "trst_ovrl_trde_prps_array", tr=domestic.API_TRADE_HISTORY
+                ):
+                    row = _to_domestic_trade_row(raw)
+                    if row is None:
+                        continue
+                    key = (row.trade_date, row.trade_no)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(row)
+            window_start = window_end + timedelta(days=1)
         return rows
 
     def fetch_orders(self, account: AccountRef, start: date, end: date) -> list[OrderRow]:
@@ -761,6 +813,7 @@ def _to_trade_row(raw: dict) -> TradeRow | None:
         trade_date=trade_date,
         # 0 패딩을 벗기지 않는다 — 증권사가 준 형태 그대로가 자연키의 일부다.
         trade_no=(raw.get("deal_no") or "").strip(),
+        market="US",
         side=side,
         ticker=(raw.get("stk_cd") or "").strip(),
         name=(raw.get("stk_nm") or None),
@@ -778,6 +831,64 @@ def _to_trade_row(raw: dict) -> TradeRow | None:
         exchange=(raw.get("stex_nm") or None),
         channel=(raw.get("mdia_nm") or None),
         processed_at=(raw.get("proc_time") or None),
+    )
+
+
+def _domestic_side(rmrk_nm: str) -> str | None:
+    """국내 적요명 → BUY/SELL. 해외와 달리 "현금매수"/"자기융자매도"처럼 앞에
+    거래 형태가 붙어 온다 — 완전일치로 찾으면 **전부 버려진다**(0건, 예외 없음).
+
+    ⚠️"매도"를 먼저 본다. 둘 다 들어 있는 적요명은 없어야 맞지만, 있다면
+      매도로 보는 쪽이 안전하다(세금·실현손익이 걸린 쪽이다).
+    """
+    text = (rmrk_nm or "").strip()
+    if "매도" in text:
+        return "SELL"
+    if "매수" in text:
+        return "BUY"
+    return None
+
+
+def _to_domestic_trade_row(raw: dict) -> TradeRow | None:
+    """kt00015 trst_ovrl_trde_prps_array 한 행 → TradeRow.
+
+    tp="3"(매매)로 걸러 받지만 적요명이 매수/매도가 아니면 버린다 — 같은 배열에
+    대출상환·연체 같은 행이 섞여 올 수 있다.
+
+    ⚠️종목코드에 **접두어 1자리**가 붙어 온다("A005930"). 그대로 저장하면
+      잔고·자산 마스터의 "005930" 과 다른 종목이 되어 화면에서 갈라진다.
+    """
+    side = _domestic_side(raw.get("rmrk_nm"))
+    if side is None:
+        return None
+    trade_date = _parse_yyyymmdd(raw.get("trde_dt"))
+    if trade_date is None:
+        return None
+    ticker = normalize_ticker(raw.get("stk_cd"))
+    if not ticker:
+        return None
+    return TradeRow(
+        trade_date=trade_date,
+        # 0 패딩을 벗기지 않는다 — 증권사가 준 형태 그대로가 자연키의 일부다.
+        trade_no=(raw.get("trde_no") or "").strip(),
+        market="KR",
+        side=side,
+        ticker=ticker,
+        name=(raw.get("stk_nm") or None),
+        currency=(raw.get("crnc_cd") or "KRW").strip() or "KRW",
+        quantity=to_decimal(raw.get("trde_qty_jwa_cnt")),
+        # trde_unit 은 '거래단가/환율' 겸용 필드 — 주문 거래에서는 단가다.
+        price=_opt(raw.get("trde_unit")),
+        amount_local=_opt(raw.get("trde_amt")),
+        settlement_amount_local=_opt(raw.get("exct_amt")),
+        commission_local=_opt(raw.get("cmsn")),
+        # 거래세+농특세. 소득/주민세(incm_resi_tax)는 매매세금이 아니라 따로다.
+        tax_local=_opt(raw.get("trde_agri_tax")),
+        # 국내는 원화 거래라 local 이 곧 원화다. 해외처럼 0 으로 오지 않는다.
+        amount_krw=_opt(raw.get("trde_amt")),
+        exchange=(raw.get("stex_nm") or None),
+        channel=(raw.get("mdia_tp_nm") or None),
+        processed_at=(raw.get("proc_tm") or None),
     )
 
 

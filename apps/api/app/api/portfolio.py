@@ -29,6 +29,7 @@ from app.core import position_timeline as pt
 from app.core.market_history import fetch_history
 from app.core.etf_exposure import ETF_EXPOSURE
 from app.core import quote_cache
+from app.core import naver_fx
 from app.core import investing as inv
 from app.core import naming
 from app.core import research_library
@@ -75,6 +76,7 @@ from app.schemas import (
     CostBySideOut,
     CostByTickerOut,
     FxExposureOut,
+    FxRateOut,
     FxPositionOut,
     FxShockOut,
     ContributionOut,
@@ -368,6 +370,11 @@ def list_holdings(
             tech_l1=asset.tech_l1,
             tech_l2=asset.tech_l2,
             tech_l3=asset.tech_l3,
+            exposure=(
+                ETF_EXPOSURE[asset.ticker][0]
+                if asset.ticker in ETF_EXPOSURE
+                else asset.tech_l1
+            ),
             quantity=position.quantity,
             average_purchase_price=position.average_purchase_price,
             current_price=position.current_price,
@@ -1965,11 +1972,11 @@ def get_cashflow(
 
 # ── 벤치마크 비교 ───────────────────────────────────────────────────────────
 
-# 기준 지수. 보유의 47%가 컴퓨팅 인프라고 최대 비중이 SOXL(반도체 3배)이라
-# 시장 전체(S&P 500)와 반도체(SOX) 둘을 세운다.
+# 기준 지수. 원래 시장 전체(S&P 500)와 반도체(SOX) 둘을 세웠는데,
+# ★2026-09-25 사용자 지시로 SOX 를 뺐다 — 성과 분석(벤치마크 비교·기간 리포트)은
+#   S&P 500 하나와만 비교한다. 되살리려면 ("^SOX", "필라델피아 반도체") 를 다시 넣는다.
 _BENCHMARKS: list[tuple[str, str]] = [
     ("^GSPC", "S&P 500"),
-    ("^SOX", "필라델피아 반도체"),
 ]
 _FX_SYMBOL = "KRW=X"
 
@@ -2172,6 +2179,44 @@ def get_benchmark(
 _FX_PAIR = "KRW=X"
 # 민감도 표에 세울 환율 변동 폭.
 _FX_SHOCKS = [Decimal("-0.10"), Decimal("-0.05"), Decimal("0.05"), Decimal("0.10")]
+
+
+@router.get("/fx-rate", response_model=FxRateOut)
+def get_fx_rate(
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> FxRateOut:
+    """보유 종목 화면의 환노출 토글이 쓰는 현재 환율(네이버 → 증권사 순)."""
+    account_ids = _active_account_ids(db, account_id)
+    broker_rate = None
+    if account_ids:
+        broker_rate = db.execute(
+            select(CurrentPosition.exchange_rate)
+            .join(Asset, Asset.id == CurrentPosition.asset_id)
+            .where(
+                CurrentPosition.account_id.in_(account_ids),
+                Asset.currency == "USD",
+                CurrentPosition.exchange_rate.isnot(None),
+            )
+            .limit(1)
+        ).scalar()
+    naver = naver_fx.get_usdkrw()
+    if naver is not None:
+        return FxRateOut(
+            rate=naver.rate,
+            source="naver",
+            bank=naver.bank,
+            round=naver.round,
+            traded_at=naver.traded_at,
+            fetched_at=naver.fetched_at,
+            stale=naver.stale,
+            broker_rate=broker_rate,
+        )
+    return FxRateOut(
+        rate=broker_rate,
+        source="broker" if broker_rate is not None else "none",
+        broker_rate=broker_rate,
+    )
 
 
 @router.get("/fx-exposure", response_model=FxExposureOut)

@@ -41,7 +41,11 @@ export function Sidebar() {
     //   포커스가 화면 밖으로 새는데, 그건 접기 UX 와 별개 문제라 여기서 만들지 않는다.
     <aside
       className={cn(
-        "relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main via-ge-point to-ge-navy py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]",
+        // ★2026-09-27: 배경은 **화면 높이 기준(bg-fixed)의 파랑 단색 계열**이다.
+        //   예전 `from-ge-main via-ge-point to-ge-navy` 는 aside 가 페이지 길이만큼
+        //   늘어나 그라데이션도 같이 늘었다 — 긴 화면(밸류체인 1.2만px)은 파랑만,
+        //   짧은 화면은 갈색·검정까지 보여 메뉴마다 색이 달라 보였다.
+        "relative z-30 flex w-[212px] shrink-0 flex-col rounded-r-[34px] bg-gradient-to-b from-ge-main to-[#5F81A6] bg-fixed py-6 shadow-[6px_0_26px_rgba(70,105,170,0.22)]",
         "transition-[margin-left] duration-300 ease-in-out motion-reduce:transition-none",
         collapsed && "-ml-[212px]",
       )}
@@ -72,9 +76,12 @@ export function Sidebar() {
         {navItems.map((item) => {
           const Icon = item.icon;
           // 하위 경로(`/portfolio/holdings`)에 있어도 상위 그룹이 켜져 보이게 한다.
+          // ★2026-09-27 계획 S1 §12-7 — 자식의 `match`(예: "기타" 허브가 흡수한
+          //   경로들)도 그룹 활성 판정에 넣는다. 안 그러면 /research/notes 같은
+          //   경로에서 "리서치" 그룹 자체가 꺼져 보인다.
           const hrefs = [
             item.href,
-            ...(item.children ?? []).map((c) => c.href),
+            ...(item.children ?? []).flatMap((c) => [c.href, ...(c.match ?? [])]),
           ].filter((h): h is string => h != null);
           const active = hrefs.some(
             (h) => pathname === h || (h !== "/" && pathname.startsWith(`${h}/`)),
@@ -164,8 +171,14 @@ export function Sidebar() {
                       </span>
                     </div>
                     {item.children.map((child, i) => {
+                      // ★2026-09-27 계획 S1 §12-7 — `match` 는 정확 일치만 본다
+                      //   (하위 경로 아님). "기타" 허브가 흡수한 화면들에서
+                      //   이 자식이 켜지게 하는 용도.
                       const childActive =
-                        child.href != null && pathname === child.href;
+                        child.href != null &&
+                        (pathname === child.href ||
+                          (child.prefix === true && pathname.startsWith(`${child.href}/`)) ||
+                          (child.match?.includes(pathname) ?? false));
                       const childClass = cn(
                         "flex w-full items-start justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
                         child.href

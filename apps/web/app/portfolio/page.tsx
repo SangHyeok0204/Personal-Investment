@@ -8,11 +8,12 @@ import { useLiveQueryOptions } from "@/components/layout/auto-refresh-context";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { DonutChart, type DonutSlice } from "@/components/charts/donut-chart";
-import { SeriesChart } from "@/components/charts/series-chart";
+import { SeriesChart, type SecondarySeries } from "@/components/charts/series-chart";
 import { Modal } from "@/components/ui/modal";
 import {
   Cell,
   DataTable,
+  Figure,
   NotConnectedBanner,
   StatTile,
   StubCard,
@@ -61,11 +62,33 @@ const AXES: { id: AllocationDimension; label: string; hint: string }[] = [
   { id: "country", label: "국가", hint: "상장 국가" },
 ];
 
+/** 그 축에서 이 종목이 들어가는 조각 키. 서버 /allocation 의 group by 와 같은 값이다
+ *  (null = 미분류 조각 "__none__"). */
+function axisKeyOf(h: PortfolioHolding, axis: AllocationDimension): string | null {
+  switch (axis) {
+    case "exposure":
+      return h.exposure;
+    case "tech_l1":
+      return h.tech_l1;
+    case "tech_l2":
+      return h.tech_l2;
+    case "country":
+      return h.country;
+    default:
+      return null;
+  }
+}
+
 export default function PortfolioPage() {
   const { accountId, connected, isError: accountsError } = useAccount();
   const live = useLiveQueryOptions();
   const [trendOpen, setTrendOpen] = useState(false);
   const [picked, setPicked] = useState<PortfolioHolding | null>(null);
+  // 도넛 가운데를 눌러서 여는 두 팝업. 조각 클릭(=picked)과 뜻이 다르다.
+  const [holdingsOpen, setHoldingsOpen] = useState(false);
+  const [classOpen, setClassOpen] = useState(false);
+  // 배분 도넛 조각 → 그 분류에 든 종목 바스켓.
+  const [basket, setBasket] = useState<DonutSlice | null>(null);
   const [axis, setAxis] = useState<AllocationDimension>("exposure");
 
   const summary = useQuery({
@@ -156,7 +179,8 @@ export default function PortfolioPage() {
         liveByTicker.get(h.ticker)?.market_value_krw ?? h.market_value_krw;
       return {
         key: h.asset_id,
-        label: h.name ?? h.ticker,
+        // 범례 폭을 아끼려고 이름 대신 티커로 적는다(2026-09-25 사용자 지시).
+        label: h.ticker,
         value: Number(valueKrw ?? 0),
         caption: formatKrwString(valueKrw),
       };
@@ -172,6 +196,37 @@ export default function PortfolioPage() {
     }
     return slices;
   }, [rows, cashKrw, liveByTicker]);
+
+  // 자산 추이 — 총 평가금액(왼쪽 축) + 누적 손익(오른쪽 축). 카드와 팝업이 같이 쓴다.
+  const trendPoints = useMemo(
+    () =>
+      (performance.data?.items ?? []).map((p) => ({
+        date: p.base_date,
+        value: p.deposit_assets_krw == null ? null : Number(p.deposit_assets_krw),
+      })),
+    [performance.data],
+  );
+  const trendPnl: SecondarySeries = useMemo(
+    () => ({
+      label: "누적 손익",
+      values: (performance.data?.items ?? []).map((p) =>
+        p.cumulative_pnl_krw == null ? null : Number(p.cumulative_pnl_krw),
+      ),
+      tooltipFormat: (v) => formatKrwSigned(String(Math.round(v))),
+    }),
+    [performance.data],
+  );
+
+  // 조각 하나에 든 종목들. ⚠️값은 **동기화 스냅샷**(market_value_krw)으로 낸다 —
+  //   배분 카드가 그 기준이라, 실시간 값을 쓰면 바스켓 합이 조각 금액과 어긋난다.
+  const basketRows = useMemo(() => {
+    if (!basket) return [];
+    const key = basket.key === "__none__" ? null : basket.key;
+    return rows
+      .filter((h) => h.market_value_krw != null && axisKeyOf(h, axis) === key)
+      .sort((a, b) => Number(b.market_value_krw) - Number(a.market_value_krw));
+  }, [basket, rows, axis]);
+  const basketTotal = basketRows.reduce((sum, h) => sum + Number(h.market_value_krw), 0);
 
   const axisSlices: DonutSlice[] = useMemo(
     () =>
@@ -194,7 +249,7 @@ export default function PortfolioPage() {
             what="키움 계좌 API"
             message={
               accountsError
-                ? "API 서버에 연결하지 못했습니다 — 백엔드(uvicorn)가 떠 있는지 확인하세요."
+                ? "API 서버에 연결하지 못했습니다"
                 : undefined
             }
           />
@@ -223,7 +278,9 @@ export default function PortfolioPage() {
             accent="auto"
             loading={summary.isLoading}
             onClick={() => setTrendOpen(true)}
-            actionHint="눌러서 자산 추이 보기"
+            // ⚠️추이 그래프는 이제 왼쪽 카드에 늘 떠 있다. 팝업이 더 주는 것은
+            //   **순입금을 뺀 기간 손익**이다 — 그걸 적어야 눌러 볼 이유가 된다.
+            actionHint="눌러서 기간 손익 보기"
           />
           <StatTile
             label="보유종목 평가액"
@@ -245,116 +302,135 @@ export default function PortfolioPage() {
           />
         </div>
 
-        {/* 2행: 남는 높이를 셋이 나눠 갖는다 */}
+        {/* 2행: 왼쪽 자산 추이 + 오른쪽 도넛 둘 (2026-09-23 사용자 지시).
+            ★[보유 종목 상세] 표는 **화면에서 뺐다.** 도넛 가운데를 누르면 팝업으로
+              뜬다 — 좁은 칸에 6열을 우겨넣어 손익·비중이 잘리던 것을, 넓은 팝업에서
+              매입 평단까지 붙여 보여 주는 쪽으로 바꿨다. */}
         <div
           className={cn(
             "grid min-h-0 flex-1 gap-3",
             // ⚠️`auto-rows-[minmax(0,1fr)]` 가 핵심이다. 없으면 행이 내용 높이로
             //   자라서 1열일 때 페이지가 넘친다(좁은 창에서 실제로 스크롤이 생겼다).
-            //   이걸 주면 남는 높이를 행들이 나눠 갖고, 넘치는 건 카드 안에서 스크롤한다.
             "grid-cols-1 auto-rows-[minmax(0,1fr)]",
-            "md:grid-cols-2 lg:auto-rows-auto",
-            // 상세 표가 6열이라 좁으면 손익·비중이 잘린다. 도넛 둘을 줄이고 표에 더 준다.
-            "lg:grid-cols-[minmax(0,0.78fr)_minmax(0,0.78fr)_minmax(0,1.6fr)]",
+            "lg:auto-rows-auto lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]",
           )}
         >
           <StubCard
-            title="보유 종목"
-            subtitle={totalKrw ? `${formatKrwString(totalKrw)} · 예수금 포함` : "총자산 비중"}
-            scrollBody
-          >
-            <DonutChart
-              slices={holdingSlices}
-              size={132}
-              maxLegend={5}
-              centerLabel="자산"
-              // ⚠️"17종목"이라고만 쓰면 예수금 조각이 어디서 왔는지 모른다.
-              centerValue={
-                rows.length
-                  ? `${rows.length}종목${cashKrw && Number(cashKrw) > 0 ? " + 현금" : ""}`
-                  : undefined
-              }
-              onSliceClick={(slice) => {
-                const found = rows.find((h) => h.asset_id === slice.key);
-                if (found) setPicked(found);
-              }}
-            />
-          </StubCard>
-
-          {/* ⚠️이 카드만 **마지막 동기화 기준**이다. 왼쪽 도넛과 오른쪽 표는
-              실시간 시세로 갈아끼우는데, 배분은 /allocation 이 주는 스냅샷을
-              쓴다(리밸런싱·자산 현황과 분모를 맞춰 둔 값이라 여기만 실시간으로
-              바꾸면 그쪽이 어긋난다). 기준이 다르면 화면에 적는다. */}
-          <StubCard
-            title="배분"
+            title="자산 추이"
             subtitle={
-              allocation.data?.unclassified_market_value_krw &&
-              Number(allocation.data.unclassified_market_value_krw) > 0
-                ? `마지막 동기화 기준 · 미분류 ${formatKrwString(allocation.data.unclassified_market_value_krw)}`
-                : "마지막 동기화 기준"
+              performance.data?.first_date
+                ? `${performance.data.first_date} ~ ${performance.data.last_date}`
+                : "예탁자산 시계열"
             }
             scrollBody
-            action={
-              <div className="flex gap-1">
-                {AXES.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => setAxis(a.id)}
-                    aria-pressed={axis === a.id}
-                    title={a.hint}
-                    className={cn(
-                      "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
-                      axis === a.id
-                        ? "bg-white/90 text-ge-header"
-                        : "text-white/60 hover:bg-white/15 hover:text-white",
-                    )}
-                  >
-                    {a.label}
-                  </button>
-                ))}
-              </div>
-            }
           >
-            <DonutChart
-              slices={axisSlices}
-              size={132}
-              maxLegend={5}
-              centerLabel={AXES.find((a) => a.id === axis)?.label}
-              centerValue={axisSlices.length ? `${axisSlices.length}개` : undefined}
-            />
+            {performance.data && performance.data.items.length > 0 ? (
+              <SeriesChart
+                height={260}
+                points={trendPoints}
+                label="총 평가금액"
+                secondary={trendPnl}
+                tooltipFormat={(p) =>
+                  formatKrwString(p.value == null ? null : String(Math.round(p.value)))
+                }
+              />
+            ) : (
+              <StubChart
+                height={240}
+                note={performance.isLoading ? "불러오는 중…" : "계좌 성과 데이터 없음"}
+              />
+            )}
           </StubCard>
 
-          <StubCard title="보유 종목 상세" subtitle="평가금액 순" scrollBody>
-            <DataTable
-              columns={["종목", "현재가", "당일", "평가금액", "손익", "비중"]}
-              align={["left", "right", "right", "right", "right", "right"]}
-              empty={
-                holdings.isLoading
-                  ? "불러오는 중…"
-                  : connected
-                    ? "보유 종목이 없습니다"
-                    : "계좌를 연동하면 보유 종목이 표시됩니다"
+          {/* 오른쪽 칸을 둘이 나눠 갖는다. 바깥 그리드의 한 칸이라 여기서 다시 쪼갠다. */}
+          <div className="grid min-h-0 auto-rows-[minmax(0,1fr)] gap-3">
+            <StubCard
+              title="보유 종목"
+              subtitle={totalKrw ? `${formatKrwString(totalKrw)} · 예수금 포함` : "총자산 비중"}
+              scrollBody
+            >
+              <DonutChart
+                slices={holdingSlices}
+                size={132}
+                maxLegend={10}
+                legendColumns={2}
+                compactLegend
+                centerLabel="자산"
+                // ⚠️"17종목"이라고만 쓰면 예수금 조각이 어디서 왔는지 모른다.
+                centerValue={
+                  rows.length
+                    ? `${rows.length}종목${cashKrw && Number(cashKrw) > 0 ? " + 현금" : ""}`
+                    : undefined
+                }
+                centerHint="눌러서 전체 보기"
+                onCenterClick={() => setHoldingsOpen(true)}
+                // 조각은 '그 종목 하나', 가운데는 '전부'다.
+                onSliceClick={(slice) => {
+                  const found = rows.find((h) => h.asset_id === slice.key);
+                  if (found) setPicked(found);
+                }}
+              />
+            </StubCard>
+
+            {/* ⚠️이 카드만 **마지막 동기화 기준**이다. 왼쪽 도넛은 실시간 시세로
+                갈아끼우는데, 배분은 /allocation 이 주는 스냅샷을 쓴다(리밸런싱·자산
+                현황과 분모를 맞춰 둔 값이라 여기만 실시간으로 바꾸면 그쪽이
+                어긋난다). 기준이 다르면 화면에 적는다. */}
+            <StubCard
+              title="배분"
+              subtitle={
+                allocation.data?.unclassified_market_value_krw &&
+                Number(allocation.data.unclassified_market_value_krw) > 0
+                  ? `마지막 동기화 기준 · 미분류 ${formatKrwString(allocation.data.unclassified_market_value_krw)}`
+                  : "마지막 동기화 기준"
+              }
+              scrollBody
+              action={
+                <div className="flex gap-1">
+                  {AXES.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => setAxis(a.id)}
+                      aria-pressed={axis === a.id}
+                      title={a.hint}
+                      className={cn(
+                        "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+                        axis === a.id
+                          ? "bg-white/90 text-ge-header"
+                          : "text-white/60 hover:bg-white/15 hover:text-white",
+                      )}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
               }
             >
-              {rows.map((h) => (
-                <HoldingRow
-                  key={`${h.account_id}-${h.asset_id}`}
-                  holding={h}
-                  live={liveByTicker.get(h.ticker)}
-                  totalKrw={totalKrw}
-                  onClick={() => setPicked(h)}
-                />
-              ))}
-            </DataTable>
-          </StubCard>
+              <DonutChart
+                slices={axisSlices}
+                size={132}
+                maxLegend={5}
+                compactLegend
+                centerLabel={AXES.find((a) => a.id === axis)?.label}
+                centerValue={axisSlices.length ? `${axisSlices.length}개` : undefined}
+                centerHint="눌러서 분류 보기"
+                onCenterClick={() => setClassOpen(true)}
+                // 조각은 '그 분류에 든 종목들'. 예수금 조각은 종목이 없어 열지 않는다.
+                onSliceClick={(slice) => {
+                  const key = slice.key === "__none__" ? null : slice.key;
+                  if (rows.some((h) => axisKeyOf(h, axis) === key)) setBasket(slice);
+                }}
+              />
+            </StubCard>
+          </div>
         </div>
       </PageContainer>
 
       <Modal
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
-        title="자산 추이"
+        title="자산 추이와 기간 손익"
         subtitle={
           performance.data?.first_date
             ? `${performance.data.first_date} ~ ${performance.data.last_date}`
@@ -366,11 +442,9 @@ export default function PortfolioPage() {
           <>
             <SeriesChart
               height={320}
-              points={performance.data.items.map((p) => ({
-                date: p.base_date,
-                value:
-                  p.deposit_assets_krw == null ? null : Number(p.deposit_assets_krw),
-              }))}
+              points={trendPoints}
+              label="총 평가금액"
+              secondary={trendPnl}
               tooltipFormat={(p) =>
                 formatKrwString(p.value == null ? null : String(Math.round(p.value)))
               }
@@ -385,10 +459,6 @@ export default function PortfolioPage() {
                 tone={Number(performance.data.gain_krw ?? 0) >= 0 ? "up" : "down"}
               />
             </dl>
-            <p className="mt-2 text-[11px] font-medium leading-snug text-ink-muted">
-              기간 손익은 (현재 − 시작)이 아니라 <b>순입금을 뺀 값</b>입니다. 그렇게
-              하지 않으면 그 사이 입금한 돈이 수익처럼 보입니다.
-            </p>
             <Link
               href="/performance/returns"
               className="mt-2 inline-block text-[11px] font-bold text-ge-point hover:text-ink"
@@ -404,6 +474,118 @@ export default function PortfolioPage() {
         )}
       </Modal>
 
+      {/* 보유 종목 도넛 가운데 → 전체 상세. 화면에서 뺀 표가 여기로 왔다.
+          ⚠️좁은 칸이 아니라 팝업이라 **매입 평단**을 컬럼으로 넣을 수 있다
+            (2026-09-23 사용자 요청). 인라인 표에서는 6열도 잘렸다. */}
+      <Modal
+        open={holdingsOpen}
+        onClose={() => setHoldingsOpen(false)}
+        title="보유 종목 상세"
+        subtitle={
+          totalKrw
+            ? `${rows.length}종목 · 평가금액 순 · 비중은 총자산(${formatKrwString(totalKrw)}) 기준`
+            : "평가금액 순"
+        }
+        width={980}
+      >
+        <DataTable
+          columns={[
+            "종목", "수량", "매입 평단", "현재가", "당일", "평가금액", "손익", "비중",
+          ]}
+          align={[
+            "left", "right", "right", "right", "right", "right", "right", "right",
+          ]}
+          empty={
+            holdings.isLoading
+              ? "불러오는 중…"
+              : connected
+                ? "보유 종목이 없습니다"
+                : "계좌를 연동하면 보유 종목이 표시됩니다"
+          }
+        >
+          {rows.map((h) => (
+            <HoldingRow
+              key={`${h.account_id}-${h.asset_id}`}
+              holding={h}
+              live={liveByTicker.get(h.ticker)}
+              totalKrw={totalKrw}
+              onClick={() => setPicked(h)}
+            />
+          ))}
+        </DataTable>
+      </Modal>
+
+      {/* 배분 도넛 가운데 → 종목별 분류표. "이 조각이 왜 이 조각인지"를 답한다. */}
+      <Modal
+        open={classOpen}
+        onClose={() => setClassOpen(false)}
+        title="종목별 분류"
+        subtitle={`${rows.length}종목 · 평가금액 순`}
+        width={980}
+      >
+        <DataTable
+          columns={["종목", "대분류", "중분류", "소분류", "전통 섹터", "국가", "비중"]}
+          align={[
+            "left", "left", "left", "left", "left", "left", "right",
+          ]}
+          empty={
+            holdings.isLoading ? "불러오는 중…" : "보유 종목이 없습니다"
+          }
+        >
+          {rows.map((h) => (
+            <ClassRow
+              key={`${h.account_id}-${h.asset_id}`}
+              holding={h}
+              live={liveByTicker.get(h.ticker)}
+              totalKrw={totalKrw}
+              onClick={() => setPicked(h)}
+            />
+          ))}
+        </DataTable>
+      </Modal>
+
+      {/* 배분 도넛 조각 → 그 분류 바스켓. 비중의 분모는 총자산이 아니라 **그 분류
+          합계**다(2026-09-25 사용자 지시: 컴퓨팅 인프라 1000원 중 AMD 700원 → 70%). */}
+      <Modal
+        open={basket != null}
+        onClose={() => setBasket(null)}
+        title={basket?.label ?? ""}
+        subtitle={
+          basket
+            ? `${AXES.find((a) => a.id === axis)?.label} · ${basketRows.length}종목 · 분류 합계 ${formatKrwString(String(basketTotal))} · 마지막 동기화 기준`
+            : undefined
+        }
+        width={640}
+      >
+        <DataTable
+          columns={["종목", "평가금액", "분류 내 비중"]}
+          align={["left", "right", "right"]}
+          empty="이 분류에 든 종목이 없습니다"
+        >
+          {basketRows.map((h) => {
+            const share = basketTotal > 0 ? Number(h.market_value_krw) / basketTotal : 0;
+            return (
+              <tr
+                key={`${h.account_id}-${h.asset_id}`}
+                onClick={() => setPicked(h)}
+                className="cursor-pointer border-b border-hairline transition-colors hover:bg-canvas-soft"
+              >
+                <Cell left strong>
+                  <span className="flex items-center gap-1.5">
+                    <span>{h.ticker}</span>
+                    <span className="max-w-[200px] truncate text-[10px] font-semibold text-ink-muted">
+                      {h.name}
+                    </span>
+                  </span>
+                </Cell>
+                <Cell>{formatKrwString(h.market_value_krw)}</Cell>
+                <Cell strong>{`${(share * 100).toFixed(1)}%`}</Cell>
+              </tr>
+            );
+          })}
+        </DataTable>
+      </Modal>
+
       <Modal
         open={picked != null}
         onClose={() => setPicked(null)}
@@ -414,32 +596,6 @@ export default function PortfolioPage() {
         {picked && <HoldingDetail holding={picked} totalKrw={totalKrw} />}
       </Modal>
     </>
-  );
-}
-
-function Figure({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "up" | "down";
-}) {
-  return (
-    <div>
-      <dt className="text-[11px] font-bold text-ink-muted">{label}</dt>
-      <dd
-        className={cn(
-          "mt-0.5 text-[15px] font-extrabold tabular-nums",
-          tone === "up" && "text-bid",
-          tone === "down" && "text-ask",
-          !tone && "text-ge-navy",
-        )}
-      >
-        {value}
-      </dd>
-    </div>
   );
 }
 
@@ -485,10 +641,6 @@ function HoldingDetail({
         />
         <Small label="계좌" value={h.account_name ?? h.broker_code} />
       </dl>
-      <p className="text-[11px] font-medium leading-snug text-ink-muted">
-        평가금액의 원화 환산과 적용 환율은 <b>증권사가 준 값</b>입니다 — 화면이 다시
-        계산하지 않습니다(그러면 합계와 종목별 수치가 어긋납니다).
-      </p>
     </div>
   );
 }
@@ -536,6 +688,9 @@ function HoldingRow({
           </span>
         </span>
       </Cell>
+      <Cell tone="muted">{formatQuantityString(h.quantity)}</Cell>
+      {/* 매입 평단 — 현지 통화다. 원화로 바꾸지 않는다(환율 시점이 섞인다). */}
+      <Cell>{formatPriceString(h.average_purchase_price, h.currency)}</Cell>
       <Cell>
         {live ? (
           <span className="inline-flex items-center gap-1">
@@ -573,6 +728,56 @@ function HoldingRow({
       <Cell tone={toneOf(pnlKrw)}>{formatKrwSigned(pnlKrw)}</Cell>
       <Cell tone="muted">{weight}</Cell>
     </tr>
+  );
+}
+
+function ClassRow({
+  holding: h,
+  live,
+  totalKrw,
+  onClick,
+}: {
+  holding: PortfolioHolding;
+  live?: LiveQuote;
+  totalKrw: string | null;
+  onClick: () => void;
+}) {
+  const valueKrw = live?.market_value_krw ?? h.market_value_krw;
+  const weight =
+    totalKrw && valueKrw && Number(totalKrw) !== 0
+      ? `${((Number(valueKrw) / Number(totalKrw)) * 100).toFixed(1)}%`
+      : "—";
+  return (
+    <tr
+      onClick={onClick}
+      className="cursor-pointer border-b border-hairline transition-colors hover:bg-canvas-soft"
+    >
+      <Cell left strong>
+        <span className="flex items-center gap-1.5">
+          <span className="max-w-[150px] truncate">{h.name ?? h.ticker}</span>
+          <span className="shrink-0 text-[10px] font-semibold text-ink-muted">
+            {h.ticker}
+          </span>
+        </span>
+      </Cell>
+      {/* ⚠️빈 값을 "—" 로만 적지 않는다. '분류가 없다'와 '아직 안 봤다'는 다르고,
+          배분 도넛의 회색 조각과 같은 말을 써야 두 화면이 이어진다. */}
+      <ClassCell value={h.tech_l1} missing="미분류" />
+      <ClassCell value={h.tech_l2} />
+      <ClassCell value={h.tech_l3} />
+      <ClassCell value={h.sector} missing="미분류" />
+      <ClassCell value={h.country} />
+      <Cell tone="muted">{weight}</Cell>
+    </tr>
+  );
+}
+
+function ClassCell({ value, missing = "—" }: { value: string | null; missing?: string }) {
+  const empty = value == null || value === "";
+  return (
+    <Cell left tone={empty ? "muted" : undefined} className="max-w-[140px] truncate">
+      {empty ? missing : value}
+    </Cell>
   );
 }
 

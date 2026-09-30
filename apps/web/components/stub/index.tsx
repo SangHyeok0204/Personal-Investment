@@ -31,8 +31,7 @@ export function NotConnectedBanner({
     <div className="mb-5 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
       <PlugZap className="h-4 w-4 shrink-0 text-amber-600" />
       <p className="text-[13px] font-semibold text-amber-900">
-        {message ??
-          `${what} — 아직 연동 전입니다. 화면 골격만 잡혀 있고 모든 수치는 비어 있습니다.`}
+        {message ?? `${what} 미연동`}
       </p>
       <ConnectButton />
     </div>
@@ -78,12 +77,8 @@ export function SourceDownBanner({
         {/* ⚠️JSX 인접 표현식 사이에는 공백이 들어가지 않는다 — 그냥 이어 쓰면
             "아닙니다.미국 경제지표..." 처럼 붙어 버린다(실제로 그랬다).
             각 조각을 span 으로 감싸고 앞에 여백을 준다. */}
-        <b>{source}</b> 에서 데이터를 받지 못했습니다 — 화면이 비어 있는 것은
-        값이 없어서가 아닙니다.
+        <b>{source}</b> 응답 없음
         {detail && <span className="ml-1.5 font-medium">{detail}</span>}
-        <span className="ml-1.5 font-medium text-amber-800">
-          잠시 뒤 자동으로 다시 시도합니다.
-        </span>
       </p>
     </div>
   );
@@ -107,7 +102,7 @@ export function StatTile({
   loading?: boolean;
   /** 누르면 상세를 연다. 주면 카드가 버튼이 된다. */
   onClick?: () => void;
-  /** 호버할 때 카드 아래에 뜨는 안내(예: "눌러서 추이 보기"). */
+  /** 호버할 때 카드 오른쪽 위에 뜨는 안내(예: "눌러서 추이 보기"). */
   actionHint?: string;
 }) {
   const shown = loading ? "…" : (value ?? "—");
@@ -165,9 +160,11 @@ export function StatTile({
       {hint && (
         <div className="mt-1 truncate text-[11px] font-medium text-ink-muted">{hint}</div>
       )}
-      {/* 누를 수 있다는 걸 호버에서만 알린다 — 평소엔 숫자가 주인공이다. */}
+      {/* 누를 수 있다는 걸 호버에서만 알린다 — 평소엔 숫자가 주인공이다.
+          ★2026-09-25 사용자 지시: 오른쪽 위 구석으로. 아래에 두면 설명 줄(hint)과
+            겹쳐서 둘 다 안 읽혔다. */}
       {interactive && actionHint && (
-        <div className="pointer-events-none absolute inset-x-4 bottom-2 text-[10px] font-bold text-ge-point opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="pointer-events-none absolute right-3.5 top-3 max-w-[55%] truncate text-right text-[10px] font-bold text-ge-point opacity-0 transition-opacity group-hover:opacity-100">
           {actionHint}
         </div>
       )}
@@ -304,6 +301,7 @@ export function DataTable({
   children,
   empty,
   align,
+  sort,
 }: {
   columns: string[];
   children: ReactNode;
@@ -311,6 +309,12 @@ export function DataTable({
   empty?: string;
   /** 컬럼별 정렬 — 생략하면 첫 컬럼만 좌측, 나머지는 우측(숫자 표 기본형). */
   align?: ("left" | "right")[];
+  /** 주면 제목 칸을 눌러 정렬한다. 행 순서는 부르는 쪽이 바꾼다(이 표는 그리기만). */
+  sort?: {
+    column: number;
+    dir: "asc" | "desc";
+    onSort: (column: number) => void;
+  };
 }) {
   const hasRows = Array.isArray(children)
     ? children.flat().filter(Boolean).length > 0
@@ -332,8 +336,41 @@ export function DataTable({
                   (align?.[i] ?? (i === 0 ? "left" : "right")) === "right" &&
                     "text-right",
                 )}
+                aria-sort={
+                  sort?.column === i
+                    ? sort.dir === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : undefined
+                }
               >
-                {c}
+                {sort ? (
+                  <button
+                    type="button"
+                    onClick={() => sort.onSort(i)}
+                    className={cn(
+                      "group -mx-1 inline-flex items-center gap-1 rounded px-1 transition-colors hover:bg-white/70",
+                      (align?.[i] ?? (i === 0 ? "left" : "right")) === "right" &&
+                        "flex-row-reverse",
+                    )}
+                  >
+                    {c}
+                    {/* 정렬 중인 칸은 늘 화살표, 나머지는 호버할 때만 흐리게 —
+                        누를 수 있다는 걸 누르기 전에 알려 준다. */}
+                    <span
+                      className={cn(
+                        "text-[9px] leading-none",
+                        sort.column === i
+                          ? "text-ge-point"
+                          : "text-ink-faint opacity-0 group-hover:opacity-100",
+                      )}
+                    >
+                      {sort.column === i && sort.dir === "asc" ? "▲" : "▼"}
+                    </span>
+                  </button>
+                ) : (
+                  c
+                )}
               </th>
             ))}
           </tr>
@@ -423,6 +460,84 @@ export function Emphasized({ text }: { text: string }) {
         ),
       )}
     </>
+  );
+}
+
+/** 카드 본문이 비었을 때(불러오는 중·데이터 없음) 가운데 한 줄.
+ *  ★2026-09-25 여러 화면의 같은 `Empty` 복사본을 여기로 모았다. */
+export function CardEmpty({ text }: { text: string }) {
+  return (
+    <div className="flex h-full items-center justify-center px-4 text-center">
+      <span className="text-[12px] font-semibold text-ink-faint">{text}</span>
+    </div>
+  );
+}
+
+/** 카드 헤더(짙은 갈색) 위의 기간·축 전환 칩. 흰 계열로 맞춘다. */
+export function HeaderChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+        active
+          ? "bg-white/90 text-ge-header"
+          : "text-white/60 hover:bg-white/15 hover:text-white",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 팝업 안의 라벨 + 큰 숫자 한 칸. tone 이 있으면 상승/하락 색. */
+export function Figure({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "up" | "down";
+}) {
+  return (
+    <div>
+      <dt className="text-[11px] font-bold text-ink-muted">{label}</dt>
+      <dd
+        className={cn(
+          "mt-0.5 text-[15px] font-extrabold tabular-nums",
+          tone === "up" && "text-bid",
+          tone === "down" && "text-ask",
+          !tone && "text-ge-navy",
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+/** 카드 헤더(짙은 갈색)의 '전체 목록' 버튼 — 목록을 팝업으로 여는 공통 자리.
+ *  ★2026-09-25 여러 화면이 각자 복사해 두던 것을 여기로 모았다. */
+export function ListButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
+    >
+      전체 목록
+    </button>
   );
 }
 
