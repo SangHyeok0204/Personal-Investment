@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 // 시계열 한 개를 그리는 저수준 차트.
 //
-// 이 레포의 차트 관례를 따른다(ai-key-data/timeseries-chart.tsx 참고):
+// 이 레포의 차트 관례를 따른다(ai-key-data/ai-line-chart.tsx 참고):
 // ResizeObserver 로 폭을 재고 viewBox 를 px 와 1:1 로 두며, SVG 안에서는 raw hex,
 // 바깥은 tailwind 를 쓴다. 차트 헬퍼는 카드마다 복붙하는 것이 이 레포의 관행이라
 // 범용 추상화를 만들지 않고 필요한 만큼만 둔다.

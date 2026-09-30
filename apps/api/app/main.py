@@ -6,17 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api import (
-    ai_key_data,
     alerts,
-    ai_usage,
     brokerage,
-    etf_class,
     imports,
-    inav,
     internal,
     jobs,
-    lan,
-    macro,
     portfolio,
     stock_discussion,
     system,
@@ -40,8 +34,6 @@ from app.core.errors import register_exception_handlers
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = [
-        # LAN 대시보드: 30초 주기로 서버 상태를 폴링하는 백그라운드 체커.
-        asyncio.create_task(lan.background_checker_loop()),
         # 이력 동기화: 영업일 16:30(KST) 이후로 안 돌았으면 따라잡는다.
         # ⚠️브라우저가 아니라 **여기**가 국내 체결이 들어오는 유일한 자동 경로다.
         #   프런트의 자동 동기화는 탭이 열려 있을 때만 돈다.
@@ -86,20 +78,11 @@ app.include_router(system.router)
 app.include_router(jobs.router)
 app.include_router(imports.router)
 app.include_router(internal.router)
-app.include_router(ai_usage.router)
-app.include_router(inav.router)
-app.include_router(macro.router)
-app.include_router(lan.router)
 app.include_router(stock_discussion.router)
-app.include_router(ai_key_data.router)
-# [AI Key Data] 카드 3개는 경로만 옛 `/api/v1/stock-monitor` 프리픽스에 남아 있다
-# (ai_key_data.py 의 `legacy_router` 주석 참조).
-app.include_router(ai_key_data.legacy_router)
 app.include_router(watchlist.router)
 app.include_router(alerts.router)
 app.include_router(market.router)
 app.include_router(journal.router)
-app.include_router(etf_class.router)
 app.include_router(portfolio.router)
 app.include_router(brokerage.router)
 app.include_router(seasonality.router)

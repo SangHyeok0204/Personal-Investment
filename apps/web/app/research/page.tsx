@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, FileText, Film, Presentation, Table2 } from "lucide-react";
+import { ArrowRight, FileText, Presentation, Table2 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useQuery } from "@tanstack/react-query";
@@ -29,7 +29,6 @@ const SHELVES = [
   { id: "insight", label: "인사이트", desc: "시장 코멘터리 덱", icon: Presentation },
   { id: "fund", label: "공모펀드/ETF", desc: "사모재간접 · 액티브ETF", icon: FileText },
   { id: "macro", label: "매크로/MP 회의", desc: "시장 전망 · 하우스뷰", icon: FileText },
-  { id: "video", label: "영상", desc: "YouTube 자막 · 요약", icon: Film, href: "/news/video" },
 ];
 
 function Empty({ text }: { text: string }) {

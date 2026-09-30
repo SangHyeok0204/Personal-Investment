@@ -31,11 +31,11 @@ import type { LucideIcon } from "lucide-react";
 //   - "planned"     화면 자체가 아직 없음(href 없음)
 //
 // ★2026-09-22 메뉴에서 **뺀 것** (라우트는 남겨 둔다):
-//   · 종토방(/stock-discussion) · AI token usage(/ai-token-usage)
-//   둘 다 원본 GE 팀의 **LAN 장비**(사내 IP, collector:8100)를
-//   본다. 이 환경에서 실측하면 연결 자체가 안 된다(curl 000). 켜질 수 없는
-//   메뉴를 남겨 두면 계속 "언젠가 되겠지"로 읽히고, 그 사이 메뉴가 거짓말을
-//   한다. 장비가 생기면 이 두 줄을 되살리면 된다 — 화면 코드는 그대로 있다.
+//   · 종토방(/stock-discussion) — 원본 GE 팀의 LAN 장비를 본다. 이 환경에서는
+//   연결 자체가 안 된다(curl 000). 켜질 수 없는 메뉴는 거짓말이 된다.
+// ★2026-09-30 개인 대시보드 범위 정리: 업무 화면(iNAV·WRAP·ETF 분류·LP 평가·
+//   트랙레코드·회의·LAN)과 텔레그램·리밸런싱·유튜브 분석·AI token usage 라우트를
+//   **삭제**했다(메뉴가 아니라 화면 자체).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type NavStatus = "live" | "placeholder" | "planned";
@@ -86,14 +86,6 @@ export const navItems: NavItem[] = [
         href: "/portfolio/allocation",
         status: "live",
         hint: "섹터 · 자산군 · 통화 비중",
-      },
-      {
-        // ★2026-09-25 모델 포트폴리오 자리로 바꿨다(탑다운: 자산군 배분 →
-        //   종목 선정 → 리밸런싱). 아직 화면 골격만 있다.
-        label: "리밸런싱",
-        href: "/portfolio/rebalance",
-        status: "placeholder",
-        hint: "모델 포트폴리오 · 자산군 배분 → 종목 선정",
       },
       // ★2026-09-25 환노출 화면은 없앴다 — 보유 종목 표의 환노출 ON/OFF 토글로 옮겼다.
     ],
@@ -241,9 +233,6 @@ export const navItems: NavItem[] = [
     label: "뉴스",
     icon: Newspaper,
     children: [
-      { label: "텔레그램", href: "/telegram-news", status: "placeholder",
-        hint: "collector 필요 · 미가동",
-      },
       {
         // ★"기사"를 **시장 뉴스**로 바꿨다. 그대로 만들면 보유종목 뉴스와
         //   소스가 같아 거의 같은 화면이 하나 더 생긴다. 주제별로 보면
@@ -258,14 +247,6 @@ export const navItems: NavItem[] = [
         href: "/news/holdings",
         status: "live",
         hint: "내 포지션에 걸린 일",
-      },
-      {
-        // ★2026-09-27 계획 S1 — 리서치 그룹의 "영상 분석"을 뉴스로 옮겼다.
-        //   유튜브 시장 코멘터리는 리서치 자료보다 뉴스에 더 가깝다.
-        label: "유튜브 분석",
-        href: "/news/video",
-        status: "placeholder",
-        hint: "YouTube 자막 수집 · 요약",
       },
     ],
   },

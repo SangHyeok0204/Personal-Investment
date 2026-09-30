@@ -45,9 +45,6 @@ class Settings(BaseSettings):
     # Internal API auth shared with the worker/n8n; guards the /internal router.
     INTERNAL_API_KEY: str = "change_me_internal"
 
-    # Upstream AI usage monitor (Claude/Codex account meters) that /api/v1/ai-token-usage proxies.
-    AI_USAGE_MONITOR_BASE_URL: str = ""
-
     # Upstream ETF iNAV collector (profile service) that /api/v1/inav/snapshot proxies.
     COLLECTOR_URL: str = "http://collector:8100"
 
