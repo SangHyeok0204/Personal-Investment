@@ -20,6 +20,7 @@ apps/collector/somansa-root.crt
 storage/raw/*
 storage/processed/*
 storage/trigger/*.json
+storage/research/*
 !storage/**/.gitkeep
 
 # Windows / WSL artifacts

@@ -47,15 +47,15 @@ UI 문구에도 예측 뉘앙스를 넣지 말 것.
 filings.db (S: 원본 → guru13f.py 가 로컬 .cache 로 복사)
   └ guru_flows.py            분석 3종 + 기준선
       └ guru13f.Guru13F._build_flows()      사전계산 (refresh 시 1회, 약 3.5초)
-          └ GET /guru-13f/flows?view=       collector
-              └ GET /api/v1/inav/guru-13f/flows   api 프록시 (inav.py)
+          └ GET /guru-13f/flows?view=       collector (2026-09-30 폐기)
+              └ (구) api 프록시 — 지금은 `apps/api/app/api/guru.py` + `core/guru_flows.py` 가 대신한다
                   └ getGuru13fFlows()             web (lib/api.ts)
                       └ page.tsx "거장 동시 변동 분석" 카드
 ```
 
 > **현황 메모(2026-08-13)**: 이 체인의 마지막 고리인 `apps/web/app/track-record/guru-13f/page.tsx` 가
 > 지금 워킹트리에서 **삭제돼 있다**(미커밋). 화면만 없고 배관은 그대로다 — collector `/guru-13f/flows`
-> 와 api 프록시(`inav.py`)는 계속 응답한다. 삭제가 최종 결정인지는 확인되지 않았으니, 화면을 되살릴
+> 와 api 프록시는 2026-09-30 collector 폐기로 함께 사라졌다(대체: `api/guru.py`). 삭제가 최종 결정인지는 확인되지 않았으니, 화면을 되살릴
 > 생각이면 백엔드는 손댈 필요가 없다.
 
 사전계산 이유는 `consensus`/`turnover` 와 같다. 두 분기 × 거장 전원의 보유행을

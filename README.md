@@ -1,7 +1,7 @@
 ﻿# 개인 투자 플랫폼 (Personal Investment Platform)
 
 Windows + WSL2 + Docker Desktop 환경에서 실행되는 로컬 개인 투자 플랫폼이다.
-2026-07 에 작업(job) 파이프라인 골격으로 시작해, 지금은 사내 리포트·모니터링 화면 십여 개를
+2026-07 에 작업(job) 파이프라인 골격으로 시작해, 지금은 개인 리서치·모니터링 화면을
 얹은 대시보드로 쓰고 있다. 골격은 그대로다 — 백그라운드 일은 전부 작업 하나로 수렴한다.
 
 ```text
@@ -13,20 +13,19 @@ Next.js 화면에서 작업 실행
   -> Next.js에서 진행 결과 확인
 ```
 
-여기에 두 갈래가 더 붙어 있다.
+여기에 한 갈래가 더 붙어 있다.
 
-- **collector** — S: 공유 폴더의 레거시 엔진·데이터를 그대로 임포트해 계산하는 별도 서비스
-  (ETF iNAV · WRAP · LP평가 · 성과분석 · 13F · 매크로 · 텔레그램 뉴스). job 파이프라인을 거치지
-  않고 api 가 프록시해 부른다. `profiles: ["collector"]` 게이트라 최초 1회는 프로필을 켜서 띄운다.
-- **n8n** — 스케줄 자동화. `POST /internal/jobs` 로 작업을 만들기도 하고, collector 를 직접
-  부르기도 하고(`/perf-report/generate`), 윈도우 PC 에 파일 드롭으로 일을 넘기기도 한다
-  (`storage/trigger`). 자세한 건 `workflows/n8n/README.md`.
+- **n8n** — 스케줄 자동화. `POST /internal/jobs` 로 작업을 만들기도 하고, 파일 드롭으로 일을
+  넘기기도 한다(`storage/trigger`). 자세한 건 `workflows/n8n/README.md`.
+
+> 2026-09-30: 사내 공유 드라이브·LAN 에 묶여 있던 `collector` 서비스는 폐기했다. 남은 화면의 원천은
+> 무료 공개 데이터(FRED · KRX · OpenDART 등)를 api 가 직접 읽는다 — 회사 드라이브·LAN 의존 0.
 
 ## 1. 목적
 
 - 로컬에서 도는 작업 처리 파이프라인 (job 생성 → worker 처리 → 상태 조회).
-- 사내 리포트·모니터링을 한 화면에 모으기 (iNAV · WRAP · 성과분석 · 매크로 · 텔레그램 뉴스 등).
-- 손으로 돌리던 리포트 생성을 스케줄로 대체하기 (성과분석 · 주간가격모니터 · 매크로모니터).
+- 개인 투자 리서치·모니터링을 한 화면에 모으기 (매크로 · AI Key Data · 국내 ETF · 13F 등).
+- 손으로 돌리던 리포트 생성을 스케줄로 대체하기.
 
 ## 2. 전체 구조
 
@@ -35,8 +34,7 @@ personal-investment-platform/
 ├── apps/
 │   ├── web/         # Next.js 15 대시보드
 │   ├── api/         # FastAPI + SQLAlchemy + Alembic
-│   ├── worker/      # PostgreSQL polling worker
-│   └── collector/   # 레거시 엔진 재사용 계산 서비스 (S: 마운트 · profile 게이트)
+│   └── worker/      # PostgreSQL polling worker
 ├── database/
 │   ├── migrations/  # Alembic 마이그레이션
 │   └── seeds/
@@ -45,7 +43,6 @@ personal-investment-platform/
 │   ├── raw/         # 업로드된 원본 CSV
 │   ├── processed/   # 검증·정규화된 CSV
 │   └── trigger/     # n8n ↔ 윈도우 워처 파일 드롭 다리
-├── tools/           # 윈도우 사이드카 (perf-brief-runner 등)
 ├── scripts/         # 샘플 CSV, 통합 테스트 스크립트
 ├── docs/architecture/
 ├── docker-compose.yml
@@ -63,19 +60,8 @@ personal-investment-platform/
 | worker | 작업 처리 프로세스 | (없음) |
 | postgres | PostgreSQL 16 | 5432 |
 | n8n | 워크플로 자동화 | 5678 |
-| collector | 레거시 엔진 계산 서비스 | (없음 · 내부 8100) |
 
-`collector` 는 `profiles: ["collector"]` 게이트라 기본 `make up` 으로는 안 뜬다. 최초 1회만 아래로
-띄우면 그 뒤부터는 Docker 재시작 때 자동 기동된다(`restart: unless-stopped`).
-
-```bash
-docker compose --profile collector up -d collector
-```
-
-S: 공유 폴더를 여러 갈래로 마운트하는데 **입력과 엔진은 전부 `:ro`** 다. 쓰기가 열린 곳은
-`output/` · `funds/` · `lp_eval/` · `.cache` 뿐이다(compose 주석 참조).
-
-컨테이너 내부 통신은 서비스 이름으로 한다 (`http://api:8000`, `http://collector:8100`, `postgres:5432`). `localhost`는 쓰지 않는다.
+컨테이너 내부 통신은 서비스 이름으로 한다 (`http://api:8000`, `postgres:5432`). `localhost`는 쓰지 않는다.
 
 ## 3. 사전 설치 프로그램
 
@@ -131,11 +117,8 @@ http://localhost:3000
 
 | 그룹 | 화면 |
 |---|---|
-| 시장 모니터링 | `/inav` iNAV 모니터 · `/wrap` WRAP · `/lp-eval` LP 평가 |
-| 뉴스 모니터링 | `/telegram-news` 텔레그램 |
 | Quant | `/macro` 매크로 |
-| 성과 분석 | `/track-record/torus-aicoretech` TORUS/AI테크 |
-| 기타 | `/ai-token-usage` · `/lan-dashboard` · `/stock-discussion` 종토방 · `/meeting` 회의 · `/settings` |
+| 기타 | `/stock-discussion` 종토방 · `/settings` |
 | 골격 | `/` 메인 · `/data-operations` 작업·CSV |
 
 사이드바에 href 가 없는 항목(모멘텀·재무·sentiment·FUND3 등)은 아직 페이지가 없는 자리다.
@@ -182,7 +165,6 @@ cd apps/web && npm run dev
 없으면 `http://localhost:8000` 을 쓰고, 이 값은 **빌드 시점에 번들에 박힌다**.
 포트를 바꾸면 dev 는 환경변수로 넘길 수 있어도 프로덕션 빌드는 조용히 8000 을
 가리킨 채 나온다(실제로 그런 번들이 나왔다).
-⚠️`8010` 은 `tools/perf-brief-runner` 가 쓰는 포트다. API 를 거기 올리면 충돌한다.
 
 ⚠️**`--reload-dir ../worker` 를 빼지 말 것.** API 는 시세·공시 소스를
 `apps/worker/prices/` 에서 import 하는데, `--reload` 는 기본적으로 실행 디렉터리

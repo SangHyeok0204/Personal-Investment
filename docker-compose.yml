@@ -27,8 +27,11 @@ services:
       STORAGE_DIR: ${STORAGE_DIR}
       VALUECHAIN_DIR: /app/storage/valuechain
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
-      # ETF iNAV collector (profile service, may be stopped) proxied by /api/v1/inav/snapshot.
-      COLLECTOR_URL: ${COLLECTOR_URL:-http://collector:8100}
+      KRX_USER: ${KRX_USER:-}
+      KRX_PW: ${KRX_PW:-}
+      OPENDART_API_KEY: ${OPENDART_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      RESEARCH_DIR: ${RESEARCH_DIR:-}
     ports:
       - "8000:8000"
     volumes:
@@ -111,148 +114,6 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # ETF iNAV 수집/계산 서비스 (Phase-0 스캐폴드 — profile로 분리, 기본 up에 미포함)
-  # 실행: docker compose --profile collector up -d collector
-  # 프로브: docker compose --profile collector run --rm collector python -m collector.probe --krx
-  collector:
-    build:
-      context: apps/collector
-    profiles: ["collector"]
-    environment:
-      TZ: Asia/Seoul
-      # LP 평가 일별 산출물 출력 폴더(컨테이너 경로). 아래 :rw 마운트 대상.
-      COLLECTOR_LP_EVAL_DIR: /srv/lp_eval
-      # [성과보고 · 환] snapshot_report.fx_daily 가 읽을 환율 parquet. S: 의 엔진은
-      # 기본값으로 raw\data\_공유모듈\... 을 잡는데 컨테이너엔 그 경로가 없어 갈아끼운다.
-      FX_PARQUET_PATH: /srv/legacy/quotes/exchange_rate.parquet
-      # ── 자립(self-sufficiency) 플래그 ──
-      # 구시스템(streaming.py)이 종료돼 이 collector 가 KIS 앱키를 단독 사용한다.
-      # 아래 두 플래그를 0/0 으로 되돌리면 구시스템 병행운영 안전모드(piggyback-only,
-      # KRX 무접속)로 완전히 복귀한다 — 구시스템 재기동 비교세션용.
-      #
-      # COLLECTOR_ALLOW_TOKEN_ISSUE=1: 레거시 토큰이 없거나 만료면 KisAuth 가 직접
-      #   토큰을 발급(→ /app/.cache 캐시). =0: 발급 금지(piggyback 만, 없으면 REST skip).
-      COLLECTOR_ALLOW_TOKEN_ISSUE: "1"
-      # COLLECTOR_ALLOW_FETCH=1: 오늘자 레거시 KRX 캐시 CSV 가 없으면 KRX 에서 직접
-      #   가져와 /app/.cache/krx/{date}/ 에 동일 포맷으로 저장(basket_source=SELF_FETCH).
-      #   =0: 레거시 캐시만 읽음(KRX 무접속, Phase-1 동작).
-      # ⚠️ 2026-07-22 임시 "0": KRX per-ticker PDF 셀프수집이 전패(빈 pdf csv 를
-      #   SELF_FETCH 로 반환 → 엔진 raise 크래시루프)하고, 구시스템 아침잡도 7/21부터
-      #   krx_etf_pdf 를 안 만듦(list/market 만). STALE 캐시(0720)로 기동. 셀프수집
-      #   원인 해결 후 "1" 복귀할 것.
-      # ※ 2026-08-03 정정: 위 주석의 "바스켓은 CHECK 에이전트 POST 가 소유하므로
-      #   시드 지연 무해"는 사실이 아니었다 — POST(/ingest/hoga)는 호가·체결가만
-      #   나르고 바스켓은 안 나른다. 그래서 streaming.py 가 7/31 정지한 뒤 매일
-      #   STALE 바스켓으로 돌고 있었다(8/3 발견: 457480 TSLA 수량 425 vs 당일 427).
-      #   legacy_inputs 의 CHECK_PDF lane 이 그 자리를 메운다 — 이 플래그와 무관.
-      COLLECTOR_ALLOW_FETCH: "0"
-      # COLLECTOR_FORCE_FETCH=1: 레거시 캐시가 있어도 항상 self-fetch(테스트/드릴용).
-      #   ALLOW_FETCH=1 일 때만 유효. 평시엔 "0"(레거시 캐시 우선).
-      COLLECTOR_FORCE_FETCH: "0"
-      # KIS/KRX 자격증명 — .env 에서 주입(값은 저장소에 두지 않는다).
-      # collector 서비스에만 스코프 (다른 서비스 env에 넣지 말 것).
-      ETF_INAV_MONITOR__KIS_APP_KEY: ${ETF_INAV_MONITOR__KIS_APP_KEY:-}
-      ETF_INAV_MONITOR__KIS_APP_SECRET: ${ETF_INAV_MONITOR__KIS_APP_SECRET:-}
-      ETF_INAV_MONITOR__KRX_USER: ${ETF_INAV_MONITOR__KRX_USER:-}
-      ETF_INAV_MONITOR__KRX_PW: ${ETF_INAV_MONITOR__KRX_PW:-}
-    volumes:
-      # 쓰기 가능한 캐시(토큰/master/db 스테이징) — 유일한 쓰기 대상.
-      - kis_token_cache:/app/.cache
-      # 레거시(구시스템) 산출물 — 전부 read-only. 절대 쓰지 않는다.
-      # config: 타깃 ETF 목록 등.
-      - "${LEGACY_SHARE:-/nonexistent}/config:/srv/legacy/config:ro"
-      # etf_data: cache/(token_*.json, master/*.parquet) + output/results/etf_inav/{date}/krx_etf_*.csv
-      - "${LEGACY_SHARE:-/nonexistent}/etf_data:/srv/legacy/etf_data:ro"
-      # db: OpenFIGI ISIN 매핑 캐시(ETF_INAV_MONITOR.db). 컨테이너는 /app/.cache 로 복사해 씀.
-      - "${LEGACY_SHARE:-/nonexistent}/db:/srv/legacy/db:ro"
-      # WRAP: TORUS_코어테크_모니터 config / data(PDF·classification.json) / 운용역 소스 xlsx — 전부 :ro.
-      - "${LEGACY_SHARE:-/nonexistent}/wrap_config:/srv/legacy/wrap_config:ro"
-      - "${LEGACY_SHARE:-/nonexistent}/wrap_data:/srv/legacy/wrap_data:ro"
-      - "${LEGACY_SHARE:-/nonexistent}/wrap_source:/srv/legacy/wrap_source:ro"
-      # holidays: 공유 휴장일 캘린더(_공유모듈) — holiday_calendar 싱글턴이 컨테이너 경로로 재배선됨.
-      - "${LEGACY_SHARE:-/nonexistent}/holidays:/srv/legacy/holidays:ro"
-      # [AI Key Data] 컴퓨팅 지수 모니터링 — GPU 렌탈 지수(SDH100RT·SDB200RT).
-      # ★2026-08-27 이전: 원래 주간가격모니터 폴더에 얹혀 있었는데 [AI Key Data]
-      #   프로젝트가 신설되면서 그쪽 input/raw 로 옮겨졌다(같은 블록 구조 + 종목 OHLCV
-      #   시트가 붙은 통합본). 마운트를 얹어 놓지 않으면 카드가 "원천 파일 없음"을 띄운다.
-      # ★2026-08-28 프로젝트 개명(AI Key Data -> AI Key Data). 경로에 공백이 있어
-      #   따옴표가 필수다. 마운트 별칭(gpu_compute)은 그대로 둔다 — 컨테이너 안 이름이라
-      #   바꾸면 collector·env 를 다 같이 고쳐야 하고 얻는 게 없다.
-      - "${LEGACY_SHARE:-/nonexistent}/gpu_compute:/srv/legacy/gpu_compute:ro"
-      # [국내상장 ETF] 분류별 자금·수익률 - 운용역이 매일 굽는 워크북 한 장
-      #   (국내상장ETF 모니터링.xlsm 의 value 시트) 만 읽는다. 같은 폴더의
-      #   daily_analysis/*.txt 는 Slack 용 상·하위 10개 발췌라 전수가 아니어서 안 본다.
-      # ★워크북은 매일 **덮어쓰기**라 과거가 없다. 그래서 collector 가 판독할 때마다
-      #   그날 스냅샷을 ./storage(=/srv/storage, :rw)의 sqlite 에 적재해 이력을 만든다.
-      - "${LEGACY_SHARE:-/nonexistent}/etf_monitor:/srv/legacy/etf_monitor:ro"
-      # [국내상장 ETF · 신규상장] 펀드공시모니터가 굽는 두 산출물만 읽는다.
-      #   cache/holdings/{상장일}.json  — 상장일 구성종목·비중(KRX 확정 or claude 폴백)
-      #   input/processed/{접수번호}.json — DART 예비투자설명서 기반 상장 임박 건
-      # ★계산이 왜 저쪽에 있나: 구성비중 추출이 이미지 표라 claude 를 태우는데, 이
-      #   컨테이너엔 claude 가 없다(텔레그램·매크로와 같은 "S: 가 굽고 대시보드는 읽는다").
-      #   ⚠️같은 파일의 fee·company 는 비어 있어 총보수는 collector 가 KRX 에서 직접 받는다.
-      - "${LEGACY_SHARE:-/nonexistent}/fund_filing:/srv/legacy/fund_filing:ro"
-      # [회의] 회의자료 루트 (PoC). 파일 탐색기로 폴더 탐색 + 자체완결 HTML iframe 렌더.
-      - "${LEGACY_SHARE:-/nonexistent}/meeting:/srv/legacy/meeting:ro"
-      # [뉴스 모니터링 · 텔레그램] 상류 Telegram_Bot(다른 PC 상주)이 굽는 집계 JSON.
-      # collector 가 실제로 읽는 파일은 output/dashboard_analysis.json **하나뿐**이다
-      # (120초마다 재판독). 같은 폴더의 input/raw·input/processed 와 output 의 일간
-      # HTML 은 안 본다.
-      # 상류 파이프라인: 30분마다 수집 → input/raw/{방}.csv, 07:30·12:30 토픽 생성
-      # → input/processed/, 2시간 슬롯마다 최근 24h 토픽을 Opus 1콜로 집계 → 그 JSON.
-      # ★계산이 왜 저쪽에 있나: 이 컨테이너에는 claude 가 없고 인증도 구독 OAuth 라
-      # 옮길 수 없다. 성과보고(perf_brief)·매크로와 같은 "S: 가 굽고 대시보드는 읽는다".
-      # ⚠️2026-08-12 이전엔 collector 가 raw CSV 를 증분 tail 로 읽어 문장 유사도로
-      # 직접 카드를 만들었다(그 방식은 폐기 — 서식이 같으면 남남을 묶었다).
-      - "${LEGACY_SHARE:-/nonexistent}/telegram:/srv/legacy/telegram:ro"
-      # [종목 모니터링 · 미국] 어닝모니터 마스터 원장. 상류(다른 PC 상주 daily-server)가
-      # ET 08:30·17:30 슬롯마다 Investing.com 크롤 → SEC 8-K → claude CLI 관전포인트까지
-      # 돌려 `보유종목정리.xlsx` 한 장에 UPSERT 한다. collector 는 그 파일만 읽는다
-      # (같은 폴더의 Backup/ 87장은 안 본다). Slack 알림도 계속 상류가 쏜다.
-      # ★계산이 왜 저쪽에 있나: 텔레그램·성과보고와 같다 — 이 컨테이너엔 claude 가 없다.
-      - "${LEGACY_SHARE:-/nonexistent}/earnings:/srv/legacy/earnings:ro"
-      # [매크로] 매크로모니터가 구운 output/macro_panels.json (FRED·BLS·CME 계산 결과).
-      # 같은 폴더의 db/macro.db 는 CPI/PPI 세부품목까지 담아 300MB 라 읽지 않는다 —
-      # 수치는 S: 쪽이 소유하고 collector 는 결과 JSON 만 본다(성과보고 JSON 과 같은 배선).
-      - "${LEGACY_SHARE:-/nonexistent}/macro:/srv/legacy/macro:ro"
-      # api 가 이미 쓰는 ./storage 공유(윈도우에서도 \\wsl.localhost 로 편집 가능).
-      # ⚠️구 telegram/keywords.json(속보·중요 배지 판정어)은 그 기능이 폐기되면서
-      # 읽는 코드가 없다 — 방 고정 머리글이 배지를 도배해 오탐이 났다(2026-08-12).
-      # 파일은 남아 있으나 참조 0건이니 이 마운트의 근거로 오해하지 말 것.
-      - ./storage:/srv/storage:rw
-      # [성과보고] 정기미팅 폴더 — performance-brief 스킬이 만든 daily_*.json /
-      # weekly_*.json 을 읽어 TORUS/AI테크 페이지에 네이티브 렌더. 소스 xlsx·HTML 도
-      # 같은 폴더에 있지만 collector 는 JSON 만 본다.
-      - "${LEGACY_SHARE:-/nonexistent}/perf_brief:/srv/legacy/perf_brief:ro"
-      # [성과보고] 성과 분석 자동화 프로젝트 — S: 의 bat 이 만든 자체완결 HTML 을 읽어
-      # TORUS/AI테크 페이지에 iframe(srcDoc) 렌더. 계산·서사 전부 S: 쪽 소관이라
-      # collector 는 파일명 규약으로 고르고 원문만 넘긴다. 루트와 output/ 만 스캔.
-      - "${LEGACY_SHARE:-/nonexistent}/perf_analysis:/srv/legacy/perf_analysis:ro"
-      # [성과보고 생성] 위 :ro 의 하위 두 폴더만 :rw 로 겹쳐 건다(2026-08-11).
-      # perf_generate 가 아침 스케줄로 보고서를 만들면서 쓰는 곳이고, 그 둘뿐이다.
-      # 입력(input/)과 엔진(분석엔진/)은 :ro 로 남는다 — 소스와 로직은 운용역 소관이라
-      # 컨테이너가 건드릴 자리가 아니다. lp_eval 과 같은 중첩 마운트 패턴이다.
-      #   output/  보고서 HTML.  파일명이 대시보드와의 계약(perf_report._classify)
-      #   funds/   누적수익률 시계열 JSON. build_funds 가 .tmp 로 쓰고 replace 한다
-      - "${LEGACY_SHARE:-/nonexistent}/output:/srv/legacy/perf_analysis/output:rw"
-      - "${LEGACY_SHARE:-/nonexistent}/funds:/srv/legacy/perf_analysis/funds:rw"
-      # [성과보고 · 환] 사내 공유 시세 데이터(LSEG). 전기차 스냅샷은 종목수익률이 상장
-      # 거래소 통화 기준이라 원화로 올리려면 다통화 환율이 필요한데, 소스 엑셀엔 없다.
-      # snapshot_report.fx_daily 가 exchange_rate.parquet 만 읽는다(대 KRW 10페어).
-      # 같은 폴더의 prc_vol.parquet 은 285MB 지만 마운트일 뿐 읽지 않는다.
-      - "${LEGACY_SHARE:-/nonexistent}/quotes:/srv/legacy/quotes:ro"
-      # LP 평가 일별 산출물(:rw). collector 가 09:05~15:20 매
-      # 표본마다 그날치 JSON(lp_eval_{date}.json)·분단위 CSV 를 갱신하고, 전기간 마스터
-      # CSV(lp_eval_history.csv)는 매일 16:30 KST 에 1회 이관한다(2026-08-10).
-      # 휴장일·주말에는 표본 자체가 없어 파일도 안 생긴다.
-      # etf_data(:ro)의 하위 폴더지만 별개 마운트라 쓰기 가능.
-      - "${LEGACY_SHARE:-/nonexistent}/lp_eval:/srv/lp_eval:rw"
-    # 24시간 상시가동: 재부팅·크래시 후 자동 복구 (2026-07-21).
-    # 단 profiles:["collector"] 게이트라 최초 1회는 --profile collector 로 띄워야 하며,
-    # 그 뒤부터 Docker 재시작 시 자동 기동된다.
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   n8n_data:
-  kis_token_cache:

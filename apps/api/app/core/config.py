@@ -45,9 +45,6 @@ class Settings(BaseSettings):
     # Internal API auth shared with the worker/n8n; guards the /internal router.
     INTERNAL_API_KEY: str = "change_me_internal"
 
-    # Upstream ETF iNAV collector (profile service) that /api/v1/inav/snapshot proxies.
-    COLLECTOR_URL: str = "http://collector:8100"
-
     # 종토방 read-replica: push 신선도(staleness) 판정 + keyword 렌더 상한.
     # 임계 = SD_PUSH_INTERVAL_HINT * SD_STALE_FACTOR (단일 파생, D11).
     SD_PUSH_INTERVAL_HINT: int = 60

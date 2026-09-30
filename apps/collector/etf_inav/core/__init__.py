@@ -1,2 +1,0 @@
-"""Core iNAV calculation logic."""
-

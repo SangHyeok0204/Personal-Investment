@@ -14,30 +14,6 @@ n8n에서 FastAPI 내부 작업 생성 API를 호출할 수 있는지 검증하�
 
 > **내부 API 인증 헤더 (`X-Internal-API-Key`)**: HTTP Request 노드가 `X-Internal-API-Key` 헤더를 함께 보낸다. 값은 표현식 `={{ $env.INTERNAL_API_KEY }}`으로 n8n 컨테이너의 환경변수 `INTERNAL_API_KEY`를 읽는다. 이 변수는 `docker-compose.yml`의 n8n 서비스에 주입되며(값은 `.env`의 `INTERNAL_API_KEY`), 함께 설정한 `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` 덕분에 노드에서 `$env` 접근이 허용된다. API의 `/internal/*` 라우터는 이 헤더가 서버의 `INTERNAL_API_KEY`와 일치하지 않으면 **401 `UNAUTHORIZED`**를 반환한다. 즉 이 워크플로는 위 compose 환경설정이 반영된 상태에서만 동작한다.
 
-## 성과분석 보고서 일간 생성 (`perf-report-daily.json`)
-
-운용역이 `비교PORT_분석.bat` · `전기차PORT_분석.bat` 을 손으로 돌리던 자리를 대신한다. 산출물은 대시보드 `/track-record/torus-aicoretech` 에 그대로 뜬다 (`/perf-report` 가 `output/{생성일}/` 을 훑는 기존 배선).
-
-- **트리거**: Schedule 2개 (Asia/Seoul).
-  - `평일 08:30~10:30 · 10분` → `scope=일간`. **08:30 · 08:40 · 08:50 / 09:00~09:50 10분 간격 / 10:00 · 10:10 · 10:20 · 10:30** = 하루 13회.
-  - `월요일 08:30~10:30 · 10분` → `scope=주간`. 같은 시각표에 요일만 월요일(`* * 1`). 월요일엔 두 트리거가 각각 돌아 일간·주간이 다 나온다.
-  - 게이트가 `scope` 별로 따로 잡히므로(`_prev_as_of(who, scope)`) 둘이 서로를 막지 않는다.
-  - `cronExpression` 은 **6필드이고 첫 자리가 초**다. `*/10 30-59 8 * * 1-5` 로 쓰면 10분이 아니라 **10초마다** 돌아 30분간 180번 발화한다. 반드시 `0 30,40,50 8 * * 1-5` 형태로 초를 0 에 고정할 것.
-- **호출 API**: `POST http://collector:8100/perf-report/generate?scope=일간`
-  - `scope` 는 `일간` · `주간` · `월간`. `force=true` 는 게이트를 무시하고 무조건 만든다 (수동 재생성용, 스케줄은 안 쓴다).
-  - 타임아웃 600초. SMB + openpyxl 이라 두 보고서에 수십 초가 걸린다.
-- **왜 13번이나 부르는가**: 소스가 블룸버그 BDH 워크북이라 **사람이 엑셀에서 열어 저장해야** 새 종가가 들어온다. 실제 저장 시각이 07:5x ~ 09:4x 로 흔들려서 한 번만 부르면 전날 숫자로 보고서가 나간다. 도착할 때까지 두드리는 구조다.
-- **중복은 서버가 막는다**: `perf_generate` 가 `Price 시트 마지막 영업일 > 이미 만든 보고서의 기준일` 일 때만 만든다. 이미 있으면 `status: skip` 으로 즉시 돌아온다. 그래서 13번을 불러도 기준일당 한 번만 생성된다. 휴장일엔 시트가 안 늘어나 저절로 건너뛴다 — 휴장일 캘린더가 필요 없다.
-- **출력**: `{ ran, sourceStale, results: [{target, status, asOf, file, reason}], fundSeries }`
-  - `status` 는 `ok`(생성) · `skip`(이미 최신 또는 소스 미갱신) · `error`.
-  - `ran` 이 참이면 누적수익률 시계열(`funds/*.json`)도 같이 갱신한다.
-- **알림 분기**: IF 노드가 `sourceStale == true` 이고 시각이 10시를 넘었으면 "미갱신 알림" 으로 보낸다. 지금 그 자리는 **NoOp 자리표시자**다 — 실제 채널(슬랙·메일 등)로 바꿔 끼울 것.
-- **실패 처리**: HTTP 노드가 4xx/5xx 를 받으면 실행이 실패로 남는다(**Executions** 화면에서 빨갛게 보인다). 일부러 `neverError` 를 끄고 두었다. 10분 뒤 다음 발화가 다시 시도한다.
-
-> **엔진은 S: 가 정본이다.** collector 는 `/srv/legacy/perf_analysis/분석엔진` 을 `sys.path` 에 얹어 그대로 임포트한다. 다만 **파이썬 모듈 캐시 때문에 프로세스당 한 번만** 읽는다 — S: 의 엔진을 고쳤으면 `docker compose --profile collector restart collector` 를 해야 반영된다.
-
-> **쓰기 범위**: 마운트는 `:ro` 가 원칙이고 `output/` 과 `funds/` 두 하위 폴더만 `:rw` 로 겹쳐 걸었다(compose 참조). 입력 엑셀과 엔진 코드는 컨테이너가 못 건드린다.
-
 ## 주간가격 · 매크로 리포트 일간 생성 (`weekly-report-daily.json`)
 
 운용역이 손으로 돌리던 두 자리를 대신한다 — 주간가격모니터 `make_report.bat`, 매크로모니터 `일간HTML생성.bat`.
@@ -139,25 +115,18 @@ docker compose exec n8n n8n import:workflow --input=/workflows/create-test-job.j
 `import:workflow` 는 워크플로를 **비활성 상태로** 넣는다(이미 활성이던 것도 재import 하면 꺼진다). 스케줄이 실제로 돌게 하려면 publish 후 n8n 을 다시 띄워야 한다.
 
 ```bash
-docker compose exec n8n n8n import:workflow --input=/workflows/perf-report-daily.json
-docker compose exec n8n n8n publish:workflow --id=perf-report-daily
-
 docker compose exec n8n n8n import:workflow --input=/workflows/weekly-report-daily.json
 docker compose exec n8n n8n publish:workflow --id=daily-reports   # ★ 파일명이 아니라 id
 
 docker compose restart n8n          # 재시작해야 트리거가 등록된다
 ```
 
-지금 무엇이 켜져 있는지는 이렇게 본다 (2026-08-13 기준 `perf-report-daily` · `daily-reports` 둘 다 활성).
+지금 무엇이 켜져 있는지는 이렇게 본다 (`perf-report-daily` 는 collector 폐기와 함께 삭제됐다 — 2026-09-30).
 
 ```bash
 docker compose exec n8n n8n list:workflow
 ```
 
-`n8n execute --id=...` 로는 검증할 수 없다 — Schedule Trigger 만 있는 워크플로는 CLI 실행 대상이 아니다("Missing node to start execution"). 배선을 확인하려면 HTTP 호출을 직접 해 보면 된다.
-
-```bash
-docker compose exec n8n node -e '(async()=>{const r=await fetch("http://collector:8100/perf-report/generate?scope="+encodeURIComponent("일간"),{method:"POST"});console.log(r.status, JSON.stringify(await r.json()));})()'
-```
+`n8n execute --id=...` 로는 검증할 수 없다 — Schedule Trigger 만 있는 워크플로는 CLI 실행 대상이 아니다("Missing node to start execution").
 
 import 후 워크플로를 열고 **Execute Workflow**를 누르면 작업이 생성된다. worker가 작업을 처리하려면 먼저 `docker compose exec api alembic upgrade head`로 마이그레이션이 끝나 있어야 하고, `.env`에 `INTERNAL_API_KEY`가 있어야 한다(compose가 n8n·api에 주입).
