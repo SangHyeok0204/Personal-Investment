@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SECONDS = 30 * 60
 RETRY_AFTER_SECONDS = 60 * 60
+
+# 오류 문구에 새면 안 되는 값 — DART 키는 쿼리(crtfc_key)로 가서 httpx 오류 문구의 URL 에 그대로 찍힌다.
+_SECRET_RE = re.compile(r"\b(crtfc_key|mbrId|pw)=[^&'\"\s]+")
+
+
+def redact(text: str) -> str:
+    """`crtfc_key=…`·KRX `mbrId=…`/`pw=…` 값을 *** 로 가린다(source_status·로그로 가는 문구용)."""
+    return _SECRET_RE.sub(r"\1=***", text)
 STARTUP_DELAY_SECONDS = 60
 UPCOMING_LIMIT = 8
 DART_LOOKBACK_DAYS = 90       # list.json 은 회사 지정 없이 3개월까지만 검색된다
@@ -536,7 +544,7 @@ def sync(db, now: datetime | None = None, *, transport: httpx.BaseTransport | No
             db.rollback()
             logger.warning("etf krx sync failed: %s", type(exc).__name__)
             _state["krx_error"] = f"KRX 조회 실패 — {'키 미설정' if isinstance(exc, KeyMissing) else type(exc).__name__}"
-            record_error(db, "etf_krx", exc)
+            record_error(db, "etf_krx", exc, redact(str(exc)))
             out["krx"] = "error"
 
     krx_rows = _state["krx_rows"]
@@ -563,7 +571,7 @@ def sync(db, now: datetime | None = None, *, transport: httpx.BaseTransport | No
             db.rollback()
             logger.warning("etf dart sync failed: %s", type(exc).__name__)
             _state["dart_error"] = f"DART 조회 실패 — {'키 미설정' if isinstance(exc, KeyMissing) else type(exc).__name__}"
-            record_error(db, "etf_dart", exc)
+            record_error(db, "etf_dart", exc, redact(str(exc)))
             out["dart"] = "error"
     return out
 
@@ -581,8 +589,8 @@ async def etf_listing_sync_loop() -> None:
             result = await asyncio.to_thread(run_once)
             if any(v != "skip" for v in result.values()):
                 logger.info("etf listing sync: %s", result)
-        except Exception:
-            logger.exception("etf listing sync check failed")
+        except Exception as exc:  # noqa: BLE001 — traceback 은 남기지 않는다(연쇄 예외 URL 에 키가 들 수 있다)
+            logger.error("etf listing sync check failed: %s %s", type(exc).__name__, redact(str(exc)))
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 

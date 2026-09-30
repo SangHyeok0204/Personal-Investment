@@ -287,3 +287,86 @@ def test_new_listing_endpoint_warm_cache_shape(client, db):
 ])
 def test_removed_paths_are_404(client, path):
     assert client.get(path).status_code == 404
+
+
+# ── 키 가림 — DART 키(crtfc_key 쿼리)가 source_status·로그로 새지 않는다 ─────────────
+
+FAKE_KEY = "SECRETKEY123"
+
+
+def _dart_list_status(code: int) -> httpx.MockTransport:
+    base = _transport()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "opendart.fss.or.kr" in str(request.url) and "list.json" in str(request.url):
+            return httpx.Response(code)
+        return base.handle_request(request)
+
+    return httpx.MockTransport(handler)
+
+
+def _error_row(db, source):
+    return db.execute(text(
+        "SELECT last_error_kind, last_error_message FROM source_status WHERE source = :s"), {"s": source}).one()
+
+
+def test_redact_masks_dart_key_and_krx_form_values():
+    s = "Server error for url 'https://x/list.json?crtfc_key=SECRETKEY123&bgn_de=1' mbrId=u1&pw=p1 xpw=keep"
+    out = m.redact(s)
+    assert "SECRETKEY123" not in out and "u1" not in out and "p1" not in out
+    assert "crtfc_key=***&bgn_de=1" in out and "xpw=keep" in out
+
+
+def test_dart_500_does_not_leak_key_to_status_or_logs(db, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "OPENDART_API_KEY", FAKE_KEY)
+    # httpx 자체 INFO 요청 로그는 루트가 WARNING(API 는 로깅 설정 없음)이라 안 나간다 — 우리 로거만 본다.
+    caplog.set_level("DEBUG", logger=m.__name__)
+    out = m.sync(db, NOW, transport=_dart_list_status(500))
+    assert out == {"krx": "ok", "dart": "error"}
+    row = _error_row(db, "etf_dart")
+    assert row.last_error_kind == "other"
+    assert row.last_error_message and "crtfc_key=***" in row.last_error_message
+    assert FAKE_KEY not in row.last_error_message
+    assert FAKE_KEY not in caplog.text
+    assert FAKE_KEY not in (m.payload(NOW)["note"] or "")
+
+
+@pytest.mark.parametrize("code", [403, 429])
+def test_dart_error_kind_still_classified_with_redacted_message(db, monkeypatch, code):
+    monkeypatch.setattr(settings, "OPENDART_API_KEY", FAKE_KEY)
+    assert m.sync(db, NOW, transport=_dart_list_status(code))["dart"] == "error"
+    row = _error_row(db, "etf_dart")
+    assert row.last_error_kind == str(code)
+    assert FAKE_KEY not in row.last_error_message
+
+
+def test_loop_failure_log_has_no_key_or_traceback(monkeypatch, caplog):
+    import asyncio
+
+    req = httpx.Request("GET", f"https://opendart.fss.or.kr/api/list.json?crtfc_key={FAKE_KEY}")
+    cause = httpx.ConnectError(f"boom {req.url}", request=req)
+
+    def boom(*a, **k):
+        try:
+            raise cause
+        except httpx.ConnectError as e:
+            raise RuntimeError(f"wrapped {req.url}") from e
+
+    class _Stop(Exception):
+        pass
+
+    calls = []
+
+    async def fake_sleep(_s):
+        calls.append(_s)
+        if len(calls) > 1:
+            raise _Stop
+
+    monkeypatch.setattr(m, "run_once", boom)
+    monkeypatch.setattr(m.asyncio, "sleep", fake_sleep)
+    caplog.set_level("DEBUG", logger=m.__name__)
+    with pytest.raises(_Stop):
+        asyncio.run(m.etf_listing_sync_loop())
+    assert "etf listing sync check failed" in caplog.text
+    assert FAKE_KEY not in caplog.text
+    assert all(r.exc_info is None for r in caplog.records)

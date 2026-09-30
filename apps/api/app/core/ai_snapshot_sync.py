@@ -78,8 +78,10 @@ def record_ok(db, source: str, detail: dict | None = None) -> None:
     db.commit()
 
 
-def record_error(db, source: str, exc: BaseException) -> None:
-    db.execute(_UPSERT_ERROR, {"source": source, "error_kind": error_kind(exc), "message": str(exc)[:500]})
+def record_error(db, source: str, exc: BaseException, message: str | None = None) -> None:
+    """message 를 주면 str(exc) 대신 그걸 저장한다(키가 든 URL 을 가린 문구 등). 분류는 exc 로."""
+    text = str(exc) if message is None else message
+    db.execute(_UPSERT_ERROR, {"source": source, "error_kind": error_kind(exc), "message": text[:500]})
     db.commit()
 
 
