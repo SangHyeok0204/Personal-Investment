@@ -482,8 +482,9 @@ export function getPerformance(
 }
 
 // ── 손익 분해 (실현손익 누적 · 평가손익 · 총기간 손익 · 총 평가액) ──────────
-// ⚠️시계열의 null 은 **모르는 날**이다(0 이 아니다). 평가손익은 스냅샷이 있는
-//   날만 있다 — 서버 독스트링(/pnl-breakdown) 참고.
+// ★첫 거래일부터 센다(투자 시작일로 자르지 않는다). 총기간 손익 = 키움 일별 손익 누적,
+//   평가손익 = 총기간 − 실현(과거는 역산, 오늘은 키움 실제 값) — 서버 독스트링 참고.
+// ⚠️시계열의 null 은 **모르는 날**이다(0 이 아니다).
 
 export interface PnlBreakdownPoint {
   date: string;
@@ -503,7 +504,8 @@ export interface PnlBreakdown {
   total_period_pnl_krw: string | null;
   total_value_krw: string | null;
   cash_krw: string | null;
-  unrealized_since: string | null;
+  // 키움 일별 손익이 있는 마지막 날. 그 뒤(오늘)는 실현 + 실제 평가손익.
+  daily_pnl_until: string | null;
   items: PnlBreakdownPoint[];
 }
 

@@ -1101,37 +1101,44 @@ def get_pnl_breakdown(
     days: int = Query(3650, ge=1, le=3650),
     db: Session = Depends(get_db),
 ) -> PnlBreakdownOut:
-    """실현손익(누적) · 평가손익 · 총기간 손익 · 총 평가액 — 지금 값과 일별 시계열.
+    """총기간 손익 · 실현손익(누적) · 평가손익 · 총 평가액 — 지금 값과 일별 시계열.
 
-    정의는 `app.core.pnl_breakdown` 머리말. 총기간 손익 = 실현손익(누적) + 평가손익
-    (예수금 제외), 총 평가액 = 주식 평가액 + 예수금(실현손익을 따로 더하지 않는다).
+    ★2026-10-01 사용자 지정: 이 화면만 **첫 거래일부터** 센다(키움 일별 성과의 첫 날,
+      실측 2025-04-08). `investing.INVESTMENT_START`(2026-06-04)로 자르지 않는다 —
+      다른 화면은 그 기준을 그대로 쓴다. 정의는 `app.core.pnl_breakdown` 머리말.
 
-    ★지금 값은 **다른 화면의 숫자를 그대로 옮긴다** — 평가손익·총 평가액·예수금은
-      `/summary`, 실현손익(누적)은 `/realized` 의 `breakdown.net_krw`(투자 시작일부터).
-      같은 숫자를 여기서 따로 계산하면 화면마다 값이 갈린다.
-
-    시계열의 원천(날짜는 한국 날짜, 투자 시작일 ~ 오늘, 달력 하루마다 한 점):
+    시계열의 원천(날짜는 한국 날짜, 첫 거래일 ~ 오늘, 달력 하루마다 한 점):
+      · 총기간 손익 — `account_daily_performance.pnl_krw`(키움 일별 계좌손익)의 누적 합.
+        ⚠️`cumulative_pnl_krw` 는 쓰지 않는다 — 중간에 0 으로 되돌아가는 값이라 누적이
+        아니다. 총 평가액 − 순입금도 쓰지 않는다 — 입출금 칸이 다 차 있지 않다(실측 ₩1.95M
+        로 일별 손익 합 ₩4.03M 과 크게 어긋남).
       · 실현손익(누적) — `realized_pnl.sell_date` 별 pnl_krw + `dividends.pay_date` 별
-        amount_krw 를 투자 시작일부터 누적. 원장이 다 있어 **매일 값이 있다.**
-      · 평가손익 — `portfolio_snapshots` 의 그날 **마지막** 스냅샷(계좌별)의
-        total_unrealized_pnl_krw. 키움 pl_amt_krw 를 더한 값이라 화면과 같은 기준이다.
-      · 총 평가액 — `account_daily_performance.deposit_assets_krw`(키움 usa21670 예탁자산
-        = 주식 + 예수금). 그 날 행이 없으면 그날 마지막 스냅샷의 total_assets_krw.
-      · 오늘 — 평가손익·총 평가액을 위 지금 값(/summary)으로 둔다. 그래야 그래프 끝점이
-        타일과 같다.
+        amount_krw 를 첫 거래부터 누적. `/realized` 의 net_krw 와 같은 식이다:
+        pnl_krw 는 증권사가 수수료·세금을 **이미 뺀** 값이라 비용을 또 빼지 않고,
+        배당은 원천징수 뒤 값이다. 중복은 DB 자연키(계좌·매도일·종목 / 계좌·지급일·종목)
+        가 막는다.
+      · 평가손익 — 총기간 손익 − 실현손익(누적). **과거는 역산이다.**
+      · 총 평가액 — `deposit_assets_krw`(usa21670 예탁자산 = 주식 + 예수금). 그 날 행이
+        없으면 그날 마지막 스냅샷의 total_assets_krw.
+      · 오늘 — 일별 행이 아직 없다. 총기간 손익 = 실현(누적) + **키움 실제 평가손익**
+        (/summary), 총 평가액 = /summary. 그래서 타일과 그래프 끝점이 똑같다.
+
+    ⚠️역산 평가손익 vs 실제(그날 마지막 스냅샷, 2026-10-01 실측, 역산 − 실제):
+      09-21 +631,410 · 09-22 +810,191 · 09-23 −480,940 · 09-25 +222,477 ·
+      09-26 +79,671 · 09-28 −271,261 · 09-30 −181,534. 부호가 오가는 것은 주로 **시각
+      차이**다: 스냅샷은 한국 시각 아무 때(새벽 장중·낮 장외)의 값이고, 키움 일별 손익은
+      그 날짜 마감 기준이다. 남는 몫은 일별 손익 합과 '실현 + 평가'가 똑같지 않은 데서
+      온다(외화 예수금 환산 등이 일별 손익에 섞인다고 본다).
+      → 그래프는 과거를 **한 규칙(역산)** 으로 그리고, 오늘만 키움 실제 평가손익을 쓴다.
+        마지막 행(09-30)의 역산 − 실제 −18만은 오늘 점에서 총기간 손익의 **계단**으로
+        보인다(실측 09-30 ₩4,030,908 → 오늘 ₩4.59M, 이 중 약 ₩38만은 실제 평가손익 변동).
 
     ⚠️결측(0 으로 채우지 않는다):
-      · **평가손익은 스냅샷이 있는 날만** 있다. 스냅샷은 전체 동기화 때만 쌓이고
-        2026-09-21 에 처음 생겼다 — 그 앞과, 그 뒤라도 전체 동기화를 안 한 날
-        (주말 등)은 None 이고, 그날 총기간 손익도 None 이다.
-        과거 평가손익을 매매 이력으로 되감아 만들지 않는다: 원화 매입원가에 필요한
-        매수일 환율이 체결 원장에 없고(amount_krw 전부 비어 있음), 종목별 과거 가격도
-        저장하지 않는다. 만든 값은 키움 기준과 맞지 않는다.
+      · 일별 행이 없거나 손익이 빈 날은 총기간 손익·평가손익이 None 이다. 주말에도
+        키움이 손익 0 인 행을 주므로 그날은 전날 값이 이어진다.
+      · 계좌가 여럿이면 그날 행이 있는 계좌의 손익을 더하되, 손익이 빈 행이 하나라도
+        있으면 그날은 None 이다.
       · 총 평가액은 일별 성과 동기화가 아직 안 된 날(보통 어제)이 스냅샷도 없으면 None.
-      · 계좌가 여럿이면 **모든 계좌**의 값이 있는 날만 합한다 — 일부만 더하면 그날
-        값이 뚝 떨어진 것처럼 보인다.
-      · 투자 시작일(`investing.INVESTMENT_START`) 앞의 매매·배당은 누적에 넣지 않는다.
-        `/realized` 와 같은 범위다.
     """
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
@@ -1139,111 +1146,100 @@ def get_pnl_breakdown(
             as_of=None, since=None,
             realized_cum_krw=None, realized_trading_krw=None, dividend_krw=None,
             unrealized_krw=None, total_period_pnl_krw=None, total_value_krw=None,
-            cash_krw=None, unrealized_since=None, items=[],
+            cash_krw=None, daily_pnl_until=None, items=[],
         )
 
-    anchor = inv.since(None)
     today = datetime.now(_KST).date()
-    series_start = inv.since(days, today=today)
-
-    # ── 지금 값: 다른 화면의 숫자를 그대로 ─────────────────────────────────
     summary = get_summary(account_id=account_id, db=db)
-    realized = list_realized_pnl(account_id=account_id, days=3650, db=db)
-    breakdown = realized.breakdown
-    realized_now = breakdown.net_krw if breakdown is not None else None
-    unrealized_now = summary.unrealized_pnl_krw
-    total_period_now = (
-        realized_now + unrealized_now
-        if realized_now is not None and unrealized_now is not None
-        else None
-    )
 
-    # ── 실현손익: 날짜별 합 ─────────────────────────────────────────────
-    realized_by_date: dict[date, Decimal] = {}
-    for day, amount in db.execute(
-        select(RealizedPnl.sell_date, func.sum(RealizedPnl.pnl_krw))
-        .where(RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= anchor)
-        .group_by(RealizedPnl.sell_date)
-    ).all():
-        if amount is not None:
-            realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
-    for day, amount in db.execute(
-        select(Dividend.pay_date, func.sum(Dividend.amount_krw))
-        .where(Dividend.account_id.in_(account_ids), Dividend.pay_date >= anchor)
-        .group_by(Dividend.pay_date)
-    ).all():
-        if amount is not None:
-            realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
-
-    # ── 스냅샷: 계좌×한국 날짜별 마지막 한 줄 ─────────────────────────────
-    last_snap: dict[tuple[uuid.UUID, date], PortfolioSnapshot] = {}
-    for snap in db.execute(
-        select(PortfolioSnapshot)
-        .where(
-            PortfolioSnapshot.account_id.in_(account_ids),
-            PortfolioSnapshot.snapshot_at
-            >= datetime.combine(anchor, datetime.min.time(), tzinfo=_KST),
-        )
-        .order_by(PortfolioSnapshot.snapshot_at)
-    ).scalars():
-        last_snap[(snap.account_id, snap.snapshot_at.astimezone(_KST).date())] = snap
-
-    def _all_accounts(day: date, attr: str) -> Decimal | None:
-        """모든 계좌의 그날 값이 있을 때만 합. 하나라도 없으면 None."""
-        values = []
-        for aid in account_ids:
-            snap = last_snap.get((aid, day))
-            value = getattr(snap, attr) if snap is not None else None
-            if value is None:
-                return None
-            values.append(value)
-        return sum(values, Decimal("0"))
-
-    snap_days = sorted({d for _, d in last_snap})
-    unrealized_by_date: dict[date, Decimal | None] = {
-        d: _all_accounts(d, "total_unrealized_pnl_krw") for d in snap_days
-    }
-
-    # ── 총 평가액: 일별 성과(모든 계좌가 있는 날만) → 없으면 스냅샷 ──────────
-    total_value_by_date: dict[date, Decimal | None] = {
-        d: _all_accounts(d, "total_assets_krw") for d in snap_days
-    }
-    for day, assets, rows_n, valued_n in db.execute(
+    # ── 총기간 손익: 키움 일별 손익(날짜별) ─────────────────────────────────
+    daily_pnl_by_date: dict[date, Decimal | None] = {}
+    total_value_by_date: dict[date, Decimal | None] = {}
+    for day, pnl, pnl_n, assets, rows_n, valued_n in db.execute(
         select(
             AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.pnl_krw),
+            func.count(AccountDailyPerformance.pnl_krw),
             func.sum(AccountDailyPerformance.deposit_assets_krw),
             func.count(),
             func.count(AccountDailyPerformance.deposit_assets_krw),
         )
-        .where(
-            AccountDailyPerformance.account_id.in_(account_ids),
-            AccountDailyPerformance.base_date >= anchor,
-        )
+        .where(AccountDailyPerformance.account_id.in_(account_ids))
         .group_by(AccountDailyPerformance.base_date)
     ).all():
+        daily_pnl_by_date[day] = pnl if pnl_n == rows_n else None
+        # 총 평가액은 잔액이라 일부 계좌만 더하면 뚝 떨어져 보인다 — 모든 계좌가 있는 날만.
         if rows_n == len(account_ids) and valued_n == rows_n:
             total_value_by_date[day] = assets
 
-    # 오늘은 지금 값 — 그래프 끝점이 타일과 같아야 한다.
-    unrealized_by_date[today] = unrealized_now
-    total_value_by_date[today] = summary.total_assets_krw
+    # ── 실현손익: 날짜별 합(첫 거래부터 — 투자 시작일로 자르지 않는다) ───────────
+    trading_by_date: dict[date, Decimal] = {
+        day: amount
+        for day, amount in db.execute(
+            select(RealizedPnl.sell_date, func.sum(RealizedPnl.pnl_krw))
+            .where(RealizedPnl.account_id.in_(account_ids))
+            .group_by(RealizedPnl.sell_date)
+        ).all()
+        if amount is not None
+    }
+    dividend_by_date: dict[date, Decimal] = {
+        day: amount
+        for day, amount in db.execute(
+            select(Dividend.pay_date, func.sum(Dividend.amount_krw))
+            .where(Dividend.account_id.in_(account_ids))
+            .group_by(Dividend.pay_date)
+        ).all()
+        if amount is not None
+    }
+    realized_by_date: dict[date, Decimal] = dict(trading_by_date)
+    for day, amount in dividend_by_date.items():
+        realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
+    realized_trading = sum(trading_by_date.values(), Decimal("0"))
+    dividend_total = sum(dividend_by_date.values(), Decimal("0"))
+    realized_now = realized_trading + dividend_total
 
+    # 첫 거래일 = 키움 일별 성과의 첫 날. 없으면 실현 원장의 첫 날, 그것도 없으면 오늘.
+    anchor = min(daily_pnl_by_date, default=None) or min(realized_by_date, default=today)
+    anchor = min(anchor, today)
+    series_start = max(today - timedelta(days=days), anchor)
+
+    # ── 총 평가액 보조: 스냅샷(계좌×한국 날짜별 마지막 한 줄) ─────────────────
+    last_snap: dict[tuple[uuid.UUID, date], PortfolioSnapshot] = {}
+    for snap in db.execute(
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.account_id.in_(account_ids))
+        .order_by(PortfolioSnapshot.snapshot_at)
+    ).scalars():
+        last_snap[(snap.account_id, snap.snapshot_at.astimezone(_KST).date())] = snap
+    for snap_day in {d for _, d in last_snap}:
+        if snap_day in total_value_by_date:
+            continue
+        values = [getattr(last_snap.get((aid, snap_day)), "total_assets_krw", None)
+                  for aid in account_ids]
+        if all(v is not None for v in values):
+            total_value_by_date[snap_day] = sum(values, Decimal("0"))
+
+    # 오늘은 지금 값 — 그래프 끝점이 타일과 같아야 한다.
+    unrealized_now = summary.unrealized_pnl_krw
+    live = pb.Live(date=today, unrealized_krw=unrealized_now, total_value_krw=summary.total_assets_krw)
     points = pb.build_series(
-        series_start, today, realized_by_date, unrealized_by_date, total_value_by_date
+        series_start, today, daily_pnl_by_date, realized_by_date, total_value_by_date, live
     )
+    last = points[-1] if points else None
 
     return PnlBreakdownOut(
         as_of=summary.as_of,
         since=anchor,
         realized_cum_krw=realized_now,
-        realized_trading_krw=breakdown.net_krw - breakdown.dividend_krw if breakdown else None,
-        dividend_krw=breakdown.dividend_krw if breakdown else None,
+        realized_trading_krw=realized_trading,
+        dividend_krw=dividend_total,
         unrealized_krw=unrealized_now,
-        total_period_pnl_krw=total_period_now,
+        # 그래프 끝점과 같은 값(실현 + 실제 평가).
+        total_period_pnl_krw=last.total_period_pnl_krw if last else None,
         total_value_krw=summary.total_assets_krw,
         cash_krw=summary.cash_krw,
-        unrealized_since=min(
-            (d for d, v in unrealized_by_date.items() if v is not None), default=None
+        daily_pnl_until=max(
+            (d for d, v in daily_pnl_by_date.items() if v is not None), default=None
         ),
         items=[
             PnlBreakdownPointOut(

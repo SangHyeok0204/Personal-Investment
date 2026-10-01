@@ -94,9 +94,11 @@ export default function PortfolioPage() {
   const [axis, setAxis] = useState<AllocationDimension>("exposure");
   // 왼쪽 큰 카드의 두 얼굴 — 손익 분해(기본) / 자산 추이(총 평가액).
   const [leftView, setLeftView] = useState<"pnl" | "assets">("pnl");
-  // 손익 분해 그래프 구간. ⚠️기본을 30일로 둔다 — 평가손익은 2026-09-21 부터만
-  //   있어(스냅샷) '전체'에서는 두 선이 오른쪽 끝 열흘에 몰려 읽히지 않는다.
-  const [pnlRange, setPnlRange] = useState<30 | "all">(30);
+  // 손익 분해 그래프 구간. ★기본은 '전체' — 2026-10-01 사용자 결정으로 손익 분해는
+  //   **첫 거래일(2025-04-08)부터** 센다. 세 선이 첫날부터 끊김 없이 이어지므로 전체가
+  //   읽히고, 1년으로 자르면 '첫 거래부터'라는 타일의 뜻이 그래프에서 안 보인다.
+  //   최근 움직임은 30일 · 1년으로 좁혀 본다.
+  const [pnlRange, setPnlRange] = useState<30 | 365 | "all">("all");
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -174,10 +176,12 @@ export default function PortfolioPage() {
   const pnlRate =
     s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
 
-  // 실현손익(누적)은 원장 값(/realized 와 같은 식). 총기간 손익은 **화면에서**
-  // 실현 + 평가로 더한다 — 두 질의가 5초 갱신 사이에 엇갈려 와도 타일 셋이
-  // "실현 + 평가 = 총기간" 을 늘 지키게 한다(서버 값과 식은 같다).
+  // 실현손익(누적)은 원장 값(/realized 와 같은 식이되 **첫 거래부터** — 투자 시작일로
+  // 자르지 않는다). 총기간 손익은 **화면에서** 실현 + 평가로 더한다 — 서버의 오늘 점
+  // 규칙(실현 + 키움 실제 평가손익)과 같은 식이라, 두 질의가 5초 갱신 사이에 엇갈려
+  // 와도 타일 셋이 "실현 + 평가 = 총기간" 을 늘 지킨다.
   const realizedKrw = breakdown.data?.realized_cum_krw ?? null;
+  const pnlSince = breakdown.data?.since ?? null;
   const totalPeriodKrw =
     realizedKrw != null && pnlKrw != null ? String(Number(realizedKrw) + Number(pnlKrw)) : null;
 
@@ -228,8 +232,8 @@ export default function PortfolioPage() {
   );
 
   // 손익 분해 그래프 — 총기간 손익과 평가손익을 **한 축**에 둔다. 두 선 사이 간격이
-  // 곧 실현손익(누적)이다. 실현 누적은 회색 기준선으로 같이 그린다: 평가손익은
-  // 스냅샷이 있는 날만 있어(서버 독스트링) 두 선이 비는 구간에도 실현분은 보인다.
+  // 곧 실현손익(누적)이다. 과거 평가손익은 총기간 − 실현으로 **역산한 값**이고(서버
+  // 독스트링), 오늘 점만 키움 실제 평가손익이다 — 그래서 끝점이 타일과 같다.
   const pnlItems = useMemo(() => {
     const items = breakdown.data?.items ?? [];
     return pnlRange === "all" ? items : items.slice(-pnlRange);
@@ -290,7 +294,8 @@ export default function PortfolioPage() {
           <StatTile
             label="실현손익(누적)"
             value={formatKrwSigned(realizedKrw)}
-            hint="매도 확정분 + 배당"
+            // ⚠️칸이 좁아(1280 폭에서 17자 남짓) 날짜·정의는 왼쪽 카드 부제와 아래 숫자에 둔다.
+            hint="첫 거래부터 · 매도+세후배당"
             accent="auto"
             loading={breakdown.isLoading}
           />
@@ -312,7 +317,7 @@ export default function PortfolioPage() {
           <StatTile
             label="총기간 손익"
             value={formatKrwSigned(totalPeriodKrw)}
-            hint="실현 + 평가 (예수금 제외)"
+            hint="첫 거래부터 · 실현+평가"
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
           />
@@ -358,9 +363,9 @@ export default function PortfolioPage() {
             title={leftView === "pnl" ? "손익 분해" : "자산 추이"}
             subtitle={
               leftView === "pnl"
-                ? breakdown.data?.unrealized_since
-                  ? `두 선의 간격 = 실현손익 · 평가손익 기록 ${breakdown.data.unrealized_since}~`
-                  : "두 선의 간격 = 실현손익"
+                ? pnlSince
+                  ? `첫 거래 ${pnlSince}부터 · 두 선의 간격 = 실현손익`
+                  : "첫 거래부터 · 두 선의 간격 = 실현손익"
                 : performance.data?.first_date
                   ? `${performance.data.first_date} ~ ${performance.data.last_date}`
                   : "예탁자산 시계열"
@@ -401,7 +406,7 @@ export default function PortfolioPage() {
                       {pnlDates.length ? `${pnlDates[0]} ~ ${pnlDates[pnlDates.length - 1]}` : ""}
                     </span>
                     <div className="flex gap-1">
-                      {([30, "all"] as const).map((r) => (
+                      {([30, 365, "all"] as const).map((r) => (
                         <button
                           key={r}
                           type="button"
@@ -414,7 +419,7 @@ export default function PortfolioPage() {
                               : "text-ink-muted hover:bg-canvas-soft hover:text-ink",
                           )}
                         >
-                          {r === "all" ? "전체" : `${r}일`}
+                          {r === "all" ? "전체" : r === 365 ? "1년" : `${r}일`}
                         </button>
                       ))}
                     </div>
@@ -438,10 +443,16 @@ export default function PortfolioPage() {
                       value={formatKrwSigned(breakdown.data.dividend_krw)}
                       tone={toneOf(breakdown.data.dividend_krw)}
                     />
-                    <Figure label="실현 누적 시작" value={breakdown.data.since ?? "—"} />
+                    <Figure label="누적 시작(첫 거래)" value={breakdown.data.since ?? "—"} />
+                    {/* 과거 평가손익은 역산이다(키움 일별 손익이 있는 마지막 날까지).
+                        오늘 점만 키움 실제 평가손익. */}
                     <Figure
-                      label="평가손익 기록 시작"
-                      value={breakdown.data.unrealized_since ?? "—"}
+                      label={
+                        breakdown.data.daily_pnl_until
+                          ? `과거 평가손익(~${breakdown.data.daily_pnl_until.slice(5)})`
+                          : "과거 평가손익"
+                      }
+                      value="총기간 − 실현"
                     />
                   </dl>
                 </div>
