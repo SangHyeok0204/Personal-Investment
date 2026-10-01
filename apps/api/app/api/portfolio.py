@@ -39,6 +39,7 @@ from app.core import rebalance as rb
 from app.core import fee_reserve as fr
 from app.core import residual as rsd
 from app.core import return_bridge
+from app.core import pnl_breakdown as pb
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
@@ -135,6 +136,8 @@ from app.schemas import (
     TradeStatsOut,
     DailyPerformanceOut,
     PerformanceSeriesOut,
+    PnlBreakdownOut,
+    PnlBreakdownPointOut,
     ReturnBridgeOut,
     RealizedPnlListOut,
     RealizedPnlOut,
@@ -1083,6 +1086,175 @@ def list_realized_pnl(
         breakdown=breakdown,
         trades=trades_out,
         trade_stats=stats,
+    )
+
+
+# ── 손익 분해 ────────────────────────────────────────────────────────────────
+
+# 스냅샷 시각을 '그날'로 묶는 기준. 증권사 일별 성과(base_date)도 한국 날짜다.
+_KST = timezone(timedelta(hours=9))
+
+
+@router.get("/pnl-breakdown", response_model=PnlBreakdownOut)
+def get_pnl_breakdown(
+    account_id: uuid.UUID | None = Query(default=None),
+    days: int = Query(3650, ge=1, le=3650),
+    db: Session = Depends(get_db),
+) -> PnlBreakdownOut:
+    """실현손익(누적) · 평가손익 · 총기간 손익 · 총 평가액 — 지금 값과 일별 시계열.
+
+    정의는 `app.core.pnl_breakdown` 머리말. 총기간 손익 = 실현손익(누적) + 평가손익
+    (예수금 제외), 총 평가액 = 주식 평가액 + 예수금(실현손익을 따로 더하지 않는다).
+
+    ★지금 값은 **다른 화면의 숫자를 그대로 옮긴다** — 평가손익·총 평가액·예수금은
+      `/summary`, 실현손익(누적)은 `/realized` 의 `breakdown.net_krw`(투자 시작일부터).
+      같은 숫자를 여기서 따로 계산하면 화면마다 값이 갈린다.
+
+    시계열의 원천(날짜는 한국 날짜, 투자 시작일 ~ 오늘, 달력 하루마다 한 점):
+      · 실현손익(누적) — `realized_pnl.sell_date` 별 pnl_krw + `dividends.pay_date` 별
+        amount_krw 를 투자 시작일부터 누적. 원장이 다 있어 **매일 값이 있다.**
+      · 평가손익 — `portfolio_snapshots` 의 그날 **마지막** 스냅샷(계좌별)의
+        total_unrealized_pnl_krw. 키움 pl_amt_krw 를 더한 값이라 화면과 같은 기준이다.
+      · 총 평가액 — `account_daily_performance.deposit_assets_krw`(키움 usa21670 예탁자산
+        = 주식 + 예수금). 그 날 행이 없으면 그날 마지막 스냅샷의 total_assets_krw.
+      · 오늘 — 평가손익·총 평가액을 위 지금 값(/summary)으로 둔다. 그래야 그래프 끝점이
+        타일과 같다.
+
+    ⚠️결측(0 으로 채우지 않는다):
+      · **평가손익은 스냅샷이 있는 날만** 있다. 스냅샷은 전체 동기화 때만 쌓이고
+        2026-09-21 에 처음 생겼다 — 그 앞과, 그 뒤라도 전체 동기화를 안 한 날
+        (주말 등)은 None 이고, 그날 총기간 손익도 None 이다.
+        과거 평가손익을 매매 이력으로 되감아 만들지 않는다: 원화 매입원가에 필요한
+        매수일 환율이 체결 원장에 없고(amount_krw 전부 비어 있음), 종목별 과거 가격도
+        저장하지 않는다. 만든 값은 키움 기준과 맞지 않는다.
+      · 총 평가액은 일별 성과 동기화가 아직 안 된 날(보통 어제)이 스냅샷도 없으면 None.
+      · 계좌가 여럿이면 **모든 계좌**의 값이 있는 날만 합한다 — 일부만 더하면 그날
+        값이 뚝 떨어진 것처럼 보인다.
+      · 투자 시작일(`investing.INVESTMENT_START`) 앞의 매매·배당은 누적에 넣지 않는다.
+        `/realized` 와 같은 범위다.
+    """
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return PnlBreakdownOut(
+            as_of=None, since=None,
+            realized_cum_krw=None, realized_trading_krw=None, dividend_krw=None,
+            unrealized_krw=None, total_period_pnl_krw=None, total_value_krw=None,
+            cash_krw=None, unrealized_since=None, items=[],
+        )
+
+    anchor = inv.since(None)
+    today = datetime.now(_KST).date()
+    series_start = inv.since(days, today=today)
+
+    # ── 지금 값: 다른 화면의 숫자를 그대로 ─────────────────────────────────
+    summary = get_summary(account_id=account_id, db=db)
+    realized = list_realized_pnl(account_id=account_id, days=3650, db=db)
+    breakdown = realized.breakdown
+    realized_now = breakdown.net_krw if breakdown is not None else None
+    unrealized_now = summary.unrealized_pnl_krw
+    total_period_now = (
+        realized_now + unrealized_now
+        if realized_now is not None and unrealized_now is not None
+        else None
+    )
+
+    # ── 실현손익: 날짜별 합 ─────────────────────────────────────────────
+    realized_by_date: dict[date, Decimal] = {}
+    for day, amount in db.execute(
+        select(RealizedPnl.sell_date, func.sum(RealizedPnl.pnl_krw))
+        .where(RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= anchor)
+        .group_by(RealizedPnl.sell_date)
+    ).all():
+        if amount is not None:
+            realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
+    for day, amount in db.execute(
+        select(Dividend.pay_date, func.sum(Dividend.amount_krw))
+        .where(Dividend.account_id.in_(account_ids), Dividend.pay_date >= anchor)
+        .group_by(Dividend.pay_date)
+    ).all():
+        if amount is not None:
+            realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
+
+    # ── 스냅샷: 계좌×한국 날짜별 마지막 한 줄 ─────────────────────────────
+    last_snap: dict[tuple[uuid.UUID, date], PortfolioSnapshot] = {}
+    for snap in db.execute(
+        select(PortfolioSnapshot)
+        .where(
+            PortfolioSnapshot.account_id.in_(account_ids),
+            PortfolioSnapshot.snapshot_at
+            >= datetime.combine(anchor, datetime.min.time(), tzinfo=_KST),
+        )
+        .order_by(PortfolioSnapshot.snapshot_at)
+    ).scalars():
+        last_snap[(snap.account_id, snap.snapshot_at.astimezone(_KST).date())] = snap
+
+    def _all_accounts(day: date, attr: str) -> Decimal | None:
+        """모든 계좌의 그날 값이 있을 때만 합. 하나라도 없으면 None."""
+        values = []
+        for aid in account_ids:
+            snap = last_snap.get((aid, day))
+            value = getattr(snap, attr) if snap is not None else None
+            if value is None:
+                return None
+            values.append(value)
+        return sum(values, Decimal("0"))
+
+    snap_days = sorted({d for _, d in last_snap})
+    unrealized_by_date: dict[date, Decimal | None] = {
+        d: _all_accounts(d, "total_unrealized_pnl_krw") for d in snap_days
+    }
+
+    # ── 총 평가액: 일별 성과(모든 계좌가 있는 날만) → 없으면 스냅샷 ──────────
+    total_value_by_date: dict[date, Decimal | None] = {
+        d: _all_accounts(d, "total_assets_krw") for d in snap_days
+    }
+    for day, assets, rows_n, valued_n in db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.count(),
+            func.count(AccountDailyPerformance.deposit_assets_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= anchor,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+    ).all():
+        if rows_n == len(account_ids) and valued_n == rows_n:
+            total_value_by_date[day] = assets
+
+    # 오늘은 지금 값 — 그래프 끝점이 타일과 같아야 한다.
+    unrealized_by_date[today] = unrealized_now
+    total_value_by_date[today] = summary.total_assets_krw
+
+    points = pb.build_series(
+        series_start, today, realized_by_date, unrealized_by_date, total_value_by_date
+    )
+
+    return PnlBreakdownOut(
+        as_of=summary.as_of,
+        since=anchor,
+        realized_cum_krw=realized_now,
+        realized_trading_krw=breakdown.net_krw - breakdown.dividend_krw if breakdown else None,
+        dividend_krw=breakdown.dividend_krw if breakdown else None,
+        unrealized_krw=unrealized_now,
+        total_period_pnl_krw=total_period_now,
+        total_value_krw=summary.total_assets_krw,
+        cash_krw=summary.cash_krw,
+        unrealized_since=min(
+            (d for d, v in unrealized_by_date.items() if v is not None), default=None
+        ),
+        items=[
+            PnlBreakdownPointOut(
+                date=p.date,
+                realized_cum_krw=p.realized_cum_krw,
+                unrealized_krw=p.unrealized_krw,
+                total_period_pnl_krw=p.total_period_pnl_krw,
+                total_value_krw=p.total_value_krw,
+            )
+            for p in points
+        ],
     )
 
 
@@ -2753,9 +2925,12 @@ _TAX_NOTES = [
     " 과세 대상 그 자체입니다.",
     "증권사가 준 값(주가손익 + 환차손익)과 체결일 환율로 계산한 값이 조금 다릅니다."
     " 둘 다 적어 두었으니 차이를 보고 판단하세요.",
-    "배당이 **세전인지 세후인지 확인할 수 없습니다.** 키움에는 배당 전용 TR 이"
-    " 없어 일별 **종목**수익률(usa21730)의 배당금액만 골라 쓰는데, 원천징수액은"
-    " 그 응답에 없습니다. 미국 배당은 통상 15%가 현지에서 원천징수됩니다.",
+    "저장된 배당은 **원천징수 뒤(세후) 금액으로 보입니다.** 키움에는 배당 전용 TR 이"
+    " 없어 일별 **종목**수익률(usa21730)의 배당금액만 골라 쓰고, 원천징수액은 그"
+    " 응답에 따로 오지 않습니다. 대신 금액으로 맞춰 보면 GOOGL 2026-09-15 ₩498 ≈"
+    " 2주 × $0.21 × 0.85 × 약 ₩1,395/$ 로, 미국 현지 원천징수 15%를 뺀 값과 맞습니다"
+    " (MSFT 2026-09-10 도 같은 방식으로 맞음). 그래서 실현손익에서 배당세를 또"
+    " 빼지 않습니다.",
     "손실은 **같은 해 안에서만** 통산되고 다음 해로 이월되지 않습니다.",
 ]
 

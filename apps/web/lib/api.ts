@@ -481,6 +481,42 @@ export function getPerformance(
   );
 }
 
+// ── 손익 분해 (실현손익 누적 · 평가손익 · 총기간 손익 · 총 평가액) ──────────
+// ⚠️시계열의 null 은 **모르는 날**이다(0 이 아니다). 평가손익은 스냅샷이 있는
+//   날만 있다 — 서버 독스트링(/pnl-breakdown) 참고.
+
+export interface PnlBreakdownPoint {
+  date: string;
+  realized_cum_krw: string | null;
+  unrealized_krw: string | null;
+  total_period_pnl_krw: string | null;
+  total_value_krw: string | null;
+}
+
+export interface PnlBreakdown {
+  as_of: string | null;
+  since: string | null;
+  realized_cum_krw: string | null;
+  realized_trading_krw: string | null;
+  dividend_krw: string | null;
+  unrealized_krw: string | null;
+  total_period_pnl_krw: string | null;
+  total_value_krw: string | null;
+  cash_krw: string | null;
+  unrealized_since: string | null;
+  items: PnlBreakdownPoint[];
+}
+
+export function getPnlBreakdown(
+  accountId?: string | null,
+  days = 3650,
+): Promise<PnlBreakdown> {
+  const q = accountQuery(accountId);
+  return request<PnlBreakdown>(
+    `/api/v1/portfolio/pnl-breakdown${q ? `${q}&` : "?"}days=${days}`,
+  );
+}
+
 // ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
 
 export interface PeriodReturn {

@@ -55,11 +55,14 @@ export function CompareChart({
   series,
   height = 280,
   valueFormat = (v: number) => `${v.toFixed(0)}`,
+  legendFormat,
 }: {
   dates: string[];
   series: CompareSeries[];
   height?: number;
   valueFormat?: (v: number) => string;
+  /** 범례 숫자 형식. 없으면 축과 같다 — 축은 자리가 좁아 접은 단위(만)를 쓸 때 준다. */
+  legendFormat?: (v: number) => string;
 }) {
   const { attach, width } = useWidth();
   const [hover, setHover] = useState<number | null>(null);
@@ -86,19 +89,31 @@ export function CompareChart({
       PAD_L + (dates.length === 1 ? innerW / 2 : (i / (dates.length - 1)) * innerW);
     const y = (v: number) => PAD_T + innerH - ((v - min) / (max - min)) * innerH;
 
-    const paths = series.map((s) => {
+    // ⚠️앞뒤가 다 null 인 **외딴 점**은 선이 될 수 없다. 예전에는 그냥 버려서
+    //   값이 있는 날이 그래프에서 사라졌다 — 점으로 찍는다.
+    const dots: { x: number; y: number }[][] = series.map(() => []);
+    const paths = series.map((s, si) => {
       // null 에서 선을 끊는다 — 세그먼트를 나눠 그린다.
       const segments: string[] = [];
       let current: string[] = [];
+      let lastIndex = -1;
+      const close = () => {
+        if (current.length > 1) segments.push(current.join(" "));
+        else if (current.length === 1) {
+          const v = s.values[lastIndex] as number;
+          dots[si].push({ x: x(lastIndex), y: y(v) });
+        }
+        current = [];
+      };
       s.values.forEach((v, i) => {
         if (v == null) {
-          if (current.length > 1) segments.push(current.join(" "));
-          current = [];
+          close();
           return;
         }
         current.push(`${current.length === 0 ? "M" : "L"} ${x(i)} ${y(v)}`);
+        lastIndex = i;
       });
-      if (current.length > 1) segments.push(current.join(" "));
+      close();
       return segments.join(" ");
     });
 
@@ -107,7 +122,7 @@ export function CompareChart({
       return { y: PAD_T + innerH * t, label: valueFormat(value) };
     });
 
-    return { x, y, paths, ticks, innerW };
+    return { x, y, paths, dots, ticks, innerW };
   }, [width, height, dates, series, valueFormat]);
 
   const colorOf = (index: number, emphasis?: boolean) =>
@@ -153,6 +168,17 @@ export function CompareChart({
                 strokeLinejoin="round"
               />
             ))}
+            {series.map((s, i) =>
+              model.dots[i].map((d) => (
+                <circle
+                  key={`${s.name}-${d.x}`}
+                  cx={d.x}
+                  cy={d.y}
+                  r={2.5}
+                  fill={colorOf(i - (s.emphasis ? 0 : 1), s.emphasis)}
+                />
+              )),
+            )}
 
             {hover != null && (
               <line
@@ -197,7 +223,7 @@ export function CompareChart({
                     {s.name}
                   </span>
                   <span className="text-[11px] font-bold tabular-nums text-ink-muted">
-                    {value == null ? "—" : valueFormat(value)}
+                    {value == null ? "—" : (legendFormat ?? valueFormat)(value)}
                   </span>
                 </span>
               );

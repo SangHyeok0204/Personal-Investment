@@ -8,6 +8,7 @@ import { useLiveQueryOptions } from "@/components/layout/auto-refresh-context";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { DonutChart, type DonutSlice } from "@/components/charts/donut-chart";
+import { CompareChart } from "@/components/charts/compare-chart";
 import { SeriesChart, type SecondarySeries } from "@/components/charts/series-chart";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -23,6 +24,7 @@ import {
 import {
   getLiveQuotes,
   getPerformance,
+  getPnlBreakdown,
   getPortfolioAllocation,
   getPortfolioHoldings,
   getPortfolioSummary,
@@ -90,6 +92,11 @@ export default function PortfolioPage() {
   // 배분 도넛 조각 → 그 분류에 든 종목 바스켓.
   const [basket, setBasket] = useState<DonutSlice | null>(null);
   const [axis, setAxis] = useState<AllocationDimension>("exposure");
+  // 왼쪽 큰 카드의 두 얼굴 — 손익 분해(기본) / 자산 추이(총 평가액).
+  const [leftView, setLeftView] = useState<"pnl" | "assets">("pnl");
+  // 손익 분해 그래프 구간. ⚠️기본을 30일로 둔다 — 평가손익은 2026-09-21 부터만
+  //   있어(스냅샷) '전체'에서는 두 선이 오른쪽 끝 열흘에 몰려 읽히지 않는다.
+  const [pnlRange, setPnlRange] = useState<30 | "all">(30);
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -114,6 +121,14 @@ export default function PortfolioPage() {
     queryKey: ["performance", accountId, 365],
     queryFn: () => getPerformance(accountId, 365),
     staleTime: 60_000,
+  });
+  // ★손익 분해(2026-10-01 사용자 정의) — 실현손익(누적)·평가손익·총기간 손익·총 평가액.
+  //   그래프 끝점(오늘)이 서버에서 /summary 값으로 채워지므로 5초 갱신에 같이 얹는다.
+  const breakdown = useQuery({
+    queryKey: ["pnlBreakdown", accountId],
+    queryFn: () => getPnlBreakdown(accountId),
+    staleTime: 3_000,
+    ...live,
   });
   // 실시간 시세(Yahoo/토스) — **종목 행의 현재가·당일 등락 표시에만** 쓴다.
   // ★2026-10-01 사용자 지정: 화면의 금액(평가액·평가손익·비중)은 **키움 한 원천**.
@@ -158,6 +173,13 @@ export default function PortfolioPage() {
   const pnlKrw = s?.unrealized_pnl_krw ?? null;
   const pnlRate =
     s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
+
+  // 실현손익(누적)은 원장 값(/realized 와 같은 식). 총기간 손익은 **화면에서**
+  // 실현 + 평가로 더한다 — 두 질의가 5초 갱신 사이에 엇갈려 와도 타일 셋이
+  // "실현 + 평가 = 총기간" 을 늘 지키게 한다(서버 값과 식은 같다).
+  const realizedKrw = breakdown.data?.realized_cum_krw ?? null;
+  const totalPeriodKrw =
+    realizedKrw != null && pnlKrw != null ? String(Number(realizedKrw) + Number(pnlKrw)) : null;
 
   // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 분자(조각)와 분모(totalKrw)가
   //   다른 원천이면 같은 화면에서 SOXL 이 도넛 19.9% · 표 20.5% 로 갈리고(실측)
@@ -205,6 +227,24 @@ export default function PortfolioPage() {
     [performance.data],
   );
 
+  // 손익 분해 그래프 — 총기간 손익과 평가손익을 **한 축**에 둔다. 두 선 사이 간격이
+  // 곧 실현손익(누적)이다. 실현 누적은 회색 기준선으로 같이 그린다: 평가손익은
+  // 스냅샷이 있는 날만 있어(서버 독스트링) 두 선이 비는 구간에도 실현분은 보인다.
+  const pnlItems = useMemo(() => {
+    const items = breakdown.data?.items ?? [];
+    return pnlRange === "all" ? items : items.slice(-pnlRange);
+  }, [breakdown.data, pnlRange]);
+  const pnlDates = useMemo(() => pnlItems.map((p) => p.date), [pnlItems]);
+  const pnlSeries = useMemo(() => {
+    const items = pnlItems;
+    const num = (v: string | null) => (v == null ? null : Number(v));
+    return [
+      { name: "총기간 손익", emphasis: true, values: items.map((p) => num(p.total_period_pnl_krw)) },
+      { name: "평가손익", values: items.map((p) => num(p.unrealized_krw)) },
+      { name: "실현손익(누적)", values: items.map((p) => num(p.realized_cum_krw)) },
+    ];
+  }, [pnlItems]);
+
   // 조각 하나에 든 종목들. ⚠️값은 **동기화 스냅샷**(market_value_krw)으로 낸다 —
   //   배분 카드가 그 기준이라, 실시간 값을 쓰면 바스켓 합이 조각 금액과 어긋난다.
   const basketRows = useMemo(() => {
@@ -243,23 +283,24 @@ export default function PortfolioPage() {
           />
         )}
 
-        {/* 1행: 요약 4칸 — 높이 고정 */}
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          {/* 부제의 "보유종목 + 예수금" 이 늘 성립하도록 같은 stockKrw 로 만든
-              totalKrw 를 쓴다(둘 다 키움 5초 동기화 값). */}
+        {/* 1행: 요약 6칸 — 높이 고정.
+            ★2026-10-01 사용자 정의로 손익을 셋으로 가른다: 실현(누적) + 평가 = 총기간.
+              뒤의 셋은 계좌 가치다: 총 평가액 = 보유종목 평가액 + 예수금. */}
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
           <StatTile
-            label="총 평가금액"
-            value={formatKrwString(totalKrw)}
-            hint="보유종목 평가액 + 예수금 · 키움"
-            loading={summary.isLoading}
+            label="실현손익(누적)"
+            value={formatKrwSigned(realizedKrw)}
+            hint="매도 확정분 + 배당"
+            accent="auto"
+            loading={breakdown.isLoading}
           />
           <StatTile
             label="평가손익"
             value={formatKrwSigned(pnlKrw)}
             hint={
               pnlRate != null
-                ? `매입원가 대비 ${pnlRate} · 키움 기준(제비용 반영)`
-                : "매입원가 대비 · 키움 기준(제비용 반영)"
+                ? `보유분 · 원가 대비 ${pnlRate}`
+                : "보유분 · 키움 기준"
             }
             accent="auto"
             loading={summary.isLoading}
@@ -267,6 +308,22 @@ export default function PortfolioPage() {
             // ⚠️추이 그래프는 이제 왼쪽 카드에 늘 떠 있다. 팝업이 더 주는 것은
             //   **순입금을 뺀 기간 손익**이다 — 그걸 적어야 눌러 볼 이유가 된다.
             actionHint="눌러서 기간 손익 보기"
+          />
+          <StatTile
+            label="총기간 손익"
+            value={formatKrwSigned(totalPeriodKrw)}
+            hint="실현 + 평가 (예수금 제외)"
+            accent="auto"
+            loading={summary.isLoading || breakdown.isLoading}
+          />
+          {/* 부제의 "보유종목 + 예수금" 이 늘 성립하도록 같은 stockKrw 로 만든
+              totalKrw 를 쓴다(둘 다 키움 5초 동기화 값). ⚠️실현손익을 더하지 않는다
+              — 판 돈은 이미 예수금 안에 있다. */}
+          <StatTile
+            label="총 평가액"
+            value={formatKrwString(totalKrw)}
+            hint="보유종목 평가액 + 예수금"
+            loading={summary.isLoading}
           />
           <StatTile
             label="보유종목 평가액"
@@ -295,16 +352,106 @@ export default function PortfolioPage() {
             "lg:auto-rows-auto lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]",
           )}
         >
+          {/* ★2026-10-01: 왼쪽 카드를 '손익 분해'(기본)와 '자산 추이'(총 평가액) 둘로.
+              카드를 하나 더 얹으면 한 화면 원칙이 깨진다 — 같은 자리에서 전환한다. */}
           <StubCard
-            title="자산 추이"
+            title={leftView === "pnl" ? "손익 분해" : "자산 추이"}
             subtitle={
-              performance.data?.first_date
-                ? `${performance.data.first_date} ~ ${performance.data.last_date}`
-                : "예탁자산 시계열"
+              leftView === "pnl"
+                ? breakdown.data?.unrealized_since
+                  ? `두 선의 간격 = 실현손익 · 평가손익 기록 ${breakdown.data.unrealized_since}~`
+                  : "두 선의 간격 = 실현손익"
+                : performance.data?.first_date
+                  ? `${performance.data.first_date} ~ ${performance.data.last_date}`
+                  : "예탁자산 시계열"
             }
             scrollBody
+            action={
+              <div className="flex gap-1">
+                {(
+                  [
+                    { id: "pnl", label: "손익 분해", hint: "총기간 손익 · 평가손익 · 실현손익(누적)" },
+                    { id: "assets", label: "자산 추이", hint: "총 평가액(주식 + 예수금) 일별" },
+                  ] as const
+                ).map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => setLeftView(v.id)}
+                    aria-pressed={leftView === v.id}
+                    title={v.hint}
+                    className={cn(
+                      "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+                      leftView === v.id
+                        ? "bg-white/90 text-ge-header"
+                        : "text-white/60 hover:bg-white/15 hover:text-white",
+                    )}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            }
           >
-            {performance.data && performance.data.items.length > 0 ? (
+            {leftView === "pnl" ? (
+              breakdown.data && breakdown.data.items.length > 0 ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-ink-muted">
+                      {pnlDates.length ? `${pnlDates[0]} ~ ${pnlDates[pnlDates.length - 1]}` : ""}
+                    </span>
+                    <div className="flex gap-1">
+                      {([30, "all"] as const).map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => setPnlRange(r)}
+                          aria-pressed={pnlRange === r}
+                          className={cn(
+                            "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+                            pnlRange === r
+                              ? "bg-ge-header text-white"
+                              : "text-ink-muted hover:bg-canvas-soft hover:text-ink",
+                          )}
+                        >
+                          {r === "all" ? "전체" : `${r}일`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <CompareChart
+                    height={300}
+                    dates={pnlDates}
+                    series={pnlSeries}
+                    valueFormat={compactKrw}
+                    legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+                  />
+                  {/* 실현손익이 무엇으로 이루어졌나 — 타일에 다 못 적는 정의를 여기 둔다. */}
+                  <dl className="grid grid-cols-2 gap-3 border-t border-hairline pt-3 sm:grid-cols-4">
+                    <Figure
+                      label="매매 실현(비용 뺀 뒤)"
+                      value={formatKrwSigned(breakdown.data.realized_trading_krw)}
+                      tone={toneOf(breakdown.data.realized_trading_krw)}
+                    />
+                    <Figure
+                      label="배당(원천징수 뒤)"
+                      value={formatKrwSigned(breakdown.data.dividend_krw)}
+                      tone={toneOf(breakdown.data.dividend_krw)}
+                    />
+                    <Figure label="실현 누적 시작" value={breakdown.data.since ?? "—"} />
+                    <Figure
+                      label="평가손익 기록 시작"
+                      value={breakdown.data.unrealized_since ?? "—"}
+                    />
+                  </dl>
+                </div>
+              ) : (
+                <StubChart
+                  height={240}
+                  note={breakdown.isLoading ? "불러오는 중…" : "손익 데이터 없음"}
+                />
+              )
+            ) : performance.data && performance.data.items.length > 0 ? (
               <SeriesChart
                 height={260}
                 points={trendPoints}
@@ -758,6 +905,15 @@ function ClassCell({ value, missing = "—" }: { value: string | null; missing?:
       {empty ? missing : value}
     </Cell>
   );
+}
+
+/** 축 눈금용 접은 금액 — "393만". 축은 자릿수를 다 보여줄 자리가 없다. */
+function compactKrw(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (abs >= 100_000_000) return `${sign}${(abs / 100_000_000).toFixed(1)}억`;
+  if (abs >= 10_000) return `${sign}${Math.round(abs / 10_000).toLocaleString("ko-KR")}만`;
+  return `${sign}${Math.round(abs).toLocaleString("ko-KR")}`;
 }
 
 /** KRW 합계에 못 들어간 외화 예수금을 한 줄로. 없으면 null. */

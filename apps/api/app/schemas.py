@@ -316,6 +316,39 @@ class PerformanceSeriesOut(BaseModel):
     bridge: ReturnBridgeOut
 
 
+class PnlBreakdownPointOut(BaseModel):
+    """손익 분해 한 날. 모르는 값은 None 이다(0 이 아니다) — `app.core.pnl_breakdown`."""
+
+    date: date
+    realized_cum_krw: Decimal | None
+    unrealized_krw: Decimal | None
+    total_period_pnl_krw: Decimal | None
+    total_value_krw: Decimal | None
+
+
+class PnlBreakdownOut(BaseModel):
+    """실현손익(누적) · 평가손익 · 총기간 손익 · 총 평가액 — 지금 값과 일별 시계열.
+
+    ★지금 값은 /summary(평가손익·총 평가액·예수금)와 /realized(net_krw)를 **그대로**
+      옮긴다. 이 화면만 따로 계산하면 같은 숫자가 화면마다 달라진다.
+    """
+
+    as_of: datetime | None
+    # 실현손익을 세기 시작한 날(투자 시작일). 누적은 이 날부터다.
+    since: date | None
+    realized_cum_krw: Decimal | None
+    # 실현손익의 두 갈래 — 매매(비용 뺀 뒤)와 배당(원천징수 뒤).
+    realized_trading_krw: Decimal | None
+    dividend_krw: Decimal | None
+    unrealized_krw: Decimal | None
+    total_period_pnl_krw: Decimal | None
+    total_value_krw: Decimal | None
+    cash_krw: Decimal | None
+    # 평가손익 일별 기록이 처음 있는 날. 그 앞은 시계열의 평가손익이 None 이다.
+    unrealized_since: date | None
+    items: list[PnlBreakdownPointOut]
+
+
 # ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
 
 class PeriodReturnOut(BaseModel):
