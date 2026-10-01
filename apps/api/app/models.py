@@ -1107,3 +1107,36 @@ class AiMetricSnapshot(Base):
     date: Mapped[date] = mapped_column(Date, primary_key=True)      # 스냅샷 날짜(KST)
     value: Mapped[Decimal] = mapped_column(Numeric(24, 4), nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class VideoDigest(Base):
+    """영상 요약(0026) — Plaud 녹음 `[youtube_YYMMDD_채널]` 한 건의 한 문단 이슈 요약.
+
+    status: done(요약 있음) · pending(Plaud 전사 없음 — 다음 실행에서 다시) · failed(error 에 이유).
+    ⚠️요약이 없으면 summary_ko 는 비어 있다 — 실패 문구를 요약 칸에 쓰지 않는다. 전사문은 저장하지 않는다.
+    """
+
+    __tablename__ = "video_digests"
+    __table_args__ = (
+        UniqueConstraint("plaud_file_id", name="uq_video_digests_plaud_file_id"),
+        Index("ix_video_digests_video_date", "video_date"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    plaud_file_id: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    source_tag: Mapped[str] = mapped_column(String, nullable=False)
+    video_date: Mapped[date] = mapped_column(Date, nullable=False)
+    channel: Mapped[str] = mapped_column(String, nullable=False)
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary_ko: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'pending'"))
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()")
+    )

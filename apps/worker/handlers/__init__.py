@@ -1,4 +1,4 @@
-from . import csv_import, cusip_resolve, earnings_calendar, earnings_result, earnings_revenue, llm_exhibit, llm_judge, llm_watchpoints, seasonality_append, sec_collect, sync_kiwoom_portfolio, test_job
+from . import csv_import, cusip_resolve, earnings_calendar, earnings_result, earnings_revenue, llm_exhibit, llm_judge, llm_watchpoints, plaud_video, seasonality_append, sec_collect, sync_kiwoom_portfolio, test_job
 
 HANDLERS = {
     "TEST_JOB": test_job.run,
@@ -16,4 +16,5 @@ HANDLERS = {
     "LLM_EXHIBIT": llm_exhibit.run,  # 큐 llm (계획 B4)
     "LLM_JUDGE": llm_judge.run,  # 큐 llm (계획 B5)
     "LLM_WATCHPOINTS": llm_watchpoints.run,  # 큐 llm (계획 B2 · B5)
+    "PLAUD_VIDEO": plaud_video.run,  # 큐 llm — Plaud 유튜브 녹음 한 문단 요약(/news/video)
 }

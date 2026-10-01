@@ -13,6 +13,7 @@
   - LLM 따라잡기(B7 G8): 실패한 보도자료 구조화 · 늦게 생긴 관전포인트의 결과 판정 — 발표당 실패 3번까지, 1시간 간격.
   - 실적 캘린더(B3a): 매일 07:10 KST 이후 한 번(맥이 잤으면 깨어나서). 매출 컨센(B3b, 화면 있는 크롬): 07:20.
   - CUSIP 해소(A4): 하루 1회 — 새 13F 보유의 새 CUSIP 만 OpenFIGI 에 묻는다(없으면 바로 끝).
+  - 영상 요약(/news/video): 매일 07:40 KST 이후 한 번 PLAUD_VIDEO(llm 큐) — Plaud 의 새 `[youtube_…]` 녹음만 요약.
 실패한 작업도 "넣은 것"으로 센다 — SEC 가 막혀 있을 때 5분마다 두드리지 않게(차단은 /data-operations).
 """
 from __future__ import annotations
@@ -36,6 +37,9 @@ KST = ZoneInfo("Asia/Seoul")
 EARNINGS_AT = (7, 10)          # 매일 07:10 KST 이후 한 번(계획 B 데이터·파이프라인 표)
 # 정해진 시각형 작업 — Investing.com 매출 컨센(B3b)은 Nasdaq 캘린더(07:10) 뒤에. 막히면 그날은 "수집 실패", 다음 날 다시.
 DAILY_SLOTS = {"EARNINGS_CALENDAR": EARNINGS_AT, "EARNINGS_REVENUE": (7, 20)}
+# 영상 요약 — 관전포인트(07:30) 뒤. JOB_TYPES 가 아니다(큐가 llm 이라 아래 maybe_enqueue 에서 따로 넣는다).
+VIDEO_AT = (7, 40)
+DAILY_SLOTS["PLAUD_VIDEO"] = VIDEO_AT
 
 
 def in_13f_season(d: date) -> bool:
@@ -180,6 +184,18 @@ def enqueue_calendar_now(db) -> Job | None:
     return job
 
 
+def enqueue_video_now(db) -> Job | None:
+    """화면의 "지금 확인" — 영상 요약 작업을 바로 넣는다. 이미 대기·실행 중이면 넣지 않는다. 커밋은 호출부가 한다."""
+    busy = db.execute(
+        select(Job).where(Job.job_type == "PLAUD_VIDEO", Job.status.in_(("PENDING", "RUNNING")))
+    ).first()
+    if busy is not None:
+        return None
+    job = Job(job_type="PLAUD_VIDEO", queue="llm", payload={"reason": "manual"})
+    db.add(job)
+    return job
+
+
 def maybe_enqueue(db, now: datetime | None = None) -> list[Job]:
     now = now or datetime.now(timezone.utc)
     added = []
@@ -208,6 +224,13 @@ def maybe_enqueue(db, now: datetime | None = None) -> list[Job]:
     # B7 감사 G8 — 실패했거나 순서가 어긋나 빠진 보도자료 구조화 · 결과 판정을 다시 넣는다
     for job_type, payload in llm_catchup(db, now):
         job = Job(job_type=job_type, queue="llm", payload=payload)
+        db.add(job)
+        added.append(job)
+    # 영상 요약 — 07:40 KST 이후 하루 한 번(맥이 잤으면 깨어나서). 이미 요약한 녹음은 worker 가 건너뛴다.
+    last = db.execute(select(Job).where(Job.job_type == "PLAUD_VIDEO")
+                      .order_by(Job.created_at.desc()).limit(1)).scalar_one_or_none()
+    if due("PLAUD_VIDEO", last, now):
+        job = Job(job_type="PLAUD_VIDEO", queue="llm", payload={})
         db.add(job)
         added.append(job)
     # A7 — 명단에 백필 대기(pending) 거장이 있는데 작업이 없으면(추가 직후 API 가 죽었다든지) 넣는다.
