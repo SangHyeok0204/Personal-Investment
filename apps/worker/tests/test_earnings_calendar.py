@@ -58,7 +58,7 @@ def test_collect_upcoming_and_past(edb):
 
     def fake(start, days):
         calls.append((start, days))
-        if days == ec.AHEAD_DAYS:
+        if days == ec.RECENT_DAYS + ec.AHEAD_DAYS:
             return [_ev(date(2026, 10, 28), "GOOG", timing="장후", eps_forecast=Decimal("2.51")),   # 별칭 GOOG → GOOGL
                     _ev(date(2026, 10, 2), "AAPL")]                                              # 대상 아님
         if start == date(2026, 8, 26):
@@ -101,3 +101,26 @@ def test_import_revenue_not_used_and_blank_surprise_computed(edb):
     with edb.begin() as c:
         r = c.execute(text("SELECT eps_surprise_pct, verdict FROM earnings_results WHERE event_id = :e"), {"e": eid}).one()
     assert r.eps_surprise_pct == Decimal("0.00") and r.verdict == "부합"    # 이관 매출(−6%)로 '하회'가 되지 않는다
+
+
+def test_recently_reported_ticker_added_after_the_report_is_caught(edb):
+    """발표 다음 날 관심종목에 넣은 종목(2026-10-01 MU) — 행이 생기고 같은 실행에서 EPS 까지 채운다."""
+    with edb.begin() as c:
+        c.execute(text("INSERT INTO watchlist_items (id, ticker) VALUES (:i, 'MU')"), {"i": uuid.uuid4()})
+    reported = date(2026, 9, 25)                       # TODAY(9/27) 이틀 전
+
+    def fake(start, days):
+        if days == ec.RECENT_DAYS + ec.AHEAD_DAYS:
+            assert start <= reported                   # 지난 2주도 훑는다
+            return [_ev(reported, "MU", eps_forecast=Decimal("31.41"))]
+        if start == reported:
+            return [_ev(reported, "MU", timing="미정", eps_forecast=Decimal("31.41"),
+                        eps_actual=Decimal("33.00"), eps_surprise_pct=Decimal("5.06"))]
+        return []
+
+    got = ec.collect(edb, TODAY, fetch=fake)
+    assert got["past_filled"] >= 1
+    with edb.begin() as c:
+        mu = c.execute(text("SELECT e.report_date, e.timing, r.eps_actual, r.verdict FROM earnings_events e "
+                            "JOIN earnings_results r ON r.event_id = e.id WHERE e.ticker = 'MU'")).one()
+    assert (mu.report_date, mu.timing, mu.eps_actual, mu.verdict) == (reported, "AMC", Decimal("33.0000"), "상회")

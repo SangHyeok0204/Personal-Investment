@@ -3,7 +3,7 @@
 큐: sec_crawl(수집 작업 줄). API `earnings_sync` 가 매일 07:10 KST 이후 한 번 넣는다(맥이 자고 있었으면 깨어나서).
 대상 = 내 미국 보유 + 관심종목(`prices/earnings.py` 의 Nasdaq 수집기 재사용 — 키 없이 · 브라우저 UA).
 
-1) 앞으로 63일(9주 — 아래 AHEAD_DAYS 주석): 날짜별 캘린더 → 내 종목만 `earnings_events` 에 upsert(source='nasdaq'). EPS 컨센 · 추정 수 · 장전/장후.
+1) 최근 14일 + 앞으로 63일(9주 — 아래 AHEAD_DAYS · RECENT_DAYS 주석): 날짜별 캘린더 → 내 종목만 `earnings_events` 에 upsert(source='nasdaq'). EPS 컨센 · 추정 수 · 장전/장후.
    발표일이 옮겨 가도 (종목, 분기 라벨)로 같은 행을 고친다.
 2) 지난 발표(최근 400일): 그 **발표일의 캘린더**를 다시 부르면 `eps`(실적) · `epsForecast`(당시 컨센) ·
    `surprise`(%)가 온다(실측 NVDA 2026-08-26: $2.22 vs $2.09, +6.22). → `earnings_results` 를 Nasdaq 값으로 채우고
@@ -25,6 +25,10 @@ from source_health import record_error, record_ok
 # 계획은 "향후 4주"였지만 실측(2026-09-27): 내 종목 11개의 다음 발표가 전부 10/27 ~ 11/18 — 4주 창이면 한 달 동안 빈 화면.
 # Nasdaq 은 약 두 달 앞(예상일 포함)까지 준다 → 한 분기 간격만큼(9주) 본다. 화면은 4주 안/밖을 나눠 보인다.
 AHEAD_DAYS = 63
+# ★2026-10-01 MU 누락: 행(earnings_events)은 **앞으로의 캘린더에서만** 생기고, 아래 2) 는 이미 있는 행의
+#   결과만 채운다. 그래서 발표(9/30 장후) 뒤에 관심종목에 넣은 MU 는 행이 영영 안 생겼다.
+#   → 1) 을 최근 RECENT_DAYS 일 앞에서부터 훑는다. 지난 날짜에서 새로 생긴 행은 같은 실행의 2) 가 EPS 를 채운다.
+RECENT_DAYS = 14
 LOOKBACK_DAYS = 400
 THRESHOLD = Decimal("3")          # %, 원본 consensus_from_values(threshold=0.03)
 _TIMING = {"장전": "BMO", "장후": "AMC"}
@@ -76,9 +80,9 @@ def collect(engine, today: date | None = None, fetch=fetch_calendar) -> dict:
     today = today or date.today()
     with engine.begin() as c:
         targets = _targets(c)
-    # 1) 앞으로 AHEAD_DAYS 일
+    # 1) 최근 RECENT_DAYS 일 + 앞으로 AHEAD_DAYS 일
     upcoming = 0
-    for ev in fetch(today, AHEAD_DAYS):
+    for ev in fetch(today - timedelta(days=RECENT_DAYS), RECENT_DAYS + AHEAD_DAYS):
         tk = _match(targets, ev.ticker)
         if not tk:
             continue
