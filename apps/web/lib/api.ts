@@ -338,41 +338,7 @@ export function setAssetSector(
   });
 }
 
-// ── 매매(체결) 내역 ──────────────────────────────────────────────────────────
-
-export interface Trade {
-  id: string;
-  account_id: string;
-  account_name: string | null;
-  trade_date: string;
-  trade_no: string;
-  side: "BUY" | "SELL";
-  ticker: string;
-  asset_name: string | null;
-  sector: string | null;
-  currency: string;
-  quantity: string;
-  price: string | null;
-  amount_local: string | null;
-  settlement_amount_local: string | null;
-  commission_local: string | null;
-  tax_local: string | null;
-  exchange: string | null;
-  channel: string | null;
-  processed_at: string | null;
-}
-
-export interface TradeStats {
-  currency: string;
-  buy_count: number;
-  sell_count: number;
-  buy_amount: string;
-  sell_amount: string;
-  commission: string;
-  tax: string;
-}
-
-// ── 일별 성과 / 실현손익 ─────────────────────────────────────────────────────
+// ── 일별 성과 ─────────────────────────────────────────────────────────────
 
 export interface DailyPerformancePoint {
   base_date: string;
@@ -411,66 +377,6 @@ export interface PerformanceSeries {
   bridge: ReturnBridge;
 }
 
-export interface RealizedPnlItem {
-  id: string;
-  sell_date: string;
-  ticker: string;
-  asset_name: string | null;
-  sector: string | null;
-  currency: string;
-  quantity: string;
-  avg_buy_price: string | null;
-  avg_sell_price: string | null;
-  buy_amount_local: string | null;
-  sell_amount_local: string | null;
-  commission_tax_local: string | null;
-  pnl_local: string | null;
-  pnl_krw: string | null;
-  pnl_rate: string | null;
-  buy_exchange_rate: string | null;
-  sell_exchange_rate: string | null;
-  // 환차손익 — 주가 손익과 별개다. 합치지 않는다.
-  fx_pnl_krw: string | null;
-}
-
-/**
- * 실현손익을 **무엇으로 벌었나**로 쪼갠 것.
- *
- * ⚠️증권사 실현손익에는 **비용이 이미 차감돼 있다.** 그래서 `gross_trading_krw`
- *   는 비용을 되더한 값이고, 거기서 `cost_krw` 를 빼야 원래 손익으로 돌아온다.
- * ⚠️원화로는 수수료와 세금이 **합쳐서만** 온다. 분리는 달러뿐이다.
- */
-export interface RealizedBreakdown {
-  gross_trading_krw: string;
-  /** **판 종목**에 붙은 비용(원화). */
-  cost_krw: string;
-  /** 같은 범위의 달러 금액 — cost_krw 와 짝이 맞는다. */
-  cost_local: string | null;
-  /** 체결 원장 **전체** 기준 분리. ⚠️cost_krw 의 분해가 아니다(범위가 다르다). */
-  commission_usd: string | null;
-  tax_usd: string | null;
-  dividend_krw: string;
-  /** 종목 수익(비용 차감 후) + 배당. */
-  net_krw: string;
-  /** ⚠️합계에 넣지 않는다 — 종목으로 번 건지 환율로 번 건지 구분이 사라진다. */
-  fx_pnl_krw: string | null;
-}
-
-export interface RealizedPnlList {
-  items: RealizedPnlItem[];
-  total: number;
-  pnl_krw: string | null;
-  fx_pnl_krw: string | null;
-  win_count: number;
-  loss_count: number;
-  first_sell_date: string | null;
-  last_sell_date: string | null;
-  breakdown: RealizedBreakdown | null;
-  /** 같은 기간의 체결 내역 — 한 화면에서 "무엇을 팔았나"까지 본다. */
-  trades: Trade[];
-  trade_stats: TradeStats | null;
-}
-
 export function getPerformance(
   accountId?: string | null,
   days = 365,
@@ -493,6 +399,19 @@ export interface PnlBreakdownPoint {
   unrealized_krw: string | null;
   total_period_pnl_krw: string | null;
   total_value_krw: string | null;
+  // 실현손익(누적)의 두 갈래 — 합이 realized_cum_krw. 원장 값이라 매일 있다.
+  realized_trading_cum_krw: string;
+  realized_dividend_cum_krw: string;
+}
+
+/** 실현손익(누적)을 이루는 한 건. 매매는 수수료·세금 뺀 뒤, 배당은 원천징수 뒤.
+ *  매매 금액을 모르는 행은 null(0 이 아니다). */
+export interface PnlEvent {
+  date: string;
+  ticker: string;
+  asset_name: string | null;
+  kind: "trade" | "dividend";
+  amount_krw: string | null;
 }
 
 export interface PnlBreakdown {
@@ -511,6 +430,8 @@ export interface PnlBreakdown {
   // 키움 일별 손익이 있는 마지막 날. 그 뒤(오늘)는 실현 + 실제 평가 − 시작 평가.
   daily_pnl_until: string | null;
   items: PnlBreakdownPoint[];
+  // 시작일부터의 매도·배당 건별(최근순). 합 = realized_cum_krw.
+  events: PnlEvent[];
 }
 
 export function getPnlBreakdown(
@@ -856,48 +777,6 @@ export function getResearchLibrary(
   );
 }
 
-// ── 입출금 ───────────────────────────────────────────────────────────────────
-
-export interface CashflowEvent {
-  base_date: string;
-  deposit_krw: string | null;
-  withdrawal_krw: string | null;
-  net_krw: string;
-  assets_after_krw: string | null;
-}
-
-export interface CashflowMonth {
-  month: string;
-  deposit_krw: string;
-  withdrawal_krw: string;
-  net_krw: string;
-}
-
-export interface Cashflow {
-  events: CashflowEvent[];
-  monthly: CashflowMonth[];
-  total_deposit_krw: string | null;
-  total_withdrawal_krw: string | null;
-  net_deposit_krw: string | null;
-  /** 기간 첫날의 순입출금. 시작 잔고에 포함돼 순입금에서 빠졌다. */
-  first_day_flow_krw: string | null;
-  /** 기간 시작 시점의 자산. 수익에 섞으면 안 된다. */
-  opening_balance_krw: string | null;
-  current_assets_krw: string | null;
-  /** 금액 증감 — 수익률(TWR)이 아니다. */
-  gain_krw: string | null;
-  gain_ratio: string | null;
-  first_date: string | null;
-  last_date: string | null;
-}
-
-export function getCashflow(accountId?: string | null, days = 1095): Promise<Cashflow> {
-  const q = accountQuery(accountId);
-  return request<Cashflow>(
-    `/api/v1/portfolio/cashflow${q ? `${q}&` : "?"}days=${days}`,
-  );
-}
-
 // ── 매크로 지표 ──────────────────────────────────────────────────────────────
 
 export interface MacroRow {
@@ -1220,61 +1099,6 @@ export function getFxRate(accountId?: string | null): Promise<FxRate> {
 
 export function getFxExposure(accountId?: string | null): Promise<FxExposure> {
   return request<FxExposure>(`/api/v1/portfolio/fx-exposure${accountQuery(accountId)}`);
-}
-
-// ── 거래비용 ─────────────────────────────────────────────────────────────────
-
-export interface CostBySide {
-  side: string;
-  trade_count: number;
-  turnover: string;
-  commission: string;
-  tax: string;
-  cost_ratio: string | null;
-}
-
-export interface CostByMonth {
-  month: string;
-  trade_count: number;
-  turnover: string;
-  cost: string;
-}
-
-export interface CostByTicker {
-  ticker: string;
-  name: string | null;
-  trade_count: number;
-  turnover: string;
-  cost: string;
-  cost_ratio: string | null;
-}
-
-export interface TradingCost {
-  currency: string;
-  trade_count: number;
-  turnover: string | null;
-  commission: string | null;
-  tax: string | null;
-  total_cost: string | null;
-  /** 분모는 거래대금이다(평가액이 아니다). */
-  cost_ratio: string | null;
-  by_side: CostBySide[];
-  by_month: CostByMonth[];
-  by_ticker: CostByTicker[];
-  /** 참고용으로 나란히 둘 뿐, 비용과 더하거나 빼지 않는다. */
-  realized_pnl_krw: string | null;
-  first_trade_date: string | null;
-  last_trade_date: string | null;
-}
-
-export function getTradingCosts(
-  accountId?: string | null,
-  days = 1095,
-): Promise<TradingCost> {
-  const q = accountQuery(accountId);
-  return request<TradingCost>(
-    `/api/v1/portfolio/costs${q ? `${q}&` : "?"}days=${days}`,
-  );
 }
 
 // ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────
@@ -1708,121 +1532,6 @@ export interface Filings {
 
 export function getFilings(accountId?: string | null): Promise<Filings> {
   return request<Filings>(`/api/v1/portfolio/filings${accountQuery(accountId)}`);
-}
-
-// ── 세금 (해외주식 양도소득 · 배당소득) ──────────────────────────────────────
-// ⚠️**신고 자료가 아니다.** 그리고 여기서만 환차를 양도차익에 더한다 —
-//   세법의 양도차익은 원화 기준 양도가액 − 취득가액이라 환율이 과세 대상이다.
-
-export interface TaxSale {
-  ticker: string;
-  name: string | null;
-  sell_date: string;
-  quantity: string;
-  proceeds_krw: string;
-  cost_basis_krw: string;
-  expense_krw: string;
-  gain_krw: string;
-}
-
-export interface TaxYear {
-  year: number;
-  sale_count: number;
-  proceeds_krw: string;
-  cost_basis_krw: string;
-  expense_krw: string;
-  /** 체결일 환율로 계산한 양도차익(법정 정의). */
-  gain_krw: string;
-  /** 증권사가 준 값(주가손익 + 환차손익). */
-  gain_krw_broker: string;
-  /** 두 방식의 차이 — 숨기지 않는다. */
-  method_diff_krw: string;
-  deduction_krw: string;
-  taxable_base_krw: string;
-  tax_rate: string;
-  tax_krw: string;
-  /** 기본공제까지 남은 여유. 음수면 이미 과세 구간이다. */
-  headroom_krw: string;
-  dividend_krw: string;
-  dividend_count: number;
-  comprehensive_threshold_krw: string;
-  sales: TaxSale[];
-}
-
-export interface Tax {
-  years: number[];
-  current: TaxYear | null;
-  notes: string[];
-}
-
-export function getTax(
-  accountId?: string | null,
-  year?: number | null,
-): Promise<Tax> {
-  const q = accountQuery(accountId);
-  const suffix = year ? `${q ? `${q}&` : "?"}year=${year}` : q;
-  return request<Tax>(`/api/v1/portfolio/tax${suffix}`);
-}
-
-// ── 월별 현금흐름 ────────────────────────────────────────────────────────────
-// ★여기 금액은 **전부 원화**다. 원천이 account_daily_performance 하나뿐이라
-//   통화를 섞을 일이 없다 — 수수료/세금 화면(USD, trades 원천)과는 다른 출처다.
-//   두 화면의 비용 숫자를 환율로 이어 붙이지 않는다.
-
-export interface MonthlyCashflowRow {
-  month: string;
-  /** 외부 흐름 — 내 지갑 ↔ 계좌. 수익이 아니다. */
-  deposit_krw: string;
-  withdrawal_krw: string;
-  net_flow_krw: string;
-  /** 계좌가 만든 현금 — 시장과 무관하게 실제로 생기거나 사라진 돈. */
-  dividend_krw: string;
-  cost_krw: string;
-  net_cash_generated_krw: string;
-  /** 매매 회전 — 계좌 안에서 현금 ↔ 주식. 손익이 아니다. */
-  buy_krw: string;
-  sell_krw: string;
-  pnl_krw: string;
-  opening_assets_krw: string | null;
-  closing_assets_krw: string | null;
-  /** 월초 + 순납입 + 손익으로 설명되지 않는 나머지. **환차라고 부르지 않는다.** */
-  unexplained_krw: string | null;
-}
-
-export interface MonthlyCashflow {
-  rows: MonthlyCashflowRow[];
-  total_deposit_krw: string;
-  total_withdrawal_krw: string;
-  total_dividend_krw: string;
-  total_cost_krw: string;
-  net_cash_generated_krw: string;
-  total_buy_krw: string;
-  total_sell_krw: string;
-  months_dividend_covered_cost: number;
-  months_total: number;
-  first_month: string | null;
-  last_month: string | null;
-  note: string;
-}
-
-export function getMonthlyCashflow(
-  accountId?: string | null,
-  days = 1095,
-): Promise<MonthlyCashflow> {
-  const q = accountQuery(accountId);
-  return request<MonthlyCashflow>(
-    `/api/v1/portfolio/monthly-cashflow${q ? `${q}&` : "?"}days=${days}`,
-  );
-}
-
-export function getRealizedPnl(
-  accountId?: string | null,
-  days = 365,
-): Promise<RealizedPnlList> {
-  const q = accountQuery(accountId);
-  return request<RealizedPnlList>(
-    `/api/v1/portfolio/realized${q ? `${q}&` : "?"}days=${days}`,
-  );
 }
 
 // ── 증권사 연동 (키 등록 · 계좌 확인 · 동기화) ───────────────────────────────

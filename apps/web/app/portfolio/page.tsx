@@ -98,6 +98,10 @@ export default function PortfolioPage() {
   //   사용자 결정. 총기간·실현이 그 날 0 에서 출발하는 것이 전체에서만 보인다.
   //   최근 움직임은 30일로 좁혀 본다. 1년은 뺐다 — 시작일이 1년 안이라 전체와 같다.
   const [pnlRange, setPnlRange] = useState<30 | "all">("all");
+  // ★2026-10-01 타일 드릴다운 — 실현손익(누적) / 총기간 손익을 일별 그래프 + 분해로.
+  //   은퇴한 체결·실현손익 화면의 쓸모 있던 부분(일별 누적 · 건별 목록)이 여기로 왔다.
+  const [realizedOpen, setRealizedOpen] = useState(false);
+  const [totalOpen, setTotalOpen] = useState(false);
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -254,6 +258,39 @@ export default function PortfolioPage() {
     ];
   }, [pnlItems]);
 
+  // 드릴다운 그래프 — 구간을 자르지 않고 시작일부터 전부. 서버 값을 그대로 쓴다.
+  //   실현 = 매매(비용 뺀 뒤) + 배당(세후·원천징수 뒤). 배당에서 세금을 또 빼지 않는다.
+  const allDates = useMemo(() => (breakdown.data?.items ?? []).map((p) => p.date), [breakdown.data]);
+  const realizedSeries = useMemo(() => {
+    const items = breakdown.data?.items ?? [];
+    return [
+      { name: "실현손익(누적)", emphasis: true, values: items.map((p) => numOrNull(p.realized_cum_krw)) },
+      { name: "주식 실현(매매)", values: items.map((p) => numOrNull(p.realized_trading_cum_krw)) },
+      { name: "배당(세후)", values: items.map((p) => numOrNull(p.realized_dividend_cum_krw)) },
+    ];
+  }, [breakdown.data]);
+  // 총기간 = 실현(누적) + (평가손익 − 시작 시점 평가손익). 시작 평가를 모르면 둘째 항도 모른다.
+  const totalSeries = useMemo(() => {
+    const items = breakdown.data?.items ?? [];
+    const base = numOrNull(breakdown.data?.unrealized_at_start_krw ?? null);
+    return [
+      { name: "총기간 손익", emphasis: true, values: items.map((p) => numOrNull(p.total_period_pnl_krw)) },
+      { name: "실현(누적)", values: items.map((p) => numOrNull(p.realized_cum_krw)) },
+      {
+        name: `평가손익 − ${pnlStartShort ?? "시작"} 평가손익`,
+        values: items.map((p) => {
+          const u = numOrNull(p.unrealized_krw);
+          return u == null || base == null ? null : u - base;
+        }),
+      },
+    ];
+  }, [breakdown.data, pnlStartShort]);
+  // 타일과 같은 값으로 쓰는 둘째 항(평가손익은 /summary 그대로) — 합이 타일과 똑같다.
+  const unrealizedDeltaKrw =
+    pnlKrw != null && unrealizedAtStart != null
+      ? String(Number(pnlKrw) - Number(unrealizedAtStart))
+      : null;
+
   // 조각 하나에 든 종목들. ⚠️값은 **동기화 스냅샷**(market_value_krw)으로 낸다 —
   //   배분 카드가 그 기준이라, 실시간 값을 쓰면 바스켓 합이 조각 금액과 어긋난다.
   const basketRows = useMemo(() => {
@@ -303,6 +340,8 @@ export default function PortfolioPage() {
             hint={`${pnlStartShort ?? "시작일"}부터 · 매도+세후배당`}
             accent="auto"
             loading={breakdown.isLoading}
+            onClick={() => setRealizedOpen(true)}
+            actionHint="눌러서 일별 추이·건별 보기"
           />
           <StatTile
             label="평가손익"
@@ -325,6 +364,8 @@ export default function PortfolioPage() {
             hint={`${pnlStartShort ?? "시작일"}부터 · 일별 손익 누적`}
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
+            onClick={() => setTotalOpen(true)}
+            actionHint="눌러서 일별 추이·분해 보기"
           />
           {/* 부제의 "보유종목 + 예수금" 이 늘 성립하도록 같은 stockKrw 로 만든
               totalKrw 를 쓴다(둘 다 키움 5초 동기화 값). ⚠️실현손익을 더하지 않는다
@@ -618,6 +659,126 @@ export default function PortfolioPage() {
             height={300}
             note={performance.isLoading ? "불러오는 중…" : "계좌 성과 데이터 없음"}
           />
+        )}
+      </Modal>
+
+      {/* 실현손익(누적) 타일 → 일별 누적(매매 · 배당 · 합) + 건별 목록. */}
+      <Modal
+        open={realizedOpen}
+        onClose={() => setRealizedOpen(false)}
+        title="실현손익(누적) 일별 추이"
+        subtitle={`${pnlStart ?? "시작일"}부터 · 매매는 수수료·세금 뺀 뒤 · 배당은 세후(원천징수 후)`}
+        width={940}
+      >
+        {breakdown.data && allDates.length > 0 ? (
+          <div className="space-y-3">
+            <CompareChart
+              height={260}
+              dates={allDates}
+              series={realizedSeries}
+              valueFormat={compactKrw}
+              legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+            />
+            <dl className="grid grid-cols-3 gap-3 border-t border-hairline pt-3">
+              <Figure
+                label="주식 실현(매매)"
+                value={formatKrwSigned(breakdown.data.realized_trading_krw)}
+                tone={toneOf(breakdown.data.realized_trading_krw)}
+              />
+              <Figure
+                label="배당(세후)"
+                value={formatKrwSigned(breakdown.data.dividend_krw)}
+                tone={toneOf(breakdown.data.dividend_krw)}
+              />
+              <Figure
+                label="합계 = 타일"
+                value={formatKrwSigned(realizedKrw)}
+                tone={toneOf(realizedKrw)}
+              />
+            </dl>
+            <div className="max-h-[30vh] overflow-y-auto">
+              <DataTable
+                columns={["날짜", "종목", "구분", "금액"]}
+                align={["left", "left", "left", "right"]}
+                empty="시작일 이후 매도·배당이 없습니다"
+              >
+                {breakdown.data.events.map((e, i) => (
+                  <tr key={`${e.date}-${e.kind}-${e.ticker}-${i}`} className="border-b border-hairline">
+                    <Cell left tone="muted">{e.date}</Cell>
+                    <Cell left strong>
+                      <span className="flex items-center gap-1.5">
+                        <span>{e.ticker}</span>
+                        <span className="max-w-[220px] truncate text-[10px] font-semibold text-ink-faint">
+                          {e.asset_name}
+                        </span>
+                      </span>
+                    </Cell>
+                    <Cell left>
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[10px] font-bold",
+                          e.kind === "trade" ? "bg-ask-soft text-ask" : "bg-bid-soft text-bid",
+                        )}
+                      >
+                        {e.kind === "trade" ? "매매" : "배당"}
+                      </span>
+                    </Cell>
+                    {/* 매매 금액을 모르는 행은 "—" — 0 으로 적지 않는다. */}
+                    <Cell strong tone={toneOf(e.amount_krw)}>{formatKrwSigned(e.amount_krw)}</Cell>
+                  </tr>
+                ))}
+              </DataTable>
+            </div>
+          </div>
+        ) : (
+          <StubChart height={260} note={breakdown.isLoading ? "불러오는 중…" : "손익 데이터 없음"} />
+        )}
+      </Modal>
+
+      {/* 총기간 손익 타일 → 일별 총기간 손익 + 분해(실현 누적 · 평가손익 − 시작 평가손익). */}
+      <Modal
+        open={totalOpen}
+        onClose={() => setTotalOpen(false)}
+        title="총기간 손익 일별 추이"
+        subtitle={`${pnlStart ?? "시작일"}부터 · 총기간 = 실현(누적) + (평가손익 − ${pnlStartShort ?? "시작"} 평가손익)`}
+        width={940}
+      >
+        {breakdown.data && allDates.length > 0 ? (
+          <div className="space-y-3">
+            <CompareChart
+              height={280}
+              dates={allDates}
+              series={totalSeries}
+              valueFormat={compactKrw}
+              legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+            />
+            <dl className="grid grid-cols-2 gap-3 border-t border-hairline pt-3 sm:grid-cols-4">
+              <Figure label="실현(누적)" value={formatKrwSigned(realizedKrw)} tone={toneOf(realizedKrw)} />
+              <Figure
+                label={`평가손익 − ${pnlStartShort ?? "시작"} 평가손익`}
+                value={formatKrwSigned(unrealizedDeltaKrw)}
+                tone={toneOf(unrealizedDeltaKrw)}
+              />
+              <Figure
+                label="총기간 손익 = 타일"
+                value={formatKrwSigned(totalPeriodKrw)}
+                tone={toneOf(totalPeriodKrw)}
+              />
+              <Figure
+                label={`${pnlStartShort ?? "시작"} 시점 평가손익`}
+                value={formatKrwSigned(unrealizedAtStart)}
+                tone={toneOf(unrealizedAtStart)}
+              />
+            </dl>
+            <p className="text-[11px] leading-snug text-ink-muted">
+              과거 평가손익은 역산 값입니다(키움 일별 손익이 있는 마지막 날
+              {breakdown.data.daily_pnl_until ? ` ${breakdown.data.daily_pnl_until}` : ""}까지 — 시작
+              평가 + 총기간 − 실현). 오늘 점만 키움 실제 평가손익이라, 마지막 일별 행과 오늘 사이에
+              계단이 생길 수 있습니다.
+            </p>
+          </div>
+        ) : (
+          <StubChart height={280} note={breakdown.isLoading ? "불러오는 중…" : "손익 데이터 없음"} />
         )}
       </Modal>
 
@@ -925,6 +1086,10 @@ function ClassCell({ value, missing = "—" }: { value: string | null; missing?:
       {empty ? missing : value}
     </Cell>
   );
+}
+
+function numOrNull(v: string | null): number | null {
+  return v == null ? null : Number(v);
 }
 
 /** 축 눈금용 접은 금액 — "393만". 축은 자릿수를 다 보여줄 자리가 없다. */
