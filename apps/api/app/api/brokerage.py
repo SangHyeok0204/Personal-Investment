@@ -406,7 +406,10 @@ def run_quick_sync(db: Session = Depends(get_db)) -> QuickSyncResultOut:
         adapter_cls = get_adapter_class("KIWOOM")
         with adapter_cls(credentials, markets=tuple(markets)) as adapter:
             for account_ref in adapter.fetch_accounts():
-                portfolio = adapter.fetch_portfolio(account_ref)
+                # ⚠️예전에는 여기서 `adapter.fetch_portfolio()` 를 부르고 결과를 버렸다.
+                #   아래 `_normalized_from` 이 같은 TR(ust21070·ust21110·ust21160)을
+                #   **또** 부르므로 5초마다 TR 이 두 배로 나갔다(유량제한의 주범).
+                #   결과를 쓰지 않는 호출이라 지워도 저장값은 그대로다.
                 raw_account = {
                     "external_account_id": account_ref.external_account_id,
                     "account_name": account_ref.account_name,

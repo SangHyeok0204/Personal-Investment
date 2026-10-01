@@ -115,9 +115,13 @@ export default function PortfolioPage() {
     queryFn: () => getPerformance(accountId, 365),
     staleTime: 60_000,
   });
-  // ★실시간 시세(2026-09-22). 잔고 동기화는 키움 TR 이 무거워 30초 주기인데,
-  //   시세만 따로 받으면 5초 주기여도 가볍다(실측 17종목 0.60초 + 서버 4초 캐시).
-  //   가격이 30초 동안 멈춰 보이던 문제를 이게 메운다.
+  // 실시간 시세(Yahoo/토스) — **종목 행의 현재가·당일 등락 표시에만** 쓴다.
+  // ★2026-10-01 사용자 지정: 화면의 금액(평가액·평가손익·비중)은 **키움 한 원천**.
+  //   잔고 동기화가 5초마다 ust21070 의 pl_amt_krw(제비용·세금 반영 평가손익)를
+  //   갈아 넣으므로, 시세로 다시 계산한 합계를 끼워 넣을 이유가 사라졌다.
+  //   ⚠️실측(2026-10-01 13:04 KST, 데이마켓): 키움 현재가는 15초 간격으로 움직였고
+  //     (SOXL 154.28→154.40) Yahoo 는 전일 정규장 종가(147.86)에 멈춰 있었다.
+  //     시세 합계로 갈아끼우면 오히려 **더 오래된 값**을 보여 주게 된다.
   const quotes = useQuery({
     queryKey: ["liveQuotes", accountId],
     queryFn: () => getLiveQuotes(accountId),
@@ -128,19 +132,16 @@ export default function PortfolioPage() {
   const s = summary.data;
   const rows = holdings.data?.items ?? [];
 
-  // 티커 → 실시간 시세. 못 받은 종목은 여기 없고, 화면은 증권사 값을 그대로 쓴다.
+  // 티커 → 실시간 시세. 행의 현재가·당일 칸만 쓴다(못 받은 종목은 증권사 현재가).
   const liveByTicker = useMemo(() => {
     const map = new Map<string, LiveQuote>();
     for (const q of quotes.data?.items ?? []) map.set(q.ticker, q);
     return map;
   }, [quotes.data]);
 
-  // ⚠️합계는 **실시간으로 전 종목을 다 받았을 때만** 갈아끼운다. 일부만 실시간이면
-  //   실시간 값과 증권사 값이 섞여 합계가 어느 시점 것인지 알 수 없어진다.
-  const allLive =
-    (quotes.data?.missing.length ?? 1) === 0 && liveByTicker.size === rows.length;
-  const liveTotalKrw = allLive ? (quotes.data?.total_market_value_krw ?? null) : null;
-  const stockKrw = liveTotalKrw ?? holdings.data?.total_market_value_krw ?? null;
+  // ★합계·비중은 증권사 값만 쓴다(위 quotes 주석 참고). 실시간 합계로 갈아끼우던
+  //   분기(allLive)는 지웠다 — 한 칸이 두 원천을 오가면 숫자가 왜 뛰는지 설명할 수 없다.
+  const stockKrw = holdings.data?.total_market_value_krw ?? s?.securities_value_krw ?? null;
   const cashKrw = s?.cash_krw ?? null;
 
   // ★2026-09-22 사용자 지정: **자산 = 주식 평가액 + 예수금.** 비중의 분모도
@@ -152,31 +153,18 @@ export default function PortfolioPage() {
       ? String(Number(stockKrw) + Number(cashKrw))
       : stockKrw;
 
-  // ⚠️평가손익의 **값과 비율을 같은 원천에서** 낸다. 예전에는 값은 실시간,
-  //   비율은 증권사 스냅샷이라 가격이 움직이면 둘이 서로 다른 말을 했다.
-  // ★두 원천의 기준도 맞춰 두었다 — 실시간 쪽도 제비용을 뺀 값을 준다.
-  //   (예전에는 실시간이 안 뺀 값이라, 시세가 도착하는 순간 가격이 하나도
-  //    안 움직여도 평가손익이 ₩174,262 뛰었다.)
-  const pnlKrw =
-    (allLive ? quotes.data?.total_unrealized_pnl_krw : null) ??
-    s?.unrealized_pnl_krw ??
-    null;
-  const purchaseKrw = s?.purchase_amount_krw ?? null;
+  // ★평가손익의 값과 비율은 **증권사(키움) 한 원천**이다 — /summary 가 더한
+  //   pl_amt_krw 와 그 매입원가 대비 비율. 제비용·세금은 증권사가 이미 반영했다.
+  const pnlKrw = s?.unrealized_pnl_krw ?? null;
   const pnlRate =
-    allLive && pnlKrw != null && purchaseKrw != null && Number(purchaseKrw) !== 0
-      ? formatPercentString(String(Number(pnlKrw) / Number(purchaseKrw)))
-      : s?.unrealized_return != null
-        ? formatPercentString(s.unrealized_return)
-        : null;
+    s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
 
-  // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 예전에는 조각만 증권사
-  //   스냅샷이고 분모(totalKrw)는 실시간이라, 같은 화면에서 SOXL 이 도넛
-  //   19.9%(₩7,504,865) · 표 20.5%(₩7,817,339) 로 갈렸다. 분자만 옛 값이니
-  //   모든 비중이 조금씩 낮게 나오고, 합도 100% 가 안 된다.
+  // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 분자(조각)와 분모(totalKrw)가
+  //   다른 원천이면 같은 화면에서 SOXL 이 도넛 19.9% · 표 20.5% 로 갈리고(실측)
+  //   비중 합도 100% 가 안 된다. 둘 다 증권사 값이다.
   const holdingSlices: DonutSlice[] = useMemo(() => {
     const slices = rows.map((h) => {
-      const valueKrw =
-        liveByTicker.get(h.ticker)?.market_value_krw ?? h.market_value_krw;
+      const valueKrw = h.market_value_krw;
       return {
         key: h.asset_id,
         // 범례 폭을 아끼려고 이름 대신 티커로 적는다(2026-09-25 사용자 지시).
@@ -195,7 +183,7 @@ export default function PortfolioPage() {
       });
     }
     return slices;
-  }, [rows, cashKrw, liveByTicker]);
+  }, [rows, cashKrw]);
 
   // 자산 추이 — 총 평가금액(왼쪽 축) + 누적 손익(오른쪽 축). 카드와 팝업이 같이 쓴다.
   const trendPoints = useMemo(
@@ -257,14 +245,12 @@ export default function PortfolioPage() {
 
         {/* 1행: 요약 4칸 — 높이 고정 */}
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          {/* ⚠️`s.total_assets_krw` 를 쓰면 안 된다. 그건 증권사 스냅샷이라,
-              아래 '보유종목 평가액' 이 실시간으로 갈아끼워지는 순간
-              **부제에 적은 "보유종목 + 예수금" 이 성립하지 않는다**(실측
-              357,512원 차이). 같은 stockKrw 로 만든 totalKrw 를 쓴다. */}
+          {/* 부제의 "보유종목 + 예수금" 이 늘 성립하도록 같은 stockKrw 로 만든
+              totalKrw 를 쓴다(둘 다 키움 5초 동기화 값). */}
           <StatTile
             label="총 평가금액"
             value={formatKrwString(totalKrw)}
-            hint={allLive ? "보유종목 + 예수금 · 실시간" : "보유종목 평가액 + 예수금"}
+            hint="보유종목 평가액 + 예수금 · 키움"
             loading={summary.isLoading}
           />
           <StatTile
@@ -272,8 +258,8 @@ export default function PortfolioPage() {
             value={formatKrwSigned(pnlKrw)}
             hint={
               pnlRate != null
-                ? `매입원가 대비 ${pnlRate} · 제비용 뺀 뒤`
-                : "매입원가 대비 · 제비용 뺀 뒤"
+                ? `매입원가 대비 ${pnlRate} · 키움 기준(제비용 반영)`
+                : "매입원가 대비 · 키움 기준(제비용 반영)"
             }
             accent="auto"
             loading={summary.isLoading}
@@ -284,14 +270,8 @@ export default function PortfolioPage() {
           />
           <StatTile
             label="보유종목 평가액"
-            value={formatKrwString(liveTotalKrw ?? s?.securities_value_krw)}
-            hint={
-              allLive
-                ? `${rows.length}종목 · 실시간`
-                : s?.position_count
-                  ? `${s.position_count}종목`
-                  : "보유 종목 평가액"
-            }
+            value={formatKrwString(stockKrw)}
+            hint={s?.position_count ? `${s.position_count}종목` : "보유 종목 평가액"}
             loading={summary.isLoading}
           />
           <StatTile
@@ -536,7 +516,6 @@ export default function PortfolioPage() {
             <ClassRow
               key={`${h.account_id}-${h.asset_id}`}
               holding={h}
-              live={liveByTicker.get(h.ticker)}
               totalKrw={totalKrw}
               onClick={() => setPicked(h)}
             />
@@ -661,14 +640,15 @@ function HoldingRow({
   onClick,
 }: {
   holding: PortfolioHolding;
-  /** 실시간 시세. 없으면(못 받은 종목) 증권사 값을 그대로 쓴다. */
+  /** 실시간 시세 — 현재가·당일 칸에만 쓴다. 없으면(못 받은 종목) 증권사 현재가. */
   live?: LiveQuote;
   totalKrw: string | null;
   onClick: () => void;
 }) {
-  // 실시간 값이 있으면 그걸, 없으면 증권사 값을 쓴다. 둘 다 없으면 "—".
-  const valueKrw = live?.market_value_krw ?? h.market_value_krw;
-  const pnlKrw = live?.unrealized_pnl_krw ?? h.unrealized_pnl_krw;
+  // ★평가금액·손익·비중은 증권사 값이다 — 위 합계·도넛과 같은 원천이어야 행의
+  //   합이 합계와 맞는다. 없으면 "—".
+  const valueKrw = h.market_value_krw;
+  const pnlKrw = h.unrealized_pnl_krw;
   const weight =
     totalKrw && valueKrw && Number(totalKrw) !== 0
       ? `${((Number(valueKrw) / Number(totalKrw)) * 100).toFixed(1)}%`
@@ -733,16 +713,15 @@ function HoldingRow({
 
 function ClassRow({
   holding: h,
-  live,
   totalKrw,
   onClick,
 }: {
   holding: PortfolioHolding;
-  live?: LiveQuote;
   totalKrw: string | null;
   onClick: () => void;
 }) {
-  const valueKrw = live?.market_value_krw ?? h.market_value_krw;
+  // 비중은 증권사 평가액 기준(합계·도넛과 같은 원천).
+  const valueKrw = h.market_value_krw;
   const weight =
     totalKrw && valueKrw && Number(totalKrw) !== 0
       ? `${((Number(valueKrw) / Number(totalKrw)) * 100).toFixed(1)}%`
