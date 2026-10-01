@@ -329,19 +329,23 @@ class PnlBreakdownPointOut(BaseModel):
 class PnlBreakdownOut(BaseModel):
     """총기간 손익 · 실현손익(누적) · 평가손익 · 총 평가액 — 지금 값과 일별 시계열.
 
-    ★첫 거래일부터 센다(투자 시작일로 자르지 않는다 — 2026-10-01 사용자 지정).
+    ★투자 시작일(INVESTMENT_START)부터 센다 — 2026-10-01 사용자 지정. 총기간·실현은
+      그 날 0 에서 누적하고, 평가손익은 보유분의 실제 수준이다(0 에서 출발하지 않는다).
       평가손익·총 평가액·예수금은 /summary 를 **그대로** 옮기고, 실현손익(누적)은
-      /realized 의 net_krw 와 같은 식을 첫 거래부터 적용한다.
+      /realized 의 net_krw 와 같은 식·같은 시작일이다.
+      등식: 총기간 − 실현 = 평가(오늘) − unrealized_at_start_krw.
     """
 
     as_of: datetime | None
-    # 누적을 세기 시작한 날(첫 거래일 = 키움 일별 성과의 첫 날).
-    since: date | None
+    # 누적을 세기 시작한 날 = investing.INVESTMENT_START.
+    start: date
     realized_cum_krw: Decimal | None
     # 실현손익의 두 갈래 — 매매(비용 뺀 뒤)와 배당(원천징수 뒤).
     realized_trading_krw: Decimal | None
     dividend_krw: Decimal | None
     unrealized_krw: Decimal | None
+    # 시작일 장 시작 전(앞날 마감)의 역산 평가손익. 모르면 None.
+    unrealized_at_start_krw: Decimal | None
     total_period_pnl_krw: Decimal | None
     total_value_krw: Decimal | None
     cash_krw: Decimal | None

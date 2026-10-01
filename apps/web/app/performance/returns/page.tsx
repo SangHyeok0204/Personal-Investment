@@ -103,7 +103,8 @@ export default function ReturnsPage() {
 
   // 월별 집계 — 월말 예탁자산과 그 달의 **주가** 손익 합.
   // ⚠️첫날 손익은 뺀다. 상단 '주가 손익' 타일도 빼고 세므로, 넣으면 표의 합과
-  //   타일이 어긋난다(실측 차이 ₩11,369 = 2026-06-04 의 손익).
+  //   타일이 어긋난다(실측 차이 ₩11,369 = 시작일이 06-04 이던 때 그날의 손익.
+  //   2026-10-01 부터 시작일은 06-01 이다 — investing.INVESTMENT_START).
   const monthly = useMemo(() => aggregateMonthly(items), [items]);
   // 막대는 왼쪽이 과거다(표는 최근 달이 위).
   const monthColumns = useMemo(

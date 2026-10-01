@@ -762,7 +762,7 @@ def test_dividends_newest_first_and_carry_sector(client, db, kiwoom):
     from datetime import date as _date
 
     account_id = kiwoom["account"].id
-    # ⚠️날짜는 투자 기간(2026-06-04~) 안이어야 한다 — 그 앞은 조회되지 않는다.
+    # ⚠️날짜는 투자 기간(2026-06-01~) 안이어야 한다 — 그 앞은 조회되지 않는다.
     _add_dividend(db, account_id, ticker="005930", pay_date=_date(2026, 7, 1),
                   asset_id=kiwoom["samsung"].id)
     _add_dividend(db, account_id, ticker="SGOV", pay_date=_date(2026, 8, 7))

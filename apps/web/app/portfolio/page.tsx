@@ -94,11 +94,10 @@ export default function PortfolioPage() {
   const [axis, setAxis] = useState<AllocationDimension>("exposure");
   // 왼쪽 큰 카드의 두 얼굴 — 손익 분해(기본) / 자산 추이(총 평가액).
   const [leftView, setLeftView] = useState<"pnl" | "assets">("pnl");
-  // 손익 분해 그래프 구간. ★기본은 '전체' — 2026-10-01 사용자 결정으로 손익 분해는
-  //   **첫 거래일(2025-04-08)부터** 센다. 세 선이 첫날부터 끊김 없이 이어지므로 전체가
-  //   읽히고, 1년으로 자르면 '첫 거래부터'라는 타일의 뜻이 그래프에서 안 보인다.
-  //   최근 움직임은 30일 · 1년으로 좁혀 본다.
-  const [pnlRange, setPnlRange] = useState<30 | 365 | "all">("all");
+  // 손익 분해 그래프 구간. ★기본은 '전체' = 투자 시작일(2026-06-01)부터 — 2026-10-01
+  //   사용자 결정. 총기간·실현이 그 날 0 에서 출발하는 것이 전체에서만 보인다.
+  //   최근 움직임은 30일로 좁혀 본다. 1년은 뺐다 — 시작일이 1년 안이라 전체와 같다.
+  const [pnlRange, setPnlRange] = useState<30 | "all">("all");
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -176,14 +175,19 @@ export default function PortfolioPage() {
   const pnlRate =
     s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
 
-  // 실현손익(누적)은 원장 값(/realized 와 같은 식이되 **첫 거래부터** — 투자 시작일로
-  // 자르지 않는다). 총기간 손익은 **화면에서** 실현 + 평가로 더한다 — 서버의 오늘 점
-  // 규칙(실현 + 키움 실제 평가손익)과 같은 식이라, 두 질의가 5초 갱신 사이에 엇갈려
-  // 와도 타일 셋이 "실현 + 평가 = 총기간" 을 늘 지킨다.
+  // 실현손익(누적)은 원장 값(/realized 와 같은 식·같은 시작일 — 투자 시작일부터).
+  // 총기간 손익은 **화면에서** 실현 + 평가 − 시작 시점 평가로 만든다 — 서버의 오늘 점
+  // 규칙과 같은 식이라, 두 질의가 5초 갱신 사이에 엇갈려 와도 타일 셋이
+  // "총기간 − 실현 = 평가 − 시작 평가" 를 늘 지킨다. 시작 평가를 모르면 총기간도 모른다.
   const realizedKrw = breakdown.data?.realized_cum_krw ?? null;
-  const pnlSince = breakdown.data?.since ?? null;
+  const pnlStart = breakdown.data?.start ?? null;
+  // 타일 설명용 짧은 날짜("6/01").
+  const pnlStartShort = pnlStart ? `${Number(pnlStart.slice(5, 7))}/${pnlStart.slice(8, 10)}` : null;
+  const unrealizedAtStart = breakdown.data?.unrealized_at_start_krw ?? null;
   const totalPeriodKrw =
-    realizedKrw != null && pnlKrw != null ? String(Number(realizedKrw) + Number(pnlKrw)) : null;
+    realizedKrw != null && pnlKrw != null && unrealizedAtStart != null
+      ? String(Number(realizedKrw) + Number(pnlKrw) - Number(unrealizedAtStart))
+      : null;
 
   // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 분자(조각)와 분모(totalKrw)가
   //   다른 원천이면 같은 화면에서 SOXL 이 도넛 19.9% · 표 20.5% 로 갈리고(실측)
@@ -231,8 +235,9 @@ export default function PortfolioPage() {
     [performance.data],
   );
 
-  // 손익 분해 그래프 — 총기간 손익과 평가손익을 **한 축**에 둔다. 두 선 사이 간격이
-  // 곧 실현손익(누적)이다. 과거 평가손익은 총기간 − 실현으로 **역산한 값**이고(서버
+  // 손익 분해 그래프 — 총기간 손익·실현손익·평가손익을 **한 축**에 둔다. 총기간·실현은
+  // 시작일에 0 에서 출발하고, 평가손익은 보유분 수준이라 시작 시점 평가손익에서
+  // 출발한다(평가 − 총기간 = 시작 평가 − 실현). 과거 평가손익은 **역산한 값**이고(서버
   // 독스트링), 오늘 점만 키움 실제 평가손익이다 — 그래서 끝점이 타일과 같다.
   const pnlItems = useMemo(() => {
     const items = breakdown.data?.items ?? [];
@@ -295,7 +300,7 @@ export default function PortfolioPage() {
             label="실현손익(누적)"
             value={formatKrwSigned(realizedKrw)}
             // ⚠️칸이 좁아(1280 폭에서 17자 남짓) 날짜·정의는 왼쪽 카드 부제와 아래 숫자에 둔다.
-            hint="첫 거래부터 · 매도+세후배당"
+            hint={`${pnlStartShort ?? "시작일"}부터 · 매도+세후배당`}
             accent="auto"
             loading={breakdown.isLoading}
           />
@@ -317,7 +322,7 @@ export default function PortfolioPage() {
           <StatTile
             label="총기간 손익"
             value={formatKrwSigned(totalPeriodKrw)}
-            hint="첫 거래부터 · 실현+평가"
+            hint={`${pnlStartShort ?? "시작일"}부터 · 일별 손익 누적`}
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
           />
@@ -363,9 +368,7 @@ export default function PortfolioPage() {
             title={leftView === "pnl" ? "손익 분해" : "자산 추이"}
             subtitle={
               leftView === "pnl"
-                ? pnlSince
-                  ? `첫 거래 ${pnlSince}부터 · 두 선의 간격 = 실현손익`
-                  : "첫 거래부터 · 두 선의 간격 = 실현손익"
+                ? `${pnlStart ?? "시작일"}부터 · 총기간·실현은 0에서 누적 · 평가손익은 보유분 실제 수준`
                 : performance.data?.first_date
                   ? `${performance.data.first_date} ~ ${performance.data.last_date}`
                   : "예탁자산 시계열"
@@ -406,7 +409,7 @@ export default function PortfolioPage() {
                       {pnlDates.length ? `${pnlDates[0]} ~ ${pnlDates[pnlDates.length - 1]}` : ""}
                     </span>
                     <div className="flex gap-1">
-                      {([30, 365, "all"] as const).map((r) => (
+                      {(["all", 30] as const).map((r) => (
                         <button
                           key={r}
                           type="button"
@@ -419,7 +422,7 @@ export default function PortfolioPage() {
                               : "text-ink-muted hover:bg-canvas-soft hover:text-ink",
                           )}
                         >
-                          {r === "all" ? "전체" : r === 365 ? "1년" : `${r}일`}
+                          {r === "all" ? "전체" : `${r}일`}
                         </button>
                       ))}
                     </div>
@@ -443,16 +446,22 @@ export default function PortfolioPage() {
                       value={formatKrwSigned(breakdown.data.dividend_krw)}
                       tone={toneOf(breakdown.data.dividend_krw)}
                     />
-                    <Figure label="누적 시작(첫 거래)" value={breakdown.data.since ?? "—"} />
-                    {/* 과거 평가손익은 역산이다(키움 일별 손익이 있는 마지막 날까지).
-                        오늘 점만 키움 실제 평가손익. */}
+                    {/* 평가손익은 0 에서 출발하지 않는다 — 시작 시점 수준을 적어 두어야
+                        "총기간 − 실현 = 평가 − 이 값" 이 화면에서 읽힌다. */}
+                    <Figure
+                      label={`${pnlStartShort ?? "시작"} 시점 평가손익`}
+                      value={formatKrwSigned(unrealizedAtStart)}
+                      tone={toneOf(unrealizedAtStart)}
+                    />
+                    {/* 과거 평가손익은 역산이다(키움 일별 손익이 있는 마지막 날까지) —
+                        시작 시점 평가손익 + 총기간 − 실현. 오늘 점만 키움 실제 평가손익. */}
                     <Figure
                       label={
                         breakdown.data.daily_pnl_until
                           ? `과거 평가손익(~${breakdown.data.daily_pnl_until.slice(5)})`
                           : "과거 평가손익"
                       }
-                      value="총기간 − 실현"
+                      value="시작+총기간−실현"
                     />
                   </dl>
                 </div>

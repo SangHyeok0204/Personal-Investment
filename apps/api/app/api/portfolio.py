@@ -1103,25 +1103,29 @@ def get_pnl_breakdown(
 ) -> PnlBreakdownOut:
     """총기간 손익 · 실현손익(누적) · 평가손익 · 총 평가액 — 지금 값과 일별 시계열.
 
-    ★2026-10-01 사용자 지정: 이 화면만 **첫 거래일부터** 센다(키움 일별 성과의 첫 날,
-      실측 2025-04-08). `investing.INVESTMENT_START`(2026-06-04)로 자르지 않는다 —
-      다른 화면은 그 기준을 그대로 쓴다. 정의는 `app.core.pnl_breakdown` 머리말.
+    ★2026-10-01 사용자 지정(두 번째): 투자 기간은 **2026-06-01 부터**
+      (`investing.INVESTMENT_START`). 이 화면도 그 날부터 센다 — 총기간 손익·실현손익은
+      그 날 **0 에서** 누적하고, 평가손익은 보유분의 실제 수준이라 0 에서 출발하지 않는다.
+      정의·등식은 `app.core.pnl_breakdown` 머리말.
 
-    시계열의 원천(날짜는 한국 날짜, 첫 거래일 ~ 오늘, 달력 하루마다 한 점):
-      · 총기간 손익 — `account_daily_performance.pnl_krw`(키움 일별 계좌손익)의 누적 합.
+    시계열의 원천(날짜는 한국 날짜, 시작일 ~ 오늘, 달력 하루마다 한 점):
+      · 총기간 손익 — `account_daily_performance.pnl_krw`(키움 일별 계좌손익)을 시작일부터
+        더한 값. 첫 점(06-01)은 그날 하루 손익이다(앞날에 0 점을 따로 두지 않는다).
         ⚠️`cumulative_pnl_krw` 는 쓰지 않는다 — 중간에 0 으로 되돌아가는 값이라 누적이
-        아니다. 총 평가액 − 순입금도 쓰지 않는다 — 입출금 칸이 다 차 있지 않다(실측 ₩1.95M
-        로 일별 손익 합 ₩4.03M 과 크게 어긋남).
+        아니다. 총 평가액 − 순입금도 쓰지 않는다 — 입출금 칸이 다 차 있지 않다.
       · 실현손익(누적) — `realized_pnl.sell_date` 별 pnl_krw + `dividends.pay_date` 별
-        amount_krw 를 첫 거래부터 누적. `/realized` 의 net_krw 와 같은 식이다:
+        amount_krw 를 시작일부터 누적. `/realized` 의 net_krw 와 같은 식·같은 시작일이다:
         pnl_krw 는 증권사가 수수료·세금을 **이미 뺀** 값이라 비용을 또 빼지 않고,
-        배당은 원천징수 뒤 값이다. 중복은 DB 자연키(계좌·매도일·종목 / 계좌·지급일·종목)
-        가 막는다.
-      · 평가손익 — 총기간 손익 − 실현손익(누적). **과거는 역산이다.**
+        배당은 원천징수 뒤 값이다. 중복은 DB 자연키가 막는다.
+      · 평가손익 — unrealized_at_start + 총기간 − 실현. 즉 첫 거래부터 센 일별 손익 누적
+        − 첫 거래부터 센 실현(fc2a565 의 역산)과 같은 값이다. **과거는 역산이다.**
+        `unrealized_at_start_krw` = 시작일 장 시작 전(05-31 마감) 역산 평가손익 —
+        화면이 "두 선의 간격 ≠ 실현손익" 인 이유를 이 값으로 설명한다.
       · 총 평가액 — `deposit_assets_krw`(usa21670 예탁자산 = 주식 + 예수금). 그 날 행이
         없으면 그날 마지막 스냅샷의 total_assets_krw.
-      · 오늘 — 일별 행이 아직 없다. 총기간 손익 = 실현(누적) + **키움 실제 평가손익**
-        (/summary), 총 평가액 = /summary. 그래서 타일과 그래프 끝점이 똑같다.
+      · 오늘 — 일별 행이 아직 없다. 평가손익 = **키움 실제 평가손익**(/summary),
+        총기간 손익 = 실현(시작일~) + 실제 평가 − unrealized_at_start, 총 평가액 = /summary.
+        그래서 타일과 그래프 끝점이 똑같고 등식도 오늘까지 지킨다.
 
     ⚠️역산 평가손익 vs 실제(그날 마지막 스냅샷, 2026-10-01 실측, 역산 − 실제):
       09-21 +631,410 · 09-22 +810,191 · 09-23 −480,940 · 09-25 +222,477 ·
@@ -1130,8 +1134,8 @@ def get_pnl_breakdown(
       그 날짜 마감 기준이다. 남는 몫은 일별 손익 합과 '실현 + 평가'가 똑같지 않은 데서
       온다(외화 예수금 환산 등이 일별 손익에 섞인다고 본다).
       → 그래프는 과거를 **한 규칙(역산)** 으로 그리고, 오늘만 키움 실제 평가손익을 쓴다.
-        마지막 행(09-30)의 역산 − 실제 −18만은 오늘 점에서 총기간 손익의 **계단**으로
-        보인다(실측 09-30 ₩4,030,908 → 오늘 ₩4.59M, 이 중 약 ₩38만은 실제 평가손익 변동).
+        마지막 일별 행과 오늘 사이의 총기간 손익 **계단** = (실제 평가 − 그 행의 역산
+        평가) + 그 사이 실현분. 시작일을 옮겨도 계단 크기는 그대로다(실측은 커밋 메시지).
 
     ⚠️결측(0 으로 채우지 않는다):
       · 일별 행이 없거나 손익이 빈 날은 총기간 손익·평가손익이 None 이다. 주말에도
@@ -1139,13 +1143,16 @@ def get_pnl_breakdown(
       · 계좌가 여럿이면 그날 행이 있는 계좌의 손익을 더하되, 손익이 빈 행이 하나라도
         있으면 그날은 None 이다.
       · 총 평가액은 일별 성과 동기화가 아직 안 된 날(보통 어제)이 스냅샷도 없으면 None.
+
+    `days` 는 **보여 줄 창**만 줄인다 — 누적은 늘 시작일부터 센 값이다.
     """
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
         return PnlBreakdownOut(
-            as_of=None, since=None,
+            as_of=None, start=inv.INVESTMENT_START,
             realized_cum_krw=None, realized_trading_krw=None, dividend_krw=None,
-            unrealized_krw=None, total_period_pnl_krw=None, total_value_krw=None,
+            unrealized_krw=None, unrealized_at_start_krw=None,
+            total_period_pnl_krw=None, total_value_krw=None,
             cash_krw=None, daily_pnl_until=None, items=[],
         )
 
@@ -1172,7 +1179,8 @@ def get_pnl_breakdown(
         if rows_n == len(account_ids) and valued_n == rows_n:
             total_value_by_date[day] = assets
 
-    # ── 실현손익: 날짜별 합(첫 거래부터 — 투자 시작일로 자르지 않는다) ───────────
+    # ── 실현손익: 날짜별 합. 시작일 앞의 것도 읽는다 — 평가손익의 출발값
+    #    (unrealized_at_start)을 첫 거래부터 역산하는 데 쓴다. 타일·누적은 시작일부터. ──
     trading_by_date: dict[date, Decimal] = {
         day: amount
         for day, amount in db.execute(
@@ -1194,14 +1202,11 @@ def get_pnl_breakdown(
     realized_by_date: dict[date, Decimal] = dict(trading_by_date)
     for day, amount in dividend_by_date.items():
         realized_by_date[day] = realized_by_date.get(day, Decimal("0")) + amount
-    realized_trading = sum(trading_by_date.values(), Decimal("0"))
-    dividend_total = sum(dividend_by_date.values(), Decimal("0"))
+    start = inv.INVESTMENT_START
+    realized_trading = sum((v for d, v in trading_by_date.items() if d >= start), Decimal("0"))
+    dividend_total = sum((v for d, v in dividend_by_date.items() if d >= start), Decimal("0"))
     realized_now = realized_trading + dividend_total
-
-    # 첫 거래일 = 키움 일별 성과의 첫 날. 없으면 실현 원장의 첫 날, 그것도 없으면 오늘.
-    anchor = min(daily_pnl_by_date, default=None) or min(realized_by_date, default=today)
-    anchor = min(anchor, today)
-    series_start = max(today - timedelta(days=days), anchor)
+    unrealized_at_start = pb.unrealized_at_start(start, daily_pnl_by_date, realized_by_date)
 
     # ── 총 평가액 보조: 스냅샷(계좌×한국 날짜별 마지막 한 줄) ─────────────────
     last_snap: dict[tuple[uuid.UUID, date], PortfolioSnapshot] = {}
@@ -1223,18 +1228,25 @@ def get_pnl_breakdown(
     unrealized_now = summary.unrealized_pnl_krw
     live = pb.Live(date=today, unrealized_krw=unrealized_now, total_value_krw=summary.total_assets_krw)
     points = pb.build_series(
-        series_start, today, daily_pnl_by_date, realized_by_date, total_value_by_date, live
+        start, today, daily_pnl_by_date, realized_by_date, total_value_by_date, live
     )
     last = points[-1] if points else None
+    # 창은 보여 줄 구간만 자른다 — 값은 위에서 시작일부터 센 그대로다.
+    window_start = today - timedelta(days=days)
+    points = [p for p in points if p.date >= window_start]
 
     return PnlBreakdownOut(
         as_of=summary.as_of,
-        since=anchor,
+        start=start,
         realized_cum_krw=realized_now,
         realized_trading_krw=realized_trading,
         dividend_krw=dividend_total,
         unrealized_krw=unrealized_now,
-        # 그래프 끝점과 같은 값(실현 + 실제 평가).
+        unrealized_at_start_krw=(
+            None if unrealized_at_start is None
+            else unrealized_at_start.quantize(Decimal("0.01"))
+        ),
+        # 그래프 끝점과 같은 값(실현 + 실제 평가 − 시작 시점 평가).
         total_period_pnl_krw=last.total_period_pnl_krw if last else None,
         total_value_krw=summary.total_assets_krw,
         cash_krw=summary.cash_krw,
@@ -3528,8 +3540,9 @@ def get_report(
             # ⚠️기간 앞에 아무 날도 없을 때(첫 달·연도) **첫날을 기준선으로 쓴다.**
             #   예전에는 opening 을 None 으로 둬서 자산 분해가 통째로 비었다 —
             #   '그 외'가 안 보이는데 분해 팝업에는 숫자가 있는 모양이었다.
-            #   0 으로 두는 것도 거짓이다(2026-06-04 마감 자산은 36,899,965 인데
-            #   그날 입금은 7,840,153 뿐이라 "무에서 시작"이 성립하지 않는다).
+            #   0 으로 두는 것도 거짓이다(시작일이 06-04 이던 때의 실측: 그날 마감 자산은
+            #   36,899,965 인데 그날 입금은 7,840,153 뿐이라 "무에서 시작"이 성립하지
+            #   않는다. 06-01 시작인 지금은 첫날 마감 자산이 28,798,997).
             #   투자 시작일 규칙과도 같다 — 첫날 입금은 시작 잔고에 포함한다.
             opening = assets
             continue

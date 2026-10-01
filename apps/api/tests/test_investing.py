@@ -4,6 +4,11 @@ from datetime import date
 from app.core.investing import INVESTMENT_START, since
 
 
+def test_start_is_the_user_chosen_day():
+    """2026-10-01 사용자 결정 — 투자 기간은 2026-06-01 부터(처음엔 06-04)."""
+    assert INVESTMENT_START == date(2026, 6, 1)
+
+
 def test_window_never_goes_before_the_start():
     """화면에서 '전체'를 눌러도 투자 기간 밖을 끌어오지 않는다."""
     assert since(3650, today=date(2026, 9, 22)) == INVESTMENT_START

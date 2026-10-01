@@ -146,7 +146,8 @@ export default function CashflowPage() {
   const cf = cashflow.data;
   // ⚠️기간 **첫날**의 입출금은 서버가 시작 잔고에 넣고 순입출금에서 뺀다
   //   (first_day_flow_krw). 월별 막대에 그대로 두면 칸의 순입출금(+187만)과
-  //   첫 달 막대(+784만)가 서로 다른 말을 한다 — 막대에서도 뺀다.
+  //   첫 달 막대(+784만)가 서로 다른 말을 한다 — 막대에서도 뺀다(시작일이 06-04 이던
+  //   때의 실측. 06-01 시작인 지금은 첫날 입출금이 0 이다).
   const firstMonth = cf?.first_date?.slice(0, 7) ?? null;
   const firstDayFlow = Number(cf?.first_day_flow_krw ?? 0);
   const transferColumns = useMemo(

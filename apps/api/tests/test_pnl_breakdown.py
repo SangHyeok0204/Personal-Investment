@@ -1,13 +1,15 @@
 """손익 분해 — 총기간 손익 · 실현손익(누적) · 평가손익 · 총 평가액.
 
 지키는 것:
-  1) 총기간 손익은 키움 일별 손익의 **누적 합**이다. 조회 창을 줄여도 창 시작에서
-     0 으로 되돌리지 않는다. 실현손익(누적)도 마찬가지.
-  2) 평가손익 = 총기간 손익 − 실현손익(누적). 모든 점에서 성립한다(오늘 포함).
+  1) 총기간 손익은 키움 일별 손익을 **투자 시작일부터** 더한 값이다 — 시작일에 0 에서
+     출발한다(첫 점 = 그날 하루 손익). 실현손익(누적)도 시작일에 0 에서 출발한다.
+     조회 창(days)을 줄여도 창 시작에서 0 으로 되돌리지 않는다.
+  2) 평가손익은 보유분의 실제 수준이다 — 0 에서 출발하지 않는다. 모든 점에서
+     총기간 − 실현 = 평가 − unrealized_at_start(시작일 장 시작 전 역산 평가손익).
   3) 모르는 날은 0 이 아니라 None 이다. 주말처럼 손익 0 인 **행이 있는** 날은 전날
      값이 이어진다.
-  4) 이 화면은 **첫 거래일부터** 센다 — 투자 시작일(INVESTMENT_START)로 자르지 않는다.
-  5) 오늘 점 = 실현(누적) + 키움 실제 평가손익(/summary). 타일과 그래프 끝점이 같다.
+  4) 시작일은 INVESTMENT_START(2026-06-01) 하나다 — `start` 로 내보낸다.
+  5) 오늘 점 평가손익 = 키움 실제 평가손익(/summary). 타일과 그래프 끝점이 같다.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -37,17 +39,30 @@ def test_total_period_is_running_sum_of_daily_pnl():
     ]
 
 
-def test_running_sums_are_seeded_from_before_the_window():
-    """창을 줄여도 누적은 첫 거래부터다 — 창 앞의 손익·실현분이 출발값이 된다."""
-    points = pb.build_series(
-        D("2026-07-10"), D("2026-07-11"),
-        {D("2025-04-08"): Decimal("500"), D("2026-07-10"): Decimal("1"),
-         D("2026-07-11"): Decimal("2")},
-        {D("2025-06-09"): Decimal("300"), D("2026-07-11"): Decimal("20")},
-        {},
-    )
-    assert [p.total_period_pnl_krw for p in points] == [Decimal("501.00"), Decimal("503.00")]
-    assert [p.realized_cum_krw for p in points] == [Decimal("300.00"), Decimal("320.00")]
+def test_running_sums_start_from_zero_and_history_only_sets_the_unrealized_level():
+    """시작일 앞의 손익·실현분은 누적에 넣지 않는다 — 평가손익의 출발값에만 쓴다."""
+    daily = {D("2025-04-08"): Decimal("500"), D("2026-07-10"): Decimal("1"),
+             D("2026-07-11"): Decimal("2")}
+    realized = {D("2025-06-09"): Decimal("300"), D("2026-07-11"): Decimal("20")}
+    points = pb.build_series(D("2026-07-10"), D("2026-07-11"), daily, realized, {})
+    # 첫 점은 그날 하루 손익(0 에서 출발).
+    assert [p.total_period_pnl_krw for p in points] == [Decimal("1.00"), Decimal("3.00")]
+    assert [p.realized_cum_krw for p in points] == [Decimal("0.00"), Decimal("20.00")]
+    # 시작 시점 평가손익 = 500 − 300. 평가손익은 그 수준에서 움직인다.
+    assert pb.unrealized_at_start(D("2026-07-10"), daily, realized) == Decimal("200")
+    assert [p.unrealized_krw for p in points] == [Decimal("201.00"), Decimal("183.00")]
+
+
+def test_unrealized_at_start_unknown_vs_nothing_held():
+    start = D("2026-06-01")
+    # 시작 앞에 실현은 있는데 일별 손익이 없다 → 모른다(0 으로 채우지 않는다).
+    assert pb.unrealized_at_start(start, {}, {D("2026-05-02"): Decimal("10")}) is None
+    points = pb.build_series(start, start, {start: Decimal("5")},
+                             {D("2026-05-02"): Decimal("10")}, {})
+    assert points[0].total_period_pnl_krw == Decimal("5.00")
+    assert points[0].unrealized_krw is None
+    # 시작 앞에 아무 기록도 없다 → 그때 보유분이 없었다(의도한 0).
+    assert pb.unrealized_at_start(start, {start: Decimal("5")}, {}) == Decimal("0")
 
 
 def test_realized_accumulates_day_by_day():
@@ -63,36 +78,37 @@ def test_realized_accumulates_day_by_day():
     ]
 
 
-def test_unrealized_is_total_period_minus_realized_everywhere():
+def test_identity_holds_everywhere_including_today():
+    """총기간 − 실현 = 평가 − 시작 평가."""
     live = pb.Live(date=D("2026-07-04"), unrealized_krw=Decimal("900"),
                    total_value_krw=Decimal("5000"))
-    points = pb.build_series(
-        D("2026-07-01"), D("2026-07-04"),
-        {D("2026-07-01"): Decimal("1000"), D("2026-07-02"): Decimal("-200"),
-         D("2026-07-03"): Decimal("50")},
-        {D("2026-07-02"): Decimal("300"), D("2026-07-04"): Decimal("10")},
-        {},
-        live,
-    )
+    daily = {D("2026-06-30"): Decimal("400"), D("2026-07-01"): Decimal("1000"),
+             D("2026-07-02"): Decimal("-200"), D("2026-07-03"): Decimal("50")}
+    realized = {D("2026-06-30"): Decimal("150"), D("2026-07-02"): Decimal("300"),
+                D("2026-07-04"): Decimal("10")}
+    points = pb.build_series(D("2026-07-01"), D("2026-07-04"), daily, realized, {}, live)
+    base = pb.unrealized_at_start(D("2026-07-01"), daily, realized)
+    assert base == Decimal("250")
     for p in points:
-        assert p.unrealized_krw == p.total_period_pnl_krw - p.realized_cum_krw
-    assert points[1].unrealized_krw == Decimal("500.00")  # 800 − 300
+        assert p.total_period_pnl_krw - p.realized_cum_krw == p.unrealized_krw - base
+    assert points[1].unrealized_krw == Decimal("750.00")  # 250 + 800 − 300
 
 
 def test_live_point_uses_actual_unrealized():
-    """오늘 = 실현(누적) + 실제 평가손익 — 일별 손익 누적이 아니다."""
+    """오늘: 평가 = 실제, 총기간 = 실현 + 실제 평가 − 시작 평가."""
     live = pb.Live(date=D("2026-07-03"), unrealized_krw=Decimal("700"),
                    total_value_krw=Decimal("12345"))
     points = pb.build_series(
         D("2026-07-02"), D("2026-07-03"),
-        {D("2026-07-02"): Decimal("1000")},
-        {D("2026-07-01"): Decimal("100")},
+        {D("2026-07-01"): Decimal("400"), D("2026-07-02"): Decimal("1000")},
+        {D("2026-07-01"): Decimal("100"), D("2026-07-03"): Decimal("50")},
         {D("2026-07-02"): Decimal("9999")},
         live,
     )
     today = points[-1]
     assert today.unrealized_krw == Decimal("700.00")
-    assert today.total_period_pnl_krw == Decimal("800.00")
+    assert today.realized_cum_krw == Decimal("50.00")
+    assert today.total_period_pnl_krw == Decimal("450.00")  # 50 + 700 − 300
     assert today.total_value_krw == Decimal("12345.00")
     # 오늘 평가손익을 모르면 총기간 손익도 모른다 — 실현손익으로 채우지 않는다.
     blind = pb.build_series(D("2026-07-03"), D("2026-07-03"), {}, {}, {},
@@ -139,54 +155,62 @@ def test_empty_when_window_is_inverted():
 def test_breakdown_without_accounts_returns_nulls(client):
     body = client.get("/api/v1/portfolio/pnl-breakdown").json()
     assert body["items"] == []
-    for key in ("realized_cum_krw", "unrealized_krw", "total_period_pnl_krw",
-                "total_value_krw", "cash_krw", "since", "daily_pnl_until"):
+    assert body["start"] == INVESTMENT_START.isoformat()
+    for key in ("realized_cum_krw", "unrealized_krw", "unrealized_at_start_krw",
+                "total_period_pnl_krw", "total_value_krw", "cash_krw", "daily_pnl_until"):
         assert body[key] is None
 
 
+def _perf(account_id, day, pnl, assets):
+    return AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id, base_date=day,
+                                   pnl_krw=pnl, deposit_assets_krw=assets)
+
+
 def _seed(db, account_id, first: date):
-    """첫 거래일(투자 시작 **앞**)부터 이틀 + 주말 0 행 + 빈 날 + 하루."""
-    snap_day = first + timedelta(days=5)
+    """첫 거래일(투자 시작 **앞**)의 기록 + 시작일부터의 일별 행·매도·스냅샷.
+
+    시작 앞: 손익 1000 · 0 · 0 · (빈 날) · −200, 매도 300, 배당 31,107
+      → 시작 시점 평가손익 = 800 − 31,407 = −30,607.
+    시작일부터(S = INVESTMENT_START): S 손익 50, S+1 행 없음(스냅샷 777), S+2 손익 0,
+      S+3 손익 −20 + 매도 50,682, S+4 행·스냅샷 없음.
+    """
+    S = INVESTMENT_START
     db.add_all([
-        AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id, base_date=first,
-                                pnl_krw=Decimal("1000"), deposit_assets_krw=Decimal("500000")),
-        AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id,
-                                base_date=first + timedelta(days=1),
-                                pnl_krw=Decimal("0"), deposit_assets_krw=Decimal("500000")),
-        AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id,
-                                base_date=first + timedelta(days=2),
-                                pnl_krw=Decimal("0"), deposit_assets_krw=Decimal("500000")),
+        _perf(account_id, first, Decimal("1000"), Decimal("500000")),
+        _perf(account_id, first + timedelta(days=1), Decimal("0"), Decimal("500000")),
+        _perf(account_id, first + timedelta(days=2), Decimal("0"), Decimal("500000")),
         # first+3 은 행이 없다(모르는 날).
-        AccountDailyPerformance(id=uuid.uuid4(), account_id=account_id,
-                                base_date=first + timedelta(days=4),
-                                pnl_krw=Decimal("-200"), deposit_assets_krw=Decimal("499800")),
-        # 투자 시작 전 매도 — **누적에 넣는다**(이 화면은 첫 거래부터).
+        _perf(account_id, first + timedelta(days=4), Decimal("-200"), Decimal("499800")),
+        # 투자 시작 전 매도·배당 — 누적에는 **넣지 않고** 시작 시점 평가손익에만 쓴다.
         RealizedPnl(
             id=uuid.uuid4(), account_id=account_id, ticker="TSL",
             sell_date=first + timedelta(days=1), quantity=Decimal("1"), currency="USD",
             pnl_krw=Decimal("300"), commission_tax_krw=Decimal("10"),
         ),
-        RealizedPnl(
-            id=uuid.uuid4(), account_id=account_id, ticker="NVDA",
-            sell_date=INVESTMENT_START + timedelta(days=3), quantity=Decimal("4"),
-            currency="USD", pnl_krw=Decimal("50682"), commission_tax_krw=Decimal("1000"),
-        ),
         Dividend(
             id=uuid.uuid4(), account_id=account_id, ticker="SCHD",
             pay_date=first + timedelta(days=4), amount_krw=Decimal("31107"), currency="KRW",
         ),
-        # 일별 행이 없는 날의 총 평가액은 그날 마지막 스냅샷으로 채운다.
+        _perf(account_id, S, Decimal("50"), Decimal("600000")),
+        # S+1 은 행이 없다 — 총 평가액은 그날 마지막 스냅샷으로 채운다.
         PortfolioSnapshot(
             id=uuid.uuid4(), account_id=account_id,
-            snapshot_at=datetime.combine(snap_day, datetime.min.time(), tzinfo=KST)
+            snapshot_at=datetime.combine(S + timedelta(days=1), datetime.min.time(), tzinfo=KST)
             + timedelta(hours=9),
             total_unrealized_pnl_krw=Decimal("111"), total_assets_krw=Decimal("777"),
+        ),
+        _perf(account_id, S + timedelta(days=2), Decimal("0"), Decimal("600000")),
+        _perf(account_id, S + timedelta(days=3), Decimal("-20"), Decimal("599980")),
+        RealizedPnl(
+            id=uuid.uuid4(), account_id=account_id, ticker="NVDA",
+            sell_date=S + timedelta(days=3), quantity=Decimal("4"),
+            currency="USD", pnl_krw=Decimal("50682"), commission_tax_krw=Decimal("1000"),
         ),
     ])
     db.commit()
 
 
-def test_breakdown_counts_from_first_trade_not_investment_start(client, db, kiwoom):  # noqa: F811
+def test_breakdown_counts_from_investment_start(client, db, kiwoom):  # noqa: F811
     first = INVESTMENT_START - timedelta(days=400)
     _seed(db, kiwoom["account"].id, first)
 
@@ -194,65 +218,68 @@ def test_breakdown_counts_from_first_trade_not_investment_start(client, db, kiwo
     summary = client.get("/api/v1/portfolio/summary").json()
     realized_screen = client.get("/api/v1/portfolio/realized?days=3650").json()
 
-    # 첫 거래일부터 — 투자 시작일로 자르지 않는다.
-    assert body["since"] == first.isoformat()
-    assert body["items"][0]["date"] == first.isoformat()
-    assert Decimal(body["realized_trading_krw"]) == Decimal("50982")  # 300 + 50,682
-    assert Decimal(body["dividend_krw"]) == Decimal("31107")
-    assert Decimal(body["realized_cum_krw"]) == Decimal("82089")
-    # /realized 는 투자 시작일로 자른다 — 그 차이가 시작 전 실현분(매매 300 + 배당 31,107)이다.
-    assert Decimal(body["realized_cum_krw"]) - Decimal(
-        realized_screen["breakdown"]["net_krw"]
-    ) == Decimal("31407")
+    # 투자 시작일부터 — 서버 상수에서 온다.
+    assert body["start"] == INVESTMENT_START.isoformat() == "2026-06-01"
+    assert body["items"][0]["date"] == INVESTMENT_START.isoformat()
+    # 실현은 시작일부터 — /realized 와 같은 식·같은 시작일이라 값이 같다.
+    assert Decimal(body["realized_trading_krw"]) == Decimal("50682")
+    assert Decimal(body["dividend_krw"]) == Decimal("0")
+    assert Decimal(body["realized_cum_krw"]) == Decimal("50682")
+    assert Decimal(body["realized_cum_krw"]) == Decimal(realized_screen["breakdown"]["net_krw"])
+    # 시작 시점 평가손익 = 시작 앞 일별 손익 800 − 시작 앞 실현 31,407.
+    assert Decimal(body["unrealized_at_start_krw"]) == Decimal("-30607")
 
-    # 지금 값: 평가손익·총 평가액은 /summary 그대로, 총기간 = 실현 + 평가.
+    # 지금 값: 평가손익·총 평가액은 /summary 그대로, 총기간 = 실현 + 평가 − 시작 평가.
     assert body["unrealized_krw"] == summary["unrealized_pnl_krw"]
     assert body["total_value_krw"] == summary["total_assets_krw"]
     assert body["cash_krw"] == summary["cash_krw"]
     assert Decimal(body["total_period_pnl_krw"]) == (
         Decimal(body["realized_cum_krw"]) + Decimal(body["unrealized_krw"])
+        - Decimal(body["unrealized_at_start_krw"])
     )
-    assert body["daily_pnl_until"] == (first + timedelta(days=4)).isoformat()
+    assert body["daily_pnl_until"] == (INVESTMENT_START + timedelta(days=3)).isoformat()
 
     items = body["items"]
     # 오늘 점은 타일과 같다.
     last = items[-1]
     for key in ("realized_cum_krw", "unrealized_krw", "total_period_pnl_krw", "total_value_krw"):
         assert last[key] == body[key]
-    # 등식은 모든 점에서.
+    # 등식은 모든 점에서: 총기간 − 실현 = 평가 − 시작 평가.
+    base = Decimal(body["unrealized_at_start_krw"])
     for p in items:
         if p["total_period_pnl_krw"] is not None:
-            assert Decimal(p["unrealized_krw"]) == (
-                Decimal(p["total_period_pnl_krw"]) - Decimal(p["realized_cum_krw"])
+            assert Decimal(p["total_period_pnl_krw"]) - Decimal(p["realized_cum_krw"]) == (
+                Decimal(p["unrealized_krw"]) - base
             )
 
     by = {i["date"]: i for i in items}
-    day = lambda n: by[(first + timedelta(days=n)).isoformat()]  # noqa: E731
-    assert Decimal(day(0)["total_period_pnl_krw"]) == Decimal("1000")
-    # 주말(손익 0 행)은 전날 값이 이어지고, 실현분만큼 평가손익이 줄어든다.
-    assert Decimal(day(2)["total_period_pnl_krw"]) == Decimal("1000")
-    assert Decimal(day(2)["unrealized_krw"]) == Decimal("700")
-    # 행이 없는 날은 null — 0 이 아니다.
-    assert day(3)["total_period_pnl_krw"] is None
-    assert day(3)["unrealized_krw"] is None
-    assert day(3)["total_value_krw"] is None
-    assert Decimal(day(3)["realized_cum_krw"]) == Decimal("300")
-    assert Decimal(day(4)["total_period_pnl_krw"]) == Decimal("800")
-    assert Decimal(day(4)["realized_cum_krw"]) == Decimal("31407")
-    # 일별 행이 없는 날의 총 평가액은 스냅샷, 그 뒤 일별 행도 없으면 null.
-    assert Decimal(day(5)["total_value_krw"]) == Decimal("777")
-    assert day(5)["total_period_pnl_krw"] is None
-    assert day(6)["total_value_krw"] is None
+    day = lambda n: by[(INVESTMENT_START + timedelta(days=n)).isoformat()]  # noqa: E731
+    # 시작일: 총기간·실현은 0 에서 출발(첫 점 = 그날 손익), 평가손익은 수준.
+    assert Decimal(day(0)["total_period_pnl_krw"]) == Decimal("50")
+    assert Decimal(day(0)["realized_cum_krw"]) == Decimal("0")
+    assert Decimal(day(0)["unrealized_krw"]) == Decimal("-30557")
+    # 행이 없는 날은 null — 0 이 아니다. 총 평가액은 스냅샷.
+    assert day(1)["total_period_pnl_krw"] is None
+    assert day(1)["unrealized_krw"] is None
+    assert Decimal(day(1)["total_value_krw"]) == Decimal("777")
+    # 손익 0 행은 전날까지의 누적이 이어진다.
+    assert Decimal(day(2)["total_period_pnl_krw"]) == Decimal("50")
+    assert Decimal(day(3)["total_period_pnl_krw"]) == Decimal("30")
+    assert Decimal(day(3)["realized_cum_krw"]) == Decimal("50682")
+    assert Decimal(day(3)["unrealized_krw"]) == Decimal("-81259")  # −30,607 + 30 − 50,682
+    # 일별 행도 스냅샷도 없는 날의 총 평가액은 null.
+    assert day(4)["total_value_krw"] is None
 
 
 def test_breakdown_window_keeps_running_totals(client, db, kiwoom):  # noqa: F811
-    """days 로 창을 줄여도 누적은 첫 거래부터 센 값 — 오늘 점이 전체 조회와 같다."""
+    """days 로 창을 줄여도 누적은 시작일부터 센 값 — 오늘 점이 전체 조회와 같다."""
     first = INVESTMENT_START - timedelta(days=400)
     _seed(db, kiwoom["account"].id, first)
 
     full = client.get("/api/v1/portfolio/pnl-breakdown").json()
     short = client.get("/api/v1/portfolio/pnl-breakdown?days=30").json()
     assert len(short["items"]) == 31
-    assert short["since"] == first.isoformat()
+    assert short["start"] == INVESTMENT_START.isoformat()
     assert short["items"][-1] == full["items"][-1]
     assert short["realized_cum_krw"] == full["realized_cum_krw"]
+    assert short["unrealized_at_start_krw"] == full["unrealized_at_start_krw"]
