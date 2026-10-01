@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core import quote_cache
+from app.core import quote_cache, sec_sync
 from app.core.naming import display_names, lookup_name
 from app.core.errors import AppError
 from app.db.session import get_db
@@ -176,6 +176,7 @@ def add_watchlist(
             sort_order=last + 1,
         )
     )
+    sec_sync.enqueue_calendar_now(db)
     db.commit()
     return _build(_ordered(db), db)
 
@@ -235,5 +236,6 @@ def import_holdings(db: Session = Depends(get_db)) -> WatchlistListOut:
         added += 1
         db.add(WatchlistItem(ticker=key, asset_name=name, sort_order=last))
     if added:
+        sec_sync.enqueue_calendar_now(db)
         db.commit()
     return _build(_ordered(db), db)

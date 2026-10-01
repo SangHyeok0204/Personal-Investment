@@ -161,6 +161,25 @@ def llm_catchup(db, now: datetime) -> list[tuple[str, dict]]:
     return out
 
 
+def enqueue_calendar_now(db) -> Job | None:
+    """관심종목이 새로 생겼을 때 실적 일정을 **지금** 다시 받게 한다.
+
+    ★2026-10-01: MU 를 발표 다음 날 12:11 에 관심종목에 넣었는데, 일정 수집은 매일 07:10 한 번이라
+      다음 날 아침까지 MU 행이 없었다 — 어제 발표를 화면이 못 잡았다. 일정 수집이 400일을 거슬러
+      받으므로(`earnings_calendar.LOOKBACK_DAYS`) 한 번 돌리면 지난 발표도 들어오고, 그다음은
+      `results_ready` 가 15분 안에 결과 수집을 넣는다.
+    ⚠️이미 대기·실행 중이면 넣지 않는다(연달아 추가해도 한 번). 커밋은 호출부가 한다.
+    """
+    busy = db.execute(
+        select(Job).where(Job.job_type == "EARNINGS_CALENDAR", Job.status.in_(("PENDING", "RUNNING")))
+    ).first()
+    if busy is not None:
+        return None
+    job = Job(job_type="EARNINGS_CALENDAR", queue=QUEUE, payload={"reason": "watchlist_added"})
+    db.add(job)
+    return job
+
+
 def maybe_enqueue(db, now: datetime | None = None) -> list[Job]:
     now = now or datetime.now(timezone.utc)
     added = []
