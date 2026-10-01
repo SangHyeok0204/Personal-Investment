@@ -217,7 +217,8 @@ export const navItems: NavItem[] = [
     ],
   },
   {
-    label: "뉴스",
+    // ★2026-10-01 Plaud 녹음 · 유튜브 영상 요약이 붙으면서 "뉴스" → "뉴스/영상".
+    label: "뉴스/영상",
     icon: Newspaper,
     children: [
       {
@@ -234,6 +235,12 @@ export const navItems: NavItem[] = [
         href: "/news/holdings",
         status: "live",
         hint: "내 포지션에 걸린 일",
+      },
+      {
+        label: "영상 요약",
+        href: "/news/video",
+        status: "live",
+        hint: "Plaud 녹음 · 유튜브 1문단 요약",
       },
     ],
   },
