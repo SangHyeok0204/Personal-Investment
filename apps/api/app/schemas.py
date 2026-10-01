@@ -324,6 +324,24 @@ class PnlBreakdownPointOut(BaseModel):
     unrealized_krw: Decimal | None
     total_period_pnl_krw: Decimal | None
     total_value_krw: Decimal | None
+    # 실현손익(누적)의 두 갈래 — 둘의 합이 realized_cum_krw 다. 원장이 처음부터 다 있어
+    # 매일 값이 있다(그날 매도·배당이 없으면 전날과 같다).
+    realized_trading_cum_krw: Decimal
+    realized_dividend_cum_krw: Decimal
+
+
+class PnlEventOut(BaseModel):
+    """실현손익(누적)을 이루는 한 건 — 매도 확정(매매) 또는 배당 수령.
+
+    매매 금액은 증권사가 수수료·세금을 **이미 뺀** 값, 배당은 **원천징수 뒤** 값이다.
+    매매 금액을 모르는 행은 None 으로 둔다(합계에도 넣지 않는다 — 0 이 아니다).
+    """
+
+    date: date
+    ticker: str
+    asset_name: str | None
+    kind: str  # "trade" | "dividend"
+    amount_krw: Decimal | None
 
 
 class PnlBreakdownOut(BaseModel):
@@ -352,6 +370,8 @@ class PnlBreakdownOut(BaseModel):
     # 키움 일별 손익이 있는 마지막 날. 그 뒤(보통 오늘)는 실현 + 실제 평가손익으로 둔다.
     daily_pnl_until: date | None
     items: list[PnlBreakdownPointOut]
+    # 시작일부터의 매도·배당 건별 목록(최근순). 합은 realized_cum_krw 와 같다.
+    events: list[PnlEventOut]
 
 
 # ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────

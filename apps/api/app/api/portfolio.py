@@ -138,6 +138,7 @@ from app.schemas import (
     PerformanceSeriesOut,
     PnlBreakdownOut,
     PnlBreakdownPointOut,
+    PnlEventOut,
     ReturnBridgeOut,
     RealizedPnlListOut,
     RealizedPnlOut,
@@ -1153,7 +1154,7 @@ def get_pnl_breakdown(
             realized_cum_krw=None, realized_trading_krw=None, dividend_krw=None,
             unrealized_krw=None, unrealized_at_start_krw=None,
             total_period_pnl_krw=None, total_value_krw=None,
-            cash_krw=None, daily_pnl_until=None, items=[],
+            cash_krw=None, daily_pnl_until=None, items=[], events=[],
         )
 
     today = datetime.now(_KST).date()
@@ -1231,6 +1232,48 @@ def get_pnl_breakdown(
         start, today, daily_pnl_by_date, realized_by_date, total_value_by_date, live
     )
     last = points[-1] if points else None
+
+    # ★실현손익(누적)을 매매·배당 두 갈래로 — 타일 드릴다운의 일별 그래프용. 같은 날짜별
+    #   합(trading_by_date · dividend_by_date)을 시작일부터 더하므로 두 갈래의 합이 그날
+    #   realized_cum_krw 와 같다(반올림 자리까지 — 둘 다 원 단위 원장이라 끝자리가 없다).
+    trading_cum: dict[date, Decimal] = {}
+    dividend_cum: dict[date, Decimal] = {}
+    t_running = d_running = Decimal("0")
+    for p in points:
+        t_running += trading_by_date.get(p.date, Decimal("0"))
+        d_running += dividend_by_date.get(p.date, Decimal("0"))
+        trading_cum[p.date] = t_running.quantize(Decimal("0.01"))
+        dividend_cum[p.date] = d_running.quantize(Decimal("0.01"))
+
+    # 건별 목록 — 은퇴한 체결·실현손익 화면의 쓸모 있던 부분(무엇을 팔아 얼마, 어떤 배당).
+    #   이름은 다른 화면과 같은 규칙(app.core.naming)으로 — 배당 원장은 영문 법인명이다.
+    trade_rows = db.execute(
+        select(RealizedPnl.sell_date, RealizedPnl.ticker, RealizedPnl.asset_name,
+               RealizedPnl.pnl_krw)
+        .where(RealizedPnl.account_id.in_(account_ids), RealizedPnl.sell_date >= start)
+    ).all()
+    dividend_rows = db.execute(
+        select(Dividend.pay_date, Dividend.ticker, Dividend.asset_name, Dividend.amount_krw)
+        .where(Dividend.account_id.in_(account_ids), Dividend.pay_date >= start)
+    ).all()
+    event_names = naming.display_names(
+        db, {r.ticker for r in trade_rows} | {r.ticker for r in dividend_rows}
+    )
+    events = sorted(
+        [
+            PnlEventOut(date=d, ticker=t, asset_name=event_names.get(t) or n,
+                        kind="trade", amount_krw=a)
+            for d, t, n, a in trade_rows
+        ]
+        + [
+            PnlEventOut(date=d, ticker=t, asset_name=event_names.get(t) or n,
+                        kind="dividend", amount_krw=a)
+            for d, t, n, a in dividend_rows
+        ],
+        key=lambda e: (e.date, e.kind, e.ticker),
+        reverse=True,
+    )
+
     # 창은 보여 줄 구간만 자른다 — 값은 위에서 시작일부터 센 그대로다.
     window_start = today - timedelta(days=days)
     points = [p for p in points if p.date >= window_start]
@@ -1260,9 +1303,12 @@ def get_pnl_breakdown(
                 unrealized_krw=p.unrealized_krw,
                 total_period_pnl_krw=p.total_period_pnl_krw,
                 total_value_krw=p.total_value_krw,
+                realized_trading_cum_krw=trading_cum[p.date],
+                realized_dividend_cum_krw=dividend_cum[p.date],
             )
             for p in points
         ],
+        events=events,
     )
 
 

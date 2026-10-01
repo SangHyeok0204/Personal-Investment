@@ -283,3 +283,44 @@ def test_breakdown_window_keeps_running_totals(client, db, kiwoom):  # noqa: F81
     assert short["items"][-1] == full["items"][-1]
     assert short["realized_cum_krw"] == full["realized_cum_krw"]
     assert short["unrealized_at_start_krw"] == full["unrealized_at_start_krw"]
+
+
+def test_breakdown_splits_realized_into_trades_and_dividends(client, db, kiwoom):  # noqa: F811
+    """드릴다운 그래프용 두 갈래(매매·배당 누적)와 건별 목록 — 합이 타일과 같아야 한다.
+
+    배당은 원천징수 뒤 금액 그대로 더한다(세금을 또 빼지 않는다).
+    """
+    S = INVESTMENT_START
+    first = S - timedelta(days=400)
+    _seed(db, kiwoom["account"].id, first)
+    db.add(Dividend(
+        id=uuid.uuid4(), account_id=kiwoom["account"].id, ticker="SCHD",
+        pay_date=S + timedelta(days=2), amount_krw=Decimal("1234"), currency="KRW",
+    ))
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/pnl-breakdown").json()
+    assert Decimal(body["dividend_krw"]) == Decimal("1234")
+    assert Decimal(body["realized_cum_krw"]) == Decimal("50682") + Decimal("1234")
+
+    # 모든 점에서 매매 누적 + 배당 누적 = 실현(누적). 시작일 앞의 것은 넣지 않는다.
+    for p in body["items"]:
+        assert Decimal(p["realized_trading_cum_krw"]) + Decimal(p["realized_dividend_cum_krw"]) == (
+            Decimal(p["realized_cum_krw"])
+        )
+    by = {i["date"]: i for i in body["items"]}
+    day = lambda n: by[(S + timedelta(days=n)).isoformat()]  # noqa: E731
+    assert Decimal(day(1)["realized_dividend_cum_krw"]) == Decimal("0")
+    assert Decimal(day(2)["realized_dividend_cum_krw"]) == Decimal("1234")
+    assert Decimal(day(3)["realized_trading_cum_krw"]) == Decimal("50682")
+    last = body["items"][-1]
+    assert Decimal(last["realized_trading_cum_krw"]) == Decimal(body["realized_trading_krw"])
+    assert Decimal(last["realized_dividend_cum_krw"]) == Decimal(body["dividend_krw"])
+
+    # 건별 목록: 시작일부터만, 최근순, 합 = 실현(누적).
+    events = body["events"]
+    assert [(e["date"], e["kind"], e["ticker"]) for e in events] == [
+        ((S + timedelta(days=3)).isoformat(), "trade", "NVDA"),
+        ((S + timedelta(days=2)).isoformat(), "dividend", "SCHD"),
+    ]
+    assert sum(Decimal(e["amount_krw"]) for e in events) == Decimal(body["realized_cum_krw"])
