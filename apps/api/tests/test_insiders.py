@@ -71,7 +71,7 @@ def test_overview_counts_only_judgement_trades(client, db):
     assert d["future_dated"] == 1
     assert [x["issuer_name"] for x in d["recent_13d"]] == ["NEBIUS GROUP N.V."]    # 대상이 내 종목인 것만
     months = {m["month"]: m for m in d["monthly"]}
-    assert months[TODAY.strftime("%Y-%m")]["n_trades"] >= 1
+    assert months[(TODAY - timedelta(days=5)).strftime("%Y-%m")]["n_trades"] >= 1   # 거래를 넣은 달 — 월초엔 이번 달이 아니다
     empty = [m for m in d["monthly"] if m["n_trades"] == 0]
     assert empty and all(m["net_value"] is None and m["by_ticker"] == [] for m in empty)  # 거래 없는 달 = 막대 없음
 
