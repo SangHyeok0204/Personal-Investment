@@ -113,6 +113,19 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - 값이 없으면 **0 으로 채우지 않는다.** '모름'과 '0원'은 다르고, 0 으로 채우면
   화면이 없는 사실을 단언하게 된다.
 
+## 6. 반복해 틀린 것 (날짜·근거)
+
+이 저장소에서 실제로 난 실패만 적는다. 같은 일을 할 때 이 줄을 먼저 본다.
+
+- 2026-10-02: 상한 없는 Playwright 크롤(`prices/investing.py`)이 18시간 RUNNING 으로 멈췄다(하트비트는 살아 있어 아무도 몰랐다) → 외부 브라우저·네트워크 작업은 **프로세스 단위 시간 제한**(L4)을 건다. 하트비트는 '살아 있음'이지 '진행 중'이 아니다.
+- 2026-10-01: 실적 행을 앞으로의 캘린더에서만 만들어 이미 발표한 MU 가 빠졌다 → 최근 며칠도 함께 훑는다(`earnings_calendar.RECENT_DAYS`).
+- 2026-10-01: `PageContainer fit` 페이지에서 패널을 펼치자 카드가 찌그러졌다 → 패널에도 `fit` 을 넘기고, 1440x900 과 1280x800 둘 다에서 눈으로 확인한다.
+- 2026-10-01: 날짜에 기대는 테스트가 매달 1일에 실패했다 → '오늘' 기준이 아니라 fixture 의 달을 단언한다.
+- 2026-10-01: worker 코드를 고쳤는데 LaunchAgent 가 옛 코드를 계속 돌렸다 → `apps/worker` 를 바꾸면 §0 WORKERS 로 kickstart 한다.
+- 2026-09-30: 공개 저장소에서 `.omc/` 가 무시되지 않았다 → 회사에서 나온 메모는 제외 경로(`.git/info/exclude`)에만 둔다.
+- 2026-09-30: `GET /api/v1/jobs/sources` 가 `/{job_id}` 에 잡혀 422 가 났다 → FastAPI 는 **선언 순서대로** 맞춘다. 고정 경로(`/stats`·`/sources`·새 `/foo`)는 같은 라우터의 `/{...}` 경로 **위에** 선언한다(`apps/api/app/api/jobs.py` 의 `/sources` 주석 참고).
+- 2026-09-22: 워커 테스트 17건이 DB URL 을 못 찾아 조용히 건너뛰어졌다('457 passed, 24 skipped') → **skipped ≠ passed**. 요약 줄의 skipped 수를 확인한다(`apps/worker/tests/conftest.py` 의 `_database_url`).
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

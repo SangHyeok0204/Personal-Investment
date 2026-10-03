@@ -56,7 +56,7 @@
 - **역할**: 요청 검증 → 업무 규칙 → DB 읽기/쓰기 → 작업 생성. 유일하게 DB에 "쓰는 관문"이다(worker 제외).
 - **라우터 구분** (주소만 봐도 용도를 알 수 있게):
   - `/api/v1/*` — 대시보드가 쓰는 일반 API (jobs 목록/상세/통계, CSV 업로드)
-  - `/internal/*` — n8n·자동화가 쓰는 내부 API (현재 인증 없음, 다음 단계에 추가 예정)
+  - `/internal/*` — n8n·자동화가 쓰는 내부 API (`X-Internal-Api-Key` 헤더 인증 — `app/api/internal.py` 의 `require_internal_api_key`)
   - `/system/*` — 헬스체크
 - **에러 포맷 통일**: 실패 응답은 항상 `{"error": {"code", "message", "details"}}`. 화면과 n8n이 이 형식만 처리하면 된다.
 - **수정 지도**: 엔드포인트 추가 = `app/api/<도메인>.py`에 라우터 → `app/schemas.py`에 요청/응답 모델 → 필요하면 `app/models.py` + 마이그레이션(§2.4). `main.py`에 라우터 등록.
