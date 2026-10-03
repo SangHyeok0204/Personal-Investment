@@ -173,11 +173,8 @@ export default function PortfolioPage() {
       ? String(Number(stockKrw) + Number(cashKrw))
       : stockKrw;
 
-  // ★평가손익의 값과 비율은 **증권사(키움) 한 원천**이다 — /summary 가 더한
-  //   pl_amt_krw 와 그 매입원가 대비 비율. 제비용·세금은 증권사가 이미 반영했다.
+  // ★평가손익은 **증권사(키움) 한 원천**이다 — /summary 가 더한 pl_amt_krw(제비용·세금 반영).
   const pnlKrw = s?.unrealized_pnl_krw ?? null;
-  const pnlRate =
-    s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
 
   // 실현손익(누적)은 원장 값(/realized 와 같은 식·같은 시작일 — 투자 시작일부터).
   // 총기간 손익은 **화면에서** 실현 + 평가 − 시작 시점 평가로 만든다 — 서버의 오늘 점
@@ -188,9 +185,16 @@ export default function PortfolioPage() {
   // 타일 설명용 짧은 날짜("6/01").
   const pnlStartShort = pnlStart ? `${Number(pnlStart.slice(5, 7))}/${pnlStart.slice(8, 10)}` : null;
   const unrealizedAtStart = breakdown.data?.unrealized_at_start_krw ?? null;
+  // ★2026-10-03 사용자 지정: 평가손익 타일은 **시작일 이후 변화**(평가 − 시작 시점 평가)다.
+  //   그래야 타일 셋이 그대로 더해진다: 실현 + 평가 변화 = 총기간. 키움 평가손익 실제값은 부제로.
+  //   (전에는 평가손익을 보유분 수준 그대로 보여, 실현 + 평가 ≠ 총기간 이라 버그로 읽혔다.)
+  const pnlChangeKrw =
+    pnlKrw != null && unrealizedAtStart != null
+      ? String(Number(pnlKrw) - Number(unrealizedAtStart))
+      : null;
   const totalPeriodKrw =
-    realizedKrw != null && pnlKrw != null && unrealizedAtStart != null
-      ? String(Number(realizedKrw) + Number(pnlKrw) - Number(unrealizedAtStart))
+    realizedKrw != null && pnlChangeKrw != null
+      ? String(Number(realizedKrw) + Number(pnlChangeKrw))
       : null;
 
   // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 분자(조각)와 분모(totalKrw)가
@@ -251,12 +255,20 @@ export default function PortfolioPage() {
   const pnlSeries = useMemo(() => {
     const items = pnlItems;
     const num = (v: string | null) => (v == null ? null : Number(v));
+    const base = num(breakdown.data?.unrealized_at_start_krw ?? null);
     return [
       { name: "총기간 손익", emphasis: true, values: items.map((p) => num(p.total_period_pnl_krw)) },
-      { name: "평가손익", values: items.map((p) => num(p.unrealized_krw)) },
+      // 타일과 같은 정의 — 시작 시점 평가손익을 뺀 변화. 그래야 매 점에서 실현 + 평가 변화 = 총기간.
+      {
+        name: "평가손익(변화)",
+        values: items.map((p) => {
+          const u = num(p.unrealized_krw);
+          return u == null || base == null ? null : u - base;
+        }),
+      },
       { name: "실현손익(누적)", values: items.map((p) => num(p.realized_cum_krw)) },
     ];
-  }, [pnlItems]);
+  }, [pnlItems, breakdown.data]);
 
   // 드릴다운 그래프 — 구간을 자르지 않고 시작일부터 전부. 서버 값을 그대로 쓴다.
   //   실현 = 매매(비용 뺀 뒤) + 배당(세후·원천징수 뒤). 배당에서 세금을 또 빼지 않는다.
@@ -345,12 +357,10 @@ export default function PortfolioPage() {
           />
           <StatTile
             label="평가손익"
-            value={formatKrwSigned(pnlKrw)}
-            hint={
-              pnlRate != null
-                ? `보유분 · 원가 대비 ${pnlRate}`
-                : "보유분 · 키움 기준"
-            }
+            value={formatKrwSigned(pnlChangeKrw)}
+            // ⚠️칸이 좁다(1280 폭에서 "키움 +₩35…" 로 잘렸다) — 정의만. 키움 실제값(보유분 전체)은
+            //   손익 분해 카드 아래 "현재 평가손익(키움)" 에 있다.
+            hint={`${pnlStartShort ?? "시작"}부터 평가익 변화`}
             accent="auto"
             loading={summary.isLoading}
             onClick={() => setTrendOpen(true)}
@@ -361,7 +371,7 @@ export default function PortfolioPage() {
           <StatTile
             label="총기간 손익"
             value={formatKrwSigned(totalPeriodKrw)}
-            hint={`${pnlStartShort ?? "시작일"}부터 · 일별 손익 누적`}
+            hint={`${pnlStartShort ?? "시작일"}부터 · 실현+평가 변화`}
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
             onClick={() => setTotalOpen(true)}
@@ -409,7 +419,7 @@ export default function PortfolioPage() {
             title={leftView === "pnl" ? "손익 분해" : "자산 추이"}
             subtitle={
               leftView === "pnl"
-                ? `${pnlStart ?? "시작일"}부터 · 총기간·실현은 0에서 누적 · 평가손익은 보유분 실제 수준`
+                ? `${pnlStart ?? "시작일"}부터 · 셋 다 0에서 누적 · 총기간 = 실현 + 평가손익 변화`
                 : performance.data?.first_date
                   ? `${performance.data.first_date} ~ ${performance.data.last_date}`
                   : "예탁자산 시계열"
@@ -494,15 +504,11 @@ export default function PortfolioPage() {
                       value={formatKrwSigned(unrealizedAtStart)}
                       tone={toneOf(unrealizedAtStart)}
                     />
-                    {/* 과거 평가손익은 역산이다(키움 일별 손익이 있는 마지막 날까지) —
-                        시작 시점 평가손익 + 총기간 − 실현. 오늘 점만 키움 실제 평가손익. */}
+                    {/* 키움이 지금 보여 주는 평가손익(보유분 전체) — 변화 = 이 값 − 시작 시점 값. */}
                     <Figure
-                      label={
-                        breakdown.data.daily_pnl_until
-                          ? `과거 평가손익(~${breakdown.data.daily_pnl_until.slice(5)})`
-                          : "과거 평가손익"
-                      }
-                      value="시작+총기간−실현"
+                      label="현재 평가손익(키움)"
+                      value={formatKrwSigned(pnlKrw)}
+                      tone={toneOf(pnlKrw)}
                     />
                   </dl>
                 </div>
