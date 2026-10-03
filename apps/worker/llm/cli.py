@@ -40,7 +40,7 @@ _USAGE = re.compile(r"usage limit|limit reached|rate.?limit|quota|credit balance
 class LlmError(Exception):
     def __init__(self, kind: str, message: str):
         super().__init__(message)
-        self.kind = kind      # 'logged_out' | 'usage_limit' | 'timeout' | 'cap' | 'missing' | 'other'
+        self.kind = kind      # 'logged_out' | 'usage_limit' | 'timeout' | 'cap' | 'missing' | 'stopped' | 'other'
 
 
 @dataclass
@@ -89,11 +89,31 @@ def _counter_lock(path: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def _read(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _read_n(path: Path) -> int:
     try:
-        return int(json.loads(path.read_text())["n"])
-    except (OSError, ValueError, KeyError):
+        return int(_read(path).get("n", 0))
+    except (TypeError, ValueError):
         return 0
+
+
+def _write(path: Path, data: dict) -> None:
+    # 임시 파일 → os.replace: 쓰다 죽어도 반쪽 JSON 이 남지 않는다. (잠금 안에서만 부른다)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(data))
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def calls_today(storage_dir: str | None = None) -> int:
@@ -105,26 +125,48 @@ def calls_today(storage_dir: str | None = None) -> int:
 def _bump(storage_dir: str | None) -> int:
     path = _counter_path(storage_dir)
     with _counter_lock(path):
+        data = _read(path)
         n = _read_n(path) + 1
-        # 임시 파일 → os.replace: 쓰다 죽어도 반쪽 JSON 이 남지 않는다.
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(json.dumps({"n": n}))
-            os.replace(tmp, path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+        _write(path, {**data, "n": n})
     return n
+
+
+def _add_cost(storage_dir: str | None, cost_usd) -> None:
+    """★(B1-e) CLI 의 `total_cost_usd` 를 그날 카운터 파일의 `usd_notional` 에 더한다 — 기록만, 막지 않는다."""
+    if not isinstance(cost_usd, (int, float)) or isinstance(cost_usd, bool):
+        return
+    path = _counter_path(storage_dir)
+    with _counter_lock(path):
+        data = _read(path)
+        try:
+            prev = float(data.get("usd_notional") or 0)
+        except (TypeError, ValueError):
+            prev = 0.0
+        _write(path, {**data, "n": _read_n(path), "usd_notional": round(prev + float(cost_usd), 6)})
 
 
 def daily_cap() -> int:
     return int(os.environ.get("LLM_DAILY_CAP", "40"))
 
 
+def stop_reason(storage_dir: str | None = None) -> str | None:
+    """★(B1) 비상 정지 — `storage/llm/STOP` 파일이 있거나 `LLM_DAILY_CAP=0` 이면 그 까닭, 아니면 None.
+
+    run_claude 는 호출 전에, worker 는 llm 큐 작업을 집기 전에 본다(작업은 PENDING 으로 남는다).
+    """
+    if (_counter_path(storage_dir).parent / "STOP").exists():
+        return "STOP 파일(storage/llm/STOP) 있음 — 지우면 다시 돈다"
+    if daily_cap() <= 0:
+        return "LLM_DAILY_CAP=0 — 설정으로 멈춤"
+    return None
+
+
 def run_claude(prompt: str, *, timeout: int = DEFAULT_TIMEOUT, model: str | None = None,
                storage_dir: str | None = None, runner=subprocess.run) -> LlmResult:
     """프롬프트 → 답 글. 실패는 종류가 붙은 `LlmError`(부르는 쪽이 원천 상태에 적는다)."""
+    reason = stop_reason(storage_dir)
+    if reason:                      # ★(B1) 상한 확인·_bump 보다 먼저 — 호출로 세지 않는다
+        raise LlmError("stopped", reason)
     if calls_today(storage_dir) >= daily_cap():
         raise LlmError("cap", f"오늘 호출 상한 {daily_cap()}회에 닿음 — 대화형 사용과 한도를 나눠 쓴다")
     cmd = [claude_bin(), "-p", "-", "--output-format", "json", "--tools", "",
@@ -150,6 +192,7 @@ def run_claude(prompt: str, *, timeout: int = DEFAULT_TIMEOUT, model: str | None
         text = f"{msg or ''} {err} {out if data is None else ''}".strip()
         raise LlmError(classify(text), text[:300] or f"exit {proc.returncode}")
     models = list((data.get("modelUsage") or {}).keys())
+    _add_cost(storage_dir, data.get("total_cost_usd"))
     return LlmResult(text=str(data.get("result") or ""), model=models[0] if models else model,
                      cost_usd=data.get("total_cost_usd"), duration_ms=int((time.monotonic() - t0) * 1000),
                      calls_today=n)

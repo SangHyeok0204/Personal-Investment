@@ -111,6 +111,8 @@ def collect(engine, plaud, summarize, *, now: datetime | None = None, log=lambda
             rep = run_with_repair(prompt, summarize, parse_summary,
                                   lambda s: (s is not None, [] if s else ['{"summary": "…"} JSON 이 없거나 비었음']))
         except LlmError as exc:
+            if exc.kind == "stopped":
+                raise           # ★(B1) 비상 정지 — 항목을 실패로 적지 않고 작업째 PENDING 으로 되돌린다(main.py)
             _set(engine, r["id"], status="failed", error=f"LLM {exc.kind}: {str(exc)[:300]}", attempted=True)
             record_error(engine, "claude", exc.kind, str(exc))
             out["failed"] += 1

@@ -11,7 +11,7 @@ from sqlalchemy import text
 from db import get_engine, wait_for_db
 from handlers import HANDLERS
 from joblog import log_job
-from llm.cli import daily_cap
+from llm.cli import LlmError, daily_cap, stop_reason
 from source_health import record_error, record_ok
 import wallclock
 
@@ -169,6 +169,18 @@ def finish_job_failure(engine, job_id, error_message):
         )
 
 
+def requeue_stopped(engine, job_id):
+    """★(B1) 비상 정지로 멈춘 작업을 PENDING 으로 되돌린다 — `claim_job` 의 `attempts+1` 을 되돌려 시도로 세지 않는다."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE jobs SET status='PENDING', attempts=GREATEST(attempts-1, 0), started_at=NULL, "
+                "heartbeat_at=NULL, updated_at=now() WHERE id=:id"
+            ),
+            {"id": job_id},
+        )
+
+
 def process_job(engine, job, storage_dir):
     job_id = job["id"]
     job_type = job["job_type"]
@@ -210,6 +222,12 @@ def process_job(engine, job, storage_dir):
     if exc is not None:
         if not isinstance(exc, Exception):
             raise exc
+        if isinstance(exc, LlmError) and exc.kind == "stopped":
+            # ★(B1) STOP 파일 / LLM_DAILY_CAP=0 — 실패가 아니다. 작업은 남기고(PENDING) 시도 횟수도 되돌린다.
+            requeue_stopped(engine, job_id)
+            log_job(engine, job_id, "WARN", "stopped", f"비상 정지 — PENDING 으로 되돌림: {exc}")
+            record_error(engine, "claude", "stopped", str(exc))
+            return
         error_message = str(exc) or exc.__class__.__name__
         finish_job_failure(engine, job_id, error_message)
         log_job(engine, job_id, "ERROR", "failed", error_message)
@@ -222,6 +240,11 @@ def process_job(engine, job, storage_dir):
 
 def run_one_cycle(engine, storage_dir, queues=DEFAULT_QUEUES):
     """Claim and process a single job. Returns True if a job was processed."""
+    if "llm" in queues and stop_reason(storage_dir):
+        # ★(B1) 비상 정지 중에는 llm 큐 작업을 집지 않는다 — 집었다 되돌리기를 2초마다 되풀이하지 않게.
+        queues = tuple(q for q in queues if q != "llm")
+        if not queues:
+            return False
     job_id = claim_job(engine, queues)
     if job_id is None:
         return False
@@ -270,6 +293,10 @@ def main():
                 # ★(계획 A3a) SEC 를 부르는 큐인데 연락처 UA 가 없으면 화면에 '설정 필요'.
                 if "sec_crawl" in queues and not (os.environ.get("SEC_USER_AGENT") or "").strip():
                     record_error(engine, "sec", "config", "SEC_USER_AGENT 미설정 — .env.local 에 연락처 UA 필요")
+                # ★(B1) 비상 정지 중이면 화면(/data-operations)의 claude 줄에 'stopped'.
+                reason = stop_reason(storage_dir) if "llm" in queues else None
+                if reason:
+                    record_error(engine, "claude", "stopped", reason)
             except Exception:
                 logger.exception("housekeeping failed")
         try:
