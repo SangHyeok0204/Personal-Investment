@@ -4,6 +4,29 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## 0. 실행 명령 (호스트 기준)
+
+Docker 가 아니라 **호스트**에서 돌린다(DB 는 로컬 Postgres :5432). 묻지 말고 아래 명령을 쓴다.
+
+```text
+BUILD : cd apps/web && npm run build:check
+TYPE  : cd apps/web && npm run typecheck
+TEST  : (cd apps/api && ../../.venv/bin/python -m pytest -q) && (cd apps/worker && ../../.venv/bin/python -m pytest -q)
+        ↳ api → worker 를 따로, 차례로. 절대 병렬로 돌리지 않는다.
+LINT  : .venv/bin/ruff check --select E9,F63,F7,F82 apps/api apps/worker
+CHECK : make check
+WORKERS: launchctl kickstart -k gui/$(id -u)/com.personal-investment.worker.{llm,sec_crawl}
+        ↳ apps/worker 코드를 고치면 반드시 재시작한다(안 하면 옛 코드가 계속 돈다).
+STOP  : touch storage/llm/STOP
+```
+
+**루프 규칙:** 변경할 때마다 테스트를 돌린다. 같은 오류로 3번 실패하면 멈추고 사용자에게 올린다.
+
+**권한 가드:** `.claude/hooks/guard.sh` 가 `git reset --hard`·`make clean`·`docker compose down -v`·
+`alembic downgrade`·`.env*` 내용 읽기를 막고, `git push`·`launchctl kickstart` 는 확인을 묻는다.
+키 이름 확인(`grep -c '^KEY=' .env.local`, `cut -d= -f1`)은 허용된다.
+push ask 의 bypass 모드 실측(`git push --dry-run`): **미확인(대기 중)** — 프롬프트가 안 뜨면 deny 로 바꾸고 여기에 기록한다.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build up down ps logs migrate test integration clean
+.PHONY: help build up down ps logs migrate test test-docker integration clean
 
 help:  ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -22,7 +22,11 @@ logs:  ## Follow logs for all services
 migrate:  ## Apply database migrations (run after 'up')
 	docker compose exec api alembic upgrade head
 
-test:  ## Run api and worker unit tests
+test:  ## Run api then worker unit tests on the host (sequential, never parallel)
+	cd apps/api && ../../.venv/bin/python -m pytest -q
+	cd apps/worker && ../../.venv/bin/python -m pytest -q
+
+test-docker:  ## Run api and worker unit tests inside the docker containers
 	docker compose exec -T api pytest -q
 	docker compose exec -T worker pytest -q
 
