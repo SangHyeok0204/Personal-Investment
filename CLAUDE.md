@@ -20,6 +20,10 @@ WORKERS: launchctl kickstart -k gui/$(id -u)/com.personal-investment.worker.{llm
 STOP  : touch storage/llm/STOP
 ```
 
+**센서 훅:** Stop 훅 `.claude/hooks/stop-check.sh` 가 변경분만 검사한다(.ts → tsc, .py → ruff + 해당 앱 pytest, exit 2 면 고치고 끝낸다).
+pre-commit 은 `.githooks/pre-commit`(`make check`). `core.hooksPath` 는 로컬 git 설정이라 **클론마다 한 번** 실행한다:
+`git config core.hooksPath .githooks`. 개발 도구 설치: `.venv/bin/pip install -r requirements-dev.txt`.
+
 **루프 규칙:** 변경할 때마다 테스트를 돌린다. 같은 오류로 3번 실패하면 멈추고 사용자에게 올린다.
 
 **권한 가드:** `.claude/hooks/guard.sh` 가 `git reset --hard`·`make clean`·`docker compose down -v`·

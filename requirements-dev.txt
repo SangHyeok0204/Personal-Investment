@@ -1,0 +1,3 @@
+# 호스트 전용 개발 도구 (.venv). Docker 이미지(apps/*/requirements.txt)에는 넣지 않는다.
+# 설치: .venv/bin/pip install -r requirements-dev.txt
+ruff==0.16.10
