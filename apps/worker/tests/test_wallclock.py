@@ -51,9 +51,11 @@ def tiny_limits(monkeypatch):
 
 
 def test_limits_per_type():
-    assert wallclock.limit_for("EARNINGS_REVENUE") == 20 * 60
-    assert wallclock.limit_for("SEC_13F_BACKFILL") == 60 * 60
-    assert wallclock.limit_for("SEC_FORM4") == 30 * 60
+    # 실측 최댓값 × 약 1.5 (2026-10-03) — 정상 크롤(EARNINGS_REVENUE 최대 127분)이 잘리면 안 된다
+    assert wallclock.limit_for("EARNINGS_REVENUE") == 3 * 3600
+    assert wallclock.limit_for("SEC_13F_BACKFILL") == 4 * 3600
+    assert wallclock.limit_for("SEC_FORM4") == 3 * 3600
+    assert wallclock.limit_for("UNKNOWN_TYPE") == 3600
     assert earnings_revenue.collect.__defaults__[1] is earnings_revenue.crawl_isolated
 
 

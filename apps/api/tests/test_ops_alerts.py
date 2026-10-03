@@ -52,8 +52,22 @@ def test_job_stuck_opens_once_then_resolves(db, storage):
 
 
 def test_job_stuck_uses_wallclock_limit(db, storage):
-    _running_job(db, 25, "EARNINGS_REVENUE")      # 상한 20분
+    _running_job(db, 170, "EARNINGS_REVENUE")     # 상한 3시간 — 실측 최대 127분, 정상 범위
+    assert ops_alerts.tick(db, NOW)["opened"] == []
+    _running_job(db, 181, "EARNINGS_REVENUE")
     assert len(ops_alerts.tick(db, NOW)["opened"]) == 1
+
+
+def test_stuck_limits_match_worker_wallclock():
+    """API 경보 상한은 worker 벽시계 상한과 같아야 한다 — 어긋나면 잘린 뒤에야 알리거나, 정상 작업을 경보한다."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "worker" / "wallclock.py"
+    spec = importlib.util.spec_from_file_location("worker_wallclock", path)
+    wc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wc)
+    assert ops_alerts.STUCK_LIMITS == wc.LIMITS
+    assert ops_alerts.STUCK_DEFAULT_SECONDS == wc.DEFAULT_LIMIT_SECONDS
 
 
 def test_source_error_after_6h(db, storage):

@@ -7,9 +7,11 @@ input=$(cat 2>/dev/null || true)
 case "$input" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;; esac
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" || exit 0
-git diff --quiet && git diff --cached --quiet && exit 0
+untracked=$(git ls-files --others --exclude-standard -- '*.py' '*.ts' '*.tsx')
+git diff --quiet && git diff --cached --quiet && [ -z "$untracked" ] && exit 0
 
-changed=$( { git diff --name-only; git diff --cached --name-only; } | sort -u)
+# 새로 만든(추적 안 된) .py/.ts 도 본다 — git diff 에는 안 나온다.
+changed=$( { git diff --name-only; git diff --cached --name-only; printf '%s\n' "$untracked"; } | sort -u)
 ts=$(printf '%s\n' "$changed" | grep -E '\.tsx?$' || true)
 py=$(printf '%s\n' "$changed" | grep -E '\.py$' | while read -r f; do [ -f "$f" ] && echo "$f"; done || true)
 [ -z "$ts" ] && [ -z "$py" ] && exit 0

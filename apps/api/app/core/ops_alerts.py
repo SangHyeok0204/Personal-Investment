@@ -36,8 +36,17 @@ logger = logging.getLogger(__name__)
 
 STARTUP_DELAY_SECONDS = 60
 STUCK_DEFAULT_SECONDS = 60 * 60
-# worker `wallclock.LIMITS` 와 같게 둔다(API 는 worker 모듈을 들여오지 않는다).
-STUCK_LIMITS = {"EARNINGS_REVENUE": 20 * 60, "SEC_13F_BACKFILL": 60 * 60}
+# worker `wallclock.LIMITS`·`DEFAULT_LIMIT_SECONDS` 와 같게 둔다(API 는 worker 모듈을 들여오지 않는다 —
+#   tests/test_ops_alerts.py 가 두 표를 비교한다). 실측 근거는 worker/wallclock.py 주석.
+STUCK_LIMITS = {
+    "CUSIP_RESOLVE": 10 * 3600,
+    "EARNINGS_REVENUE": 3 * 3600,
+    "SEC_FORM4": 3 * 3600,
+    "SEC_13DG": 2 * 3600,
+    "SEC_13F_BACKFILL": 4 * 3600,
+    "SEASONALITY_APPEND": 3600,
+    "SYNC_KIWOOM_PORTFOLIO": 3600,
+}
 SOURCE_ERROR_AFTER = timedelta(hours=6)
 CAP_RATIO = 0.8
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)

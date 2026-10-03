@@ -17,8 +17,19 @@ import subprocess
 import threading
 import time
 
-DEFAULT_LIMIT_SECONDS = 30 * 60
-LIMITS = {"EARNINGS_REVENUE": 20 * 60, "SEC_13F_BACKFILL": 60 * 60}
+# ★2026-10-03 실측(최근 30일 SUCCESS 의 소요시간 최댓값) × 약 1.5 로 잡는다. 처음엔 계획의 20/30분을 그대로
+#   썼는데 EARNINGS_REVENUE 가 43·110·127분 걸린 성공 기록이 있었다 — 그대로 두면 정상 크롤이 매일 잘린다.
+#   기록이 없는 작업 종류도 있어 기본값은 60분. 바꿀 때 API `ops_alerts.STUCK_LIMITS` 도 같이(테스트가 비교한다).
+DEFAULT_LIMIT_SECONDS = 60 * 60
+LIMITS = {
+    "CUSIP_RESOLVE": 10 * 3600,        # 최대 377분
+    "EARNINGS_REVENUE": 3 * 3600,      # 최대 127분 (2026-10-02 의 18시간 멈춤은 여기서 잘린다)
+    "SEC_FORM4": 3 * 3600,             # 최대 112분
+    "SEC_13DG": 2 * 3600,              # 최대 64분
+    "SEC_13F_BACKFILL": 4 * 3600,      # 표본 1건 — 백필은 길 수 있어 넉넉히
+    "SEASONALITY_APPEND": 3600,        # 최대 37분
+    "SYNC_KIWOOM_PORTFOLIO": 3600,     # 최대 28분
+}
 # 자식 프로세스 쪽 시간초과가 먼저 터지도록(핸들러가 스스로 정리·원천 상태를 적는다) 스레드 쪽은 조금 더 기다린다.
 GRACE_SECONDS = 15
 KILL_GRACE_SECONDS = 5
