@@ -327,6 +327,37 @@ export function getPortfolioAllocation(
   );
 }
 
+// 평가손익 분해 — L1 = 섹터(ETF 는 대표 노출), L2 = 중분류. 묶음 합 = /summary 평가손익.
+export type UnrealizedDimension = "exposure" | "tech_l2";
+
+export interface UnrealizedGroup {
+  key: string | null;
+  label: string;
+  // 묶음 안 하나라도 모르면 null — 0 이 아니다.
+  unrealized_pnl_krw: string | null;
+  market_value_krw: string | null;
+  unrealized_return: string | null;
+  position_count: number;
+  tickers: string[];
+}
+
+export interface UnrealizedBreakdown {
+  dimension: UnrealizedDimension;
+  items: UnrealizedGroup[];
+  total_unrealized_pnl_krw: string | null;
+  as_of: string | null;
+}
+
+export function getUnrealizedBreakdown(
+  dimension: UnrealizedDimension,
+  accountId?: string | null,
+): Promise<UnrealizedBreakdown> {
+  const q = accountQuery(accountId);
+  return request<UnrealizedBreakdown>(
+    `/api/v1/portfolio/unrealized-breakdown?dimension=${dimension}${q ? `&${q.slice(1)}` : ""}`,
+  );
+}
+
 export function setAssetSector(
   assetId: string,
   body: { sector: string | null; industry?: string | null },

@@ -218,6 +218,28 @@ class AllocationOut(BaseModel):
     as_of: datetime | None
 
 
+class UnrealizedGroupOut(BaseModel):
+    """평가손익 분해 한 묶음(L1 = 섹터(대표 노출), L2 = 중분류). 미분류는 key=null."""
+
+    key: str | None
+    label: str
+    #: 묶음 안 종목 pl_amt_krw(키움) 합. 하나라도 모르면 None — 0 으로 채우지 않는다.
+    unrealized_pnl_krw: Decimal | None
+    market_value_krw: Decimal | None
+    #: 매입원가 대비 평가손익률(비율, 0.1 = 10%). 매입원가를 모르면 None.
+    unrealized_return: Decimal | None
+    position_count: int
+    tickers: list[str]
+
+
+class UnrealizedBreakdownOut(BaseModel):
+    dimension: str
+    items: list[UnrealizedGroupOut]
+    #: 묶음 합 = /summary 의 평가손익(타일)과 같은 값.
+    total_unrealized_pnl_krw: Decimal | None
+    as_of: datetime | None
+
+
 class HoldingSectorPatch(BaseModel):
     """섹터 수기 지정. 화면에서 고친 값은 sector_source='MANUAL' 로 남는다."""
 

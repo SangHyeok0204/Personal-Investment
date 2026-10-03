@@ -9,7 +9,7 @@ import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { DonutChart, type DonutSlice } from "@/components/charts/donut-chart";
 import { CompareChart } from "@/components/charts/compare-chart";
-import { SeriesChart, type SecondarySeries } from "@/components/charts/series-chart";
+import { SeriesChart } from "@/components/charts/series-chart";
 import { Modal } from "@/components/ui/modal";
 import {
   Cell,
@@ -28,7 +28,10 @@ import {
   getPortfolioAllocation,
   getPortfolioHoldings,
   getPortfolioSummary,
+  getUnrealizedBreakdown,
   type AllocationDimension,
+  type UnrealizedDimension,
+  type UnrealizedGroup,
   type LiveQuote,
   type PortfolioHolding,
   type PortfolioSummary,
@@ -102,6 +105,9 @@ export default function PortfolioPage() {
   //   은퇴한 체결·실현손익 화면의 쓸모 있던 부분(일별 누적 · 건별 목록)이 여기로 왔다.
   const [realizedOpen, setRealizedOpen] = useState(false);
   const [totalOpen, setTotalOpen] = useState(false);
+  // ★2026-10-03: 평가손익 타일 → L1(섹터)·L2(중분류)별 평가손익. 총 평가액 타일 → 자산 추이.
+  const [unrealizedOpen, setUnrealizedOpen] = useState(false);
+  const [unrealizedDim, setUnrealizedDim] = useState<UnrealizedDimension>("exposure");
   // ★2026-10-03 사용자 요청: 차트 커서가 가리키는 날의 값으로 아래 숫자 칸도 바뀐다(범례와 같이).
   //   null 이면 오늘(타일과 같은 값). 손익 분해 카드는 pnlItems, 두 팝업은 전체 items 의 인덱스.
   const [pnlHover, setPnlHover] = useState<number | null>(null);
@@ -137,6 +143,14 @@ export default function PortfolioPage() {
   const breakdown = useQuery({
     queryKey: ["pnlBreakdown", accountId],
     queryFn: () => getPnlBreakdown(accountId),
+    staleTime: 3_000,
+    ...live,
+  });
+  // 팝업이 열려 있을 때만 받는다 — 묶음 합은 /summary 평가손익(타일)과 같다.
+  const unrealizedGroups = useQuery({
+    queryKey: ["unrealizedBreakdown", unrealizedDim, accountId],
+    queryFn: () => getUnrealizedBreakdown(unrealizedDim, accountId),
+    enabled: unrealizedOpen,
     staleTime: 3_000,
     ...live,
   });
@@ -235,16 +249,8 @@ export default function PortfolioPage() {
       })),
     [performance.data],
   );
-  const trendPnl: SecondarySeries = useMemo(
-    () => ({
-      label: "누적 손익",
-      values: (performance.data?.items ?? []).map((p) =>
-        p.cumulative_pnl_krw == null ? null : Number(p.cumulative_pnl_krw),
-      ),
-      tooltipFormat: (v) => formatKrwSigned(String(Math.round(v))),
-    }),
-    [performance.data],
-  );
+  // ★2026-10-03 사용자 요청: '누적 손익' 보조선은 뺐다 — 키움 cumulative_pnl_krw 는 중간에 0 으로
+  //   돌아가는 값이라 누적이 아니고, 손익은 손익 분해 카드·총기간 팝업이 맡는다.
 
   // 손익 분해 그래프 — 총기간 손익·실현손익·평가손익을 **한 축**에 둔다. 총기간·실현은
   // 시작일에 0 에서 출발하고, 평가손익은 보유분 수준이라 시작 시점 평가손익에서
@@ -351,10 +357,8 @@ export default function PortfolioPage() {
             hint={pnlRate != null ? `보유분 · 원가 대비 ${pnlRate}` : "보유분 · 키움 기준"}
             accent="auto"
             loading={summary.isLoading}
-            onClick={() => setTrendOpen(true)}
-            // ⚠️추이 그래프는 이제 왼쪽 카드에 늘 떠 있다. 팝업이 더 주는 것은
-            //   **순입금을 뺀 기간 손익**이다 — 그걸 적어야 눌러 볼 이유가 된다.
-            actionHint="눌러서 기간 손익 보기"
+            onClick={() => setUnrealizedOpen(true)}
+            actionHint="눌러서 L1·L2별 평가손익"
           />
           <StatTile
             label="총기간 손익"
@@ -373,6 +377,8 @@ export default function PortfolioPage() {
             value={formatKrwString(totalKrw)}
             hint="보유종목 평가액 + 예수금"
             loading={summary.isLoading}
+            onClick={() => setTrendOpen(true)}
+            actionHint="눌러서 총 평가금액 추이"
           />
           <StatTile
             label="보유종목 평가액"
@@ -512,7 +518,6 @@ export default function PortfolioPage() {
                 height={260}
                 points={trendPoints}
                 label="총 평가금액"
-                secondary={trendPnl}
                 tooltipFormat={(p) =>
                   formatKrwString(p.value == null ? null : String(Math.round(p.value)))
                 }
@@ -613,7 +618,7 @@ export default function PortfolioPage() {
       <Modal
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
-        title="자산 추이와 기간 손익"
+        title="총 평가금액 추이"
         subtitle={
           performance.data?.first_date
             ? `${performance.data.first_date} ~ ${performance.data.last_date}`
@@ -627,7 +632,6 @@ export default function PortfolioPage() {
               height={320}
               points={trendPoints}
               label="총 평가금액"
-              secondary={trendPnl}
               tooltipFormat={(p) =>
                 formatKrwString(p.value == null ? null : String(Math.round(p.value)))
               }
@@ -781,6 +785,58 @@ export default function PortfolioPage() {
         ) : (
           <StubChart height={280} note={breakdown.isLoading ? "불러오는 중…" : "손익 데이터 없음"} />
         )}
+      </Modal>
+
+      {/* 평가손익 타일 → L1(섹터, ETF 는 대표 노출)·L2(중분류)별 평가손익. 합계 = 타일. */}
+      <Modal
+        open={unrealizedOpen}
+        onClose={() => setUnrealizedOpen(false)}
+        title="평가손익 분해"
+        subtitle="보유분 · 키움 평가손익(제비용·세금 반영) · 묶음 합 = 평가손익 타일"
+        width={760}
+      >
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1">
+              {(
+                [
+                  { id: "exposure", label: "L1 섹터", hint: "ETF는 대표 노출로 치환" },
+                  { id: "tech_l2", label: "L2 중분류", hint: "AI/Tech 중분류" },
+                ] as const
+              ).map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  title={d.hint}
+                  onClick={() => setUnrealizedDim(d.id)}
+                  aria-pressed={unrealizedDim === d.id}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-[11px] font-bold transition-colors",
+                    unrealizedDim === d.id
+                      ? "bg-ge-header text-white"
+                      : "text-ink-muted hover:bg-canvas-soft hover:text-ink",
+                  )}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[12px] font-bold">
+              합계{" "}
+              <span className={toneOf(unrealizedGroups.data?.total_unrealized_pnl_krw) === "down" ? "text-ask" : "text-bid"}>
+                {formatKrwSigned(unrealizedGroups.data?.total_unrealized_pnl_krw ?? null)}
+              </span>
+            </span>
+          </div>
+          {unrealizedGroups.data && unrealizedGroups.data.items.length > 0 ? (
+            <UnrealizedBars groups={unrealizedGroups.data.items} />
+          ) : (
+            <StubChart
+              height={240}
+              note={unrealizedGroups.isLoading ? "불러오는 중…" : "보유 종목 없음"}
+            />
+          )}
+        </div>
       </Modal>
 
       {/* 보유 종목 도넛 가운데 → 전체 상세. 화면에서 뺀 표가 여기로 왔다.
@@ -1086,6 +1142,47 @@ function ClassCell({ value, missing = "—" }: { value: string | null; missing?:
     <Cell left tone={empty ? "muted" : undefined} className="max-w-[140px] truncate">
       {empty ? missing : value}
     </Cell>
+  );
+}
+
+/** 묶음별 평가손익 막대 — 0 을 가운데에 두고 이익은 오른쪽(빨강), 손실은 왼쪽(파랑).
+ *  길이는 |손익| 최댓값 기준. 모르는 묶음(null)은 막대 없이 "—". */
+function UnrealizedBars({ groups }: { groups: UnrealizedGroup[] }) {
+  const max = Math.max(1, ...groups.map((g) => Math.abs(Number(g.unrealized_pnl_krw ?? 0))));
+  return (
+    <ul className="divide-y divide-hairline">
+      {groups.map((g) => {
+        const v = g.unrealized_pnl_krw == null ? null : Number(g.unrealized_pnl_krw);
+        const pct = v == null ? 0 : (Math.abs(v) / max) * 50;
+        return (
+          <li key={g.key ?? "__none__"} className="grid grid-cols-[minmax(0,11rem)_minmax(0,1fr)_7.5rem] items-center gap-3 py-2">
+            <div className="min-w-0">
+              <div className="truncate text-[12px] font-bold text-ink">{g.label}</div>
+              <div className="truncate text-[10px] font-semibold text-ink-faint" title={g.tickers.join(", ")}>
+                {g.tickers.join(" · ")}
+              </div>
+            </div>
+            <div className="relative h-3">
+              <div className="absolute inset-y-0 left-1/2 w-px bg-hairline" />
+              {v != null && v !== 0 && (
+                <div
+                  className={cn("absolute inset-y-0.5 rounded-[2px]", v > 0 ? "bg-bid" : "bg-ask")}
+                  style={v > 0 ? { left: "50%", width: `${pct}%` } : { right: "50%", width: `${pct}%` }}
+                />
+              )}
+            </div>
+            <div className="text-right">
+              <div className={cn("text-[12px] font-bold tabular-nums", v == null ? "text-ink-faint" : v < 0 ? "text-ask" : "text-bid")}>
+                {formatKrwSigned(g.unrealized_pnl_krw)}
+              </div>
+              <div className="text-[10px] font-semibold tabular-nums text-ink-muted">
+                {g.unrealized_return != null ? formatPercentString(g.unrealized_return) : "—"}
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

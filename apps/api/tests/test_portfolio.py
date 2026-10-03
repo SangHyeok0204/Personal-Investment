@@ -1016,3 +1016,17 @@ def test_tax_empty_without_accounts(client):
     assert body["current"] is None
     # 한계 문구는 계좌가 없어도 보여야 한다 — 빈 화면이 "세금 없음"으로 읽히면 안 된다.
     assert len(body["notes"]) > 0
+
+
+def test_unrealized_breakdown_groups_sum_to_summary(client, kiwoom):
+    """평가손익 L1·L2 분해 — 묶음 합 = /summary 평가손익(타일), 미분류도 빼지 않는다."""
+    summary = client.get("/api/v1/portfolio/summary").json()
+    for dim in ("exposure", "tech_l2"):
+        body = client.get(f"/api/v1/portfolio/unrealized-breakdown?dimension={dim}").json()
+        assert body["dimension"] == dim
+        assert body["total_unrealized_pnl_krw"] == summary["unrealized_pnl_krw"]
+        if body["total_unrealized_pnl_krw"] is not None:
+            assert sum(Decimal(i["unrealized_pnl_krw"]) for i in body["items"]) == Decimal(
+                body["total_unrealized_pnl_krw"])
+        assert sum(i["position_count"] for i in body["items"]) == summary["position_count"]
+    assert client.get("/api/v1/portfolio/unrealized-breakdown?dimension=nope").status_code == 400

@@ -122,6 +122,8 @@ from app.schemas import (
     PeriodReturnOut,
     RiskMetricsOut,
     AllocationOut,
+    UnrealizedBreakdownOut,
+    UnrealizedGroupOut,
     AllocationSliceOut,
     AccountOut,
     ConnectionOut,
@@ -505,6 +507,71 @@ _ALLOCATION_DIMENSIONS = {
 }
 
 _COUNTRY_LABELS = {"KR": "한국", "US": "미국", "JP": "일본", "CN": "중국"}
+
+
+# 평가손익 분해 축 — L1 = 배분 카드의 '섹터'(ETF 는 대표 노출로 치환), L2 = '중분류'.
+_UNREALIZED_DIMENSIONS = {"exposure": "L1 섹터", "tech_l2": "L2 중분류"}
+
+
+@router.get("/unrealized-breakdown", response_model=UnrealizedBreakdownOut)
+def get_unrealized_breakdown(
+    dimension: str = Query("exposure"),
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> UnrealizedBreakdownOut:
+    """평가손익(키움 pl_amt_krw)을 L1·L2 분류별로 나눈다(2026-10-03 사용자 요청).
+
+    ★묶음 합 = /summary 의 평가손익. 같은 CurrentPosition 행을 같은 계좌 범위로 더하기 때문이다.
+    ⚠️미분류를 빼지 않는다(key=null 묶음). 평가손익을 모르는 종목이 섞인 묶음은 None — 0 이 아니다.
+    """
+    if dimension not in _UNREALIZED_DIMENSIONS:
+        raise AppError(400, "VALIDATION_ERROR", "Unknown dimension.",
+                       {"allowed": sorted(_UNREALIZED_DIMENSIONS)})
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return UnrealizedBreakdownOut(dimension=dimension, items=[],
+                                      total_unrealized_pnl_krw=None, as_of=None)
+
+    column, fallback_label = _ALLOCATION_DIMENSIONS[dimension]
+    rows = db.execute(
+        select(CurrentPosition, Asset, column.label("group_key"))
+        .join(Asset, Asset.id == CurrentPosition.asset_id)
+        .where(CurrentPosition.account_id.in_(account_ids))
+    ).all()
+
+    groups: dict[str | None, dict] = {}
+    for position, asset, key in rows:
+        g = groups.setdefault(key, {"pnl": [], "value": [], "purchase": [], "tickers": []})
+        g["pnl"].append(position.unrealized_pnl_krw)
+        g["value"].append(position.market_value_krw)
+        g["purchase"].append(_purchase_krw(position, asset.currency))
+        g["tickers"].append(asset.ticker)
+
+    items = []
+    for key, g in groups.items():
+        pnl = None if any(v is None for v in g["pnl"]) else _sum(g["pnl"])
+        purchase = None if any(v is None for v in g["purchase"]) else _sum(g["purchase"])
+        items.append(UnrealizedGroupOut(
+            key=key,
+            label=key or fallback_label,
+            unrealized_pnl_krw=pnl,
+            market_value_krw=_sum(g["value"]),
+            unrealized_return=(
+                (pnl / purchase).quantize(Decimal("0.0001"))
+                if pnl is not None and purchase not in (None, Decimal("0")) else None
+            ),
+            position_count=len(g["tickers"]),
+            tickers=sorted(g["tickers"]),
+        ))
+    # 손익 큰 순(이익 위, 손실 아래). 모르는 묶음은 맨 뒤.
+    items.sort(key=lambda i: (i.unrealized_pnl_krw is None, -(i.unrealized_pnl_krw or 0)))
+    all_pnl = [p.unrealized_pnl_krw for p, _, _ in rows]
+    return UnrealizedBreakdownOut(
+        dimension=dimension,
+        items=items,
+        total_unrealized_pnl_krw=None if any(v is None for v in all_pnl) else _sum(all_pnl),
+        as_of=max((p.as_of for p, _, _ in rows if p.as_of), default=None),
+    )
 
 
 @router.get("/allocation", response_model=AllocationOut)
