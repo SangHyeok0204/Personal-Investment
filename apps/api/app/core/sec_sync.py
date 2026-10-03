@@ -21,10 +21,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Job
 
@@ -133,6 +135,21 @@ LLM_RETRY_MAX = 3            # 같은 발표의 LLM 단계는 실패 3번까지�
 LLM_RETRY_GAP = timedelta(hours=1)
 
 
+def escalated(db, job_type: str, event_id) -> bool:
+    """(하네스 L1) 이 발표에 마지막 시도보다 새 에스컬레이션 패킷이 있나 — 있으면 사람이 볼 차례라 다시 넣지 않는다.
+
+    패킷은 worker `llm/repair.py` 가 `{STORAGE_DIR}/llm/escalations/{date}-{job_type}-{event_id}.json` 에 쓴다.
+    작업을 손으로 다시 넣으면(패킷보다 새 시도) 따라잡기도 다시 돈다.
+    """
+    files = list((Path(settings.STORAGE_DIR) / "llm" / "escalations").glob(f"*-{job_type}-{event_id}.json"))
+    if not files:
+        return False
+    newest = max(f.stat().st_mtime for f in files)
+    last = db.execute(text("SELECT max(created_at) FROM jobs WHERE job_type = :jt AND payload->>'event_id' = :e"),
+                      {"jt": job_type, "e": str(event_id)}).scalar()
+    return last is None or newest > last.timestamp()
+
+
 def llm_catchup(db, now: datetime) -> list[tuple[str, dict]]:
     """놓친 LLM 단계를 다시 넣는다 (계획 B7 감사 G8 — 원본 pending-result 재처리 대신).
 
@@ -140,6 +157,7 @@ def llm_catchup(db, now: datetime) -> list[tuple[str, dict]]:
       넣기 전에 죽은 경우. 대기·실행 중이 없고, 실패 3번 미만, 마지막 시도 1시간 뒤.
     - LLM_JUDGE: 구조화는 끝났는데 결과 빈 관전포인트가 있고, **그 관전포인트가 생긴 뒤로** 판정 작업이 없던 것
       (관전포인트가 보도자료보다 늦게 생긴 경우 — `llm_exhibit` 은 그때 한 번만 판정을 넣는다). 같은 재시도 규칙.
+    - (L1) 작업 안 수리 재시도까지 실패해 에스컬레이션 패킷이 생긴 발표는 건너뛴다 — 같은 프롬프트를 또 보내지 않는다.
     """
     base = ("SELECT e.id, r.filing_accession FROM earnings_events e JOIN earnings_results r ON r.event_id = e.id "
             "WHERE e.report_date >= :lo AND r.filing_url IS NOT NULL AND {cond} "
@@ -152,7 +170,8 @@ def llm_catchup(db, now: datetime) -> list[tuple[str, dict]]:
     for eid, acc in db.execute(text(base.format(
             cond="COALESCE(r.detail->>'exhibit_parsed', 'false') <> 'true'", since="")),
             {**args, "jt": "LLM_EXHIBIT"}).all():
-        out.append(("LLM_EXHIBIT", {"event_id": eid, "accession": acc}))
+        if not escalated(db, "LLM_EXHIBIT", eid):
+            out.append(("LLM_EXHIBIT", {"event_id": eid, "accession": acc}))
     points = ("SELECT max(w.created_at) FROM earnings_watchpoints w WHERE w.ticker = e.ticker "
               "AND w.quarter = e.quarter AND w.point IS NOT NULL")
     for eid, _ in db.execute(text(base.format(
@@ -161,7 +180,8 @@ def llm_catchup(db, now: datetime) -> list[tuple[str, dict]]:
                  "AND w.point IS NOT NULL AND w.result IS NULL)",
             since=f"OR (j.status = 'SUCCESS' AND j.created_at >= ({points}))")),
             {**args, "jt": "LLM_JUDGE"}).all():
-        out.append(("LLM_JUDGE", {"event_id": eid}))
+        if not escalated(db, "LLM_JUDGE", eid):
+            out.append(("LLM_JUDGE", {"event_id": eid}))
     return out
 
 

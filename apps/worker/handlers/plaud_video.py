@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from llm.cli import LlmError, run_claude
+from llm.repair import RepairFailed, run_with_repair, write_escalation
 from llm.video import build_prompt, parse_summary
 from plaud.client import PlaudError, PlaudMcp
 from plaud.video import parse_title
@@ -61,8 +62,12 @@ def _set(engine, file_id: str, *, status: str, error: str | None = None, summary
             {"s": status, "e": error, "sum": summary, "m": model, "a": 1 if attempted else 0, "id": file_id})
 
 
-def collect(engine, plaud, summarize, *, now: datetime | None = None, log=lambda msg: None) -> dict:
-    """한 번 훑는다. `plaud` = PlaudMcp(열린 것), `summarize(prompt) -> LlmResult`. 시험은 둘 다 가짜를 넣는다."""
+def collect(engine, plaud, summarize, *, now: datetime | None = None, log=lambda msg: None,
+            storage_dir: str | None = None) -> dict:
+    """한 번 훑는다. `plaud` = PlaudMcp(열린 것), `summarize(prompt) -> LlmResult`. 시험은 둘 다 가짜를 넣는다.
+
+    형식이 틀리면 같은 녹음을 한 번 수리 재시도(L1). 그래도 틀리면 failed + (`storage_dir` 가 있으면) 에스컬레이션 패킷.
+    """
     now = now or datetime.now(timezone.utc)
     # 서버는 date_from 을 서버 현지 날짜로 거른다 — 하루 앞당겨 받고 아래에서 UTC 시각으로 다시 거른다.
     since = now - timedelta(days=LOOKBACK_DAYS)
@@ -103,7 +108,8 @@ def collect(engine, plaud, summarize, *, now: datetime | None = None, log=lambda
         used += 1
         log(f"{r['name']} — 전사 {len(transcript or '')}자 · Plaud 요약 {len(note or '')}자 · 프롬프트 {len(prompt)}자")
         try:
-            res = summarize(prompt)
+            rep = run_with_repair(prompt, summarize, parse_summary,
+                                  lambda s: (s is not None, [] if s else ['{"summary": "…"} JSON 이 없거나 비었음']))
         except LlmError as exc:
             _set(engine, r["id"], status="failed", error=f"LLM {exc.kind}: {str(exc)[:300]}", attempted=True)
             record_error(engine, "claude", exc.kind, str(exc))
@@ -111,12 +117,16 @@ def collect(engine, plaud, summarize, *, now: datetime | None = None, log=lambda
             if exc.kind in _STOP_KINDS:
                 stop = exc.kind
             continue
-        summary = parse_summary(res.text)
-        if summary is None:
-            _set(engine, r["id"], status="failed", error=f"형식 오류: 요약 JSON 없음 ({res.text[:120]})",
-                 model=res.model, attempted=True)
+        except RepairFailed as exc:
+            _set(engine, r["id"], status="failed", error=f"형식 오류: 요약 JSON 없음 ({exc.last_text[:120]})",
+                 attempted=True)
+            if storage_dir:
+                write_escalation(storage_dir, "PLAUD_VIDEO", r["id"], exc, task=f"영상 요약 {r['name']}",
+                                 decision_needed="수리 재시도까지 형식 실패 — 요약을 손으로 적을지, 비워 둘지",
+                                 source={"plaud_file_id": r["id"]})
             out["failed"] += 1
             continue
+        summary, res = rep.data, rep.result
         _set(engine, r["id"], status="done", summary=summary, model=res.model, attempted=True)
         out["done"] += 1
     if stop:
@@ -130,7 +140,8 @@ def run(engine, job_id, payload, storage_dir, log_job):
 
     try:
         with PlaudMcp() as plaud:
-            out = collect(engine, plaud, lambda p: run_claude(p, storage_dir=storage_dir), log=log)
+            out = collect(engine, plaud, lambda p: run_claude(p, storage_dir=storage_dir), log=log,
+                          storage_dir=storage_dir)
     except PlaudError as exc:
         msg = str(exc)
         if exc.kind == "logged_out":

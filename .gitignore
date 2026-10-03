@@ -21,6 +21,8 @@ storage/raw/*
 storage/processed/*
 storage/trigger/*.json
 storage/research/*
+# LLM 하루 호출 카운터 · STOP 스위치 · 에스컬레이션 패킷 (하네스 M2 · L1)
+storage/llm/
 !storage/**/.gitkeep
 
 # Windows / WSL artifacts

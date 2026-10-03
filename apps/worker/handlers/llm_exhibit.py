@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from llm.cli import LlmError, run_claude
 from llm.exhibit import build_prompt, parse, plausible_revenue, scaled, validate
+from llm.repair import RepairFailed, run_with_repair, write_escalation
 from sec.client import sec_client, sec_get
 from sec.exhibit import html_to_text
 from source_health import record_error, record_ok
@@ -106,15 +107,18 @@ def run(engine, job_id, payload, storage_dir, log_job):
         raise ValueError(f"보도자료 글이 너무 짧음({len(body)}자): {ev.filing_url}")
     prompt = build_prompt(ev.ticker, body, ev.eps_forecast, ev.revenue_forecast)
     try:
-        res = run_claude(prompt, storage_dir=storage_dir)
+        rep = run_with_repair(prompt, lambda p: run_claude(p, storage_dir=storage_dir), parse, validate)
     except LlmError as exc:
         record_error(engine, "claude", exc.kind, str(exc))
         raise
-    data = parse(res.text)
-    ok, warns = validate(data)
-    if not ok:
-        record_error(engine, "claude", "other", f"보도자료 구조화 실패({ev.ticker}): {'; '.join(warns)}")
-        raise ValueError("; ".join(warns))
+    except RepairFailed as exc:
+        record_error(engine, "claude", "other", f"보도자료 구조화 실패({ev.ticker}): {exc}")
+        write_escalation(storage_dir, "LLM_EXHIBIT", eid, exc, job_id=job_id,
+                         task=f"{ev.ticker} {ev.report_date} 실적 보도자료 구조화",
+                         decision_needed="수리 재시도까지 검증 실패 — 매출·가이던스를 손으로 넣을지, 비워 둘지",
+                         source={"filing_url": ev.filing_url})
+        raise
+    data, warns, res = rep.data, rep.warns, rep.result
     out = store(engine, ev, data, warns, res.model)
     # B5 — 결과가 빈 관전포인트가 있으면 결과 판정을 이어서 예약(같은 발표는 한 번)
     with engine.begin() as c:

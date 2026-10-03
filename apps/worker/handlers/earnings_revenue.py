@@ -16,6 +16,7 @@ from sqlalchemy import text
 from handlers.earnings_calendar import verdict
 from prices.investing import InvestingBlocked, crawl_dates
 from source_health import record_error, record_ok
+from wallclock import run_in_child
 
 AHEAD_DAYS = 63
 INVESTING_AHEAD = 35    # Investing.com 이 목록을 올리는 거리(실측)
@@ -70,7 +71,15 @@ def targets_and_dates(conn, today: date) -> tuple[list, list[date]]:
     return rows, (sorted(ahead) + past)[:MAX_DATES + 10]
 
 
-def collect(engine, today: date | None = None, crawl=crawl_dates, only: list[date] | None = None) -> dict:
+def crawl_isolated(days: list[date]) -> dict:
+    """(L4) Playwright 크롤을 자식 프로세스에서 — 작업의 남은 벽시계 시간이 지나면 크롬까지 강제 종료.
+
+    ⚠️2026-10-02: 이 크롤이 18시간 굳었다. 동기 Playwright 는 파이프에 막히면 신호로도 못 깨운다.
+    """
+    return run_in_child(crawl_dates, days)
+
+
+def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[date] | None = None) -> dict:
     """`only` — 수동 실행에서 날짜를 좁힌다(예: 화면 잠금 실측을 짧게)."""
     today = today or date.today()
     with engine.begin() as c:

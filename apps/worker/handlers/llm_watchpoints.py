@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from sqlalchemy import text
 
 from llm.cli import LlmError, run_claude
+from llm.repair import RepairFailed, run_with_repair, write_escalation
 from llm.watchpoints import build_prompt, parse_watchpoints
 from sec.client import SecBlocked, sec_client, sec_get
 from sec.exhibit import earnings_release
@@ -73,14 +74,19 @@ def run(engine, job_id, payload, storage_dir, log_job):
     log_job(engine, job_id, "INFO", "llm", f"{ticker} {quarter} 문맥 "
             f"{'8-K ' + release['filing_date'] if release else '없음'} · 프롬프트 {len(prompt)}자")
     try:
-        res = run_claude(prompt, storage_dir=storage_dir)
+        rep = run_with_repair(prompt, lambda p: run_claude(p, storage_dir=storage_dir), parse_watchpoints,
+                              lambda d: (bool(d["points"]), [] if d["points"] else ["watching_points 목록이 없거나 비었음"]))
     except LlmError as exc:
         record_error(engine, "claude", exc.kind, str(exc))
         raise
-    parsed = parse_watchpoints(res.text)
-    if not parsed["points"]:
-        record_error(engine, "claude", "other", f"형식 오류: 관전포인트 JSON 없음 ({res.text[:120]})")
-        raise ValueError("LLM 응답에 관전포인트가 없음")
+    except RepairFailed as exc:
+        record_error(engine, "claude", "other", f"형식 오류: 관전포인트 JSON 없음 ({exc.last_text[:120]})")
+        write_escalation(storage_dir, "LLM_WATCHPOINTS", f"{ticker}-{quarter}", exc, job_id=job_id,
+                         task=f"{ticker} {quarter} 관전포인트 생성",
+                         decision_needed="수리 재시도까지 형식 실패 — 관전포인트를 손으로 적을지, 비워 둘지",
+                         source={"filing_url": (release or {}).get("url")})
+        raise ValueError("LLM 응답에 관전포인트가 없음") from exc
+    parsed, res = rep.data, rep.result
     with engine.begin() as c:
         n = store_points(c, ticker, quarter, parsed["points"], res.model)
     detail = {"ticker": ticker, "quarter": quarter, "points": n, "model": res.model,

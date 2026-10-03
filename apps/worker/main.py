@@ -12,6 +12,7 @@ from db import get_engine, wait_for_db
 from handlers import HANDLERS
 from joblog import log_job
 from source_health import record_error, record_ok
+import wallclock
 
 logger = logging.getLogger("worker")
 
@@ -102,15 +103,22 @@ def _beat(engine, job_id):
 
 
 class _Heartbeat:
-    """작업이 도는 동안 `heartbeat_at` 을 주기적으로 갱신하는 배경 스레드."""
+    """작업이 도는 동안 `heartbeat_at` 을 주기적으로 갱신하는 배경 스레드.
 
-    def __init__(self, engine, job_id, interval=HEARTBEAT_SECONDS):
+    ⚠️(L4) `deadline`(monotonic)을 넘기면 더 뛰지 않는다 — 2026-10-02 에는 핸들러가 18시간 굳어 있는 동안
+      심장박동만 살아 있어 리퍼가 손을 못 댔다. 상한을 넘긴 작업은 살아 있는 것으로 보이지 않게 한다.
+    """
+
+    def __init__(self, engine, job_id, interval=HEARTBEAT_SECONDS, deadline=None):
         self._engine, self._job_id, self._interval = engine, job_id, interval
+        self._deadline = deadline
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
         while not self._stop.wait(self._interval):
+            if self._deadline is not None and time.monotonic() > self._deadline:
+                return
             try:
                 _beat(self._engine, self._job_id)
             except Exception:
@@ -174,14 +182,38 @@ def process_job(engine, job, storage_dir):
         log_job(engine, job_id, "ERROR", "failed", error_message)
         return
 
-    try:
-        with _Heartbeat(engine, job_id):
-            result = handler(engine, job_id, payload, storage_dir, log_job)
-    except Exception as exc:
+    # ★(L4) 벽시계 상한 — 핸들러는 스레드에서 돌고, 여기는 상한 + 여유만 기다린다. 넘으면 그 스레드는 버린다
+    #   (죽일 수 없다 — 막힐 수 있는 Playwright 는 핸들러 안에서 `wallclock.run_in_child` 로 프로세스째 죽인다).
+    limit = wallclock.limit_for(job_type)
+    deadline = time.monotonic() + limit
+    box = {}
+
+    def _target():
+        wallclock.set_deadline(deadline)
+        try:
+            box["result"] = handler(engine, job_id, payload, storage_dir, log_job)
+        except BaseException as exc:     # noqa: BLE001 — 아래에서 FAILED 로 적는다
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_target, daemon=True, name=f"job-{job_id}")
+    with _Heartbeat(engine, job_id, deadline=deadline + wallclock.GRACE_SECONDS):
+        worker.start()
+        worker.join(limit + wallclock.GRACE_SECONDS)
+    exc = box.get("exc")
+    if worker.is_alive() or isinstance(exc, wallclock.WallClockTimeout):
+        error_message = str(exc) if exc else f"timeout_wallclock: {job_type} {int(limit)}초 상한 초과 — 포기"
+        finish_job_failure(engine, job_id, error_message)
+        log_job(engine, job_id, "ERROR", "failed", error_message)
+        record_error(engine, f"job:{job_type}", "timeout_wallclock", error_message)
+        return
+    if exc is not None:
+        if not isinstance(exc, Exception):
+            raise exc
         error_message = str(exc) or exc.__class__.__name__
         finish_job_failure(engine, job_id, error_message)
         log_job(engine, job_id, "ERROR", "failed", error_message)
         return
+    result = box.get("result")
 
     finish_job_success(engine, job_id, result)
     log_job(engine, job_id, "INFO", "done", "Job completed successfully")

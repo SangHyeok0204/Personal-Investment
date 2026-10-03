@@ -71,3 +71,43 @@ def test_result_ready_at():
     assert ny(result_ready_at(date(2026, 8, 26), "AMC")) == "08-26 17:40"
     assert ny(result_ready_at(date(2026, 8, 26), "BMO")) == "08-26 08:40"
     assert ny(result_ready_at(date(2026, 8, 26), None)) == "08-27 09:00"
+
+
+def test_llm_catchup_skips_escalated_event(db, tmp_path, monkeypatch):
+    """하네스 L1 — 수리 재시도까지 실패해 에스컬레이션 패킷이 생긴 발표는 다시 넣지 않는다(손으로 다시 넣으면 재개)."""
+    import json
+    import os
+    import uuid
+
+    from sqlalchemy import text
+
+    from app.core import sec_sync
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "STORAGE_DIR", str(tmp_path))
+    now = datetime.now(UTC)
+    eid = db.execute(text("INSERT INTO earnings_events (ticker, quarter, report_date, timing, source) "
+                          "VALUES ('NVDA', '2026Q2', :d, 'AMC', 'nasdaq') RETURNING id"),
+                     {"d": now.date() - timedelta(days=2)}).scalar()
+    db.execute(text("INSERT INTO earnings_results (event_id, filing_url, filing_accession, source) "
+                    "VALUES (:e, 'u', 'acc-1', 'sec')"), {"e": eid})
+    job = ("INSERT INTO jobs (id, job_type, status, queue, payload, created_at) VALUES "
+           "(:i, 'LLM_EXHIBIT', 'FAILED', 'llm', CAST(:p AS JSONB), :c)")
+    db.execute(text(job), {"i": uuid.uuid4(), "p": json.dumps({"event_id": eid}), "c": now - timedelta(hours=3)})
+    db.commit()
+    later = now + timedelta(hours=2)
+    assert sec_sync.llm_catchup(db, later) == [("LLM_EXHIBIT", {"event_id": eid, "accession": "acc-1"})]
+
+    esc = tmp_path / "llm" / "escalations"
+    esc.mkdir(parents=True)
+    packet = esc / f"{now:%Y-%m-%d}-LLM_EXHIBIT-{eid}.json"
+    packet.write_text("{}")
+    assert sec_sync.escalated(db, "LLM_EXHIBIT", eid)
+    assert sec_sync.llm_catchup(db, later) == []                       # 패킷이 마지막 시도보다 새것 — 건너뜀
+    # 다른 발표·다른 단계의 패킷은 영향 없음
+    assert not sec_sync.escalated(db, "LLM_JUDGE", eid)
+    # 사람이 손으로 다시 넣으면(패킷보다 새 시도) 그 뒤 실패는 다시 따라잡는다
+    old = (now - timedelta(hours=4)).timestamp()
+    os.utime(packet, (old, old))
+    assert not sec_sync.escalated(db, "LLM_EXHIBIT", eid)
+    assert sec_sync.llm_catchup(db, later) == [("LLM_EXHIBIT", {"event_id": eid, "accession": "acc-1"})]

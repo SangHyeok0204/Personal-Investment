@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from llm.cli import LlmError, run_claude
 from llm.judgment import build_prompt, parse_judgment
+from llm.repair import RepairFailed, run_with_repair, write_escalation
 from sec.client import sec_client, sec_get
 from sec.exhibit import html_to_text
 from source_health import record_error, record_ok
@@ -53,14 +54,20 @@ def run(engine, job_id, payload, storage_dir, log_job):
         points=[p.point for p in points], ir_text=ir, segments=d.get("segments"),
         guidance=d.get("guidance_commentary"))
     try:
-        res = run_claude(prompt, storage_dir=storage_dir)
+        rep = run_with_repair(prompt, lambda p: run_claude(p, storage_dir=storage_dir),
+                              lambda t: parse_judgment(t, len(points)),
+                              lambda j: (j["ok"], [] if j["ok"] else ["응답이 JSON 객체가 아님"]))
     except LlmError as exc:
         record_error(engine, "claude", exc.kind, str(exc))
         raise
-    j = parse_judgment(res.text, len(points))
-    if not j["ok"]:
-        record_error(engine, "claude", "other", f"결과 판정 형식 오류({ev.ticker}): {res.text[:120]}")
-        raise ValueError("LLM 응답이 JSON 이 아님")
+    except RepairFailed as exc:
+        record_error(engine, "claude", "other", f"결과 판정 형식 오류({ev.ticker}): {exc.last_text[:120]}")
+        write_escalation(storage_dir, "LLM_JUDGE", eid, exc, job_id=job_id,
+                         task=f"{ev.ticker} {ev.quarter} 관전포인트 결과 판정",
+                         decision_needed="수리 재시도까지 형식 실패 — 결과를 손으로 적을지, 비워 둘지",
+                         source={"filing_url": ev.filing_url})
+        raise ValueError("LLM 응답이 JSON 이 아님") from exc
+    j, res = rep.data, rep.result
     filled = 0
     with engine.begin() as c:
         for p, r in zip(points, j["point_results"]):
