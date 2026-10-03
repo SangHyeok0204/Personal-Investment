@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "postgresql+psycopg://investment_user:change_me@postgres:5432/investment"
-    STORAGE_DIR: str = "/app/storage"
+    # ⚠️(O1) 호스트 기본값은 저장소 `storage/` — worker(run-worker.sh)와 같은 폴더여야 LLM 카운터·에스컬레이션
+    #   패킷을 읽는다. 예전 기본값 `/app/storage` 는 호스트에 없어 조용히 빈 폴더로 읽혔다. 컨테이너는 compose 가 넘긴다.
+    STORAGE_DIR: str = str(_REPO_ROOT / "storage")
 
     # 리서치 자료 폴더. 비어 있으면 리서치 화면이 **켜는 방법을 안내**한다.
     # ⚠️읽기 전용이다 — 이름·크기·수정시각만 본다. 내용은 열지 않는다.
@@ -59,6 +61,13 @@ class Settings(BaseSettings):
     KRX_USER: str = ""
     KRX_PW: str = ""
     OPENDART_API_KEY: str = ""
+
+    # 하루 LLM 호출 상한 — worker(`llm/cli.py`, 기본 40)와 **같은 값**이어야 한다(O1 LLM_CAP_80PCT).
+    # 둘 다 저장소 뿌리 `.env.local` 의 `LLM_DAILY_CAP=` 을 읽는다(worker 는 run-worker.sh 로더 경유).
+    # 바꾸면 worker 재시작 + API 재시작(--reload 는 .env.local 변경을 못 본다).
+    LLM_DAILY_CAP: int = 40
+    # 트립와이어 주기(초). 실측 테스트 때만 줄인다.
+    OPS_ALERT_INTERVAL_SECONDS: int = 300
 
 
 settings = Settings()

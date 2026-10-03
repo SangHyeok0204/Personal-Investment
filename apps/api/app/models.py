@@ -661,6 +661,24 @@ class RebalanceTarget(Base):
     )
 
 
+class OpsAlertState(Base):
+    """운영 트립와이어 상태 (alembic 0027, core/ops_alerts.py). 열림 = `resolved_at IS NULL`."""
+
+    __tablename__ = "ops_alert_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AlertRule(Base):
     """알림 규칙 (alembic 0014).
 

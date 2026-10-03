@@ -13,7 +13,7 @@ from app.models import Base
 # 포트폴리오 테이블도 포함한다 — 계좌/종목은 테스트마다 새로 만든다(2026-09-21).
 _ALL_TABLES = (
     "job_logs, imports, jobs, source_status, trades, realized_pnl, account_daily_performance, dividends, "
-    "alert_rules, rebalance_targets, journal_entries, orders, "
+    "alert_rules, ops_alert_state, rebalance_targets, journal_entries, orders, "
     "portfolio_snapshots, current_positions, account_balances, "
     "accounts, assets, brokerage_connections, brokers, monthly_closes, seasonality_series, "
     "guru_roster, sec_filings, holdings_13f, form4_transactions, ownership_events, cusip_map, watchlist_items, "

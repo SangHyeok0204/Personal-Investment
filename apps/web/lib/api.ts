@@ -1309,14 +1309,27 @@ export interface AlertRule {
   triggered_since: string | null;
 }
 
+/** 서버 트립와이어(core/ops_alerts) — 열려 있고 확인 안 한 것만 온다. */
+export interface OpsAlert {
+  key: string;
+  /** "JOB_STUCK" | "SOURCE_ERROR" | "LLM_CAP_80PCT" | "LLM_ESCALATION" */
+  kind: string;
+  message: string;
+  first_seen: string;
+  last_seen: string;
+  detail: Record<string, unknown> | null;
+}
+
 export interface Alerts {
   rules: AlertRule[];
   kinds: AlertKind[];
+  /** 규칙만 센다 — 종 배지는 여기에 ops.length 를 더한다. */
   triggered_count: number;
   unknown_count: number;
   disabled_count: number;
   delivery_configured: boolean;
   notes: string[];
+  ops: OpsAlert[];
 }
 
 export function getAlerts(): Promise<Alerts> {
@@ -1349,6 +1362,13 @@ export function updateAlert(
 
 export function deleteAlert(id: string): Promise<Alerts> {
   return request<Alerts>(`/api/v1/alerts/${id}`, { method: "DELETE" });
+}
+
+export function ackOpsAlert(key: string): Promise<OpsAlert> {
+  return request<OpsAlert>(
+    `/api/v1/alerts/ops/${encodeURIComponent(key)}/ack`,
+    { method: "POST" },
+  );
 }
 
 // ── 보유 종목 뉴스 (구글 뉴스 RSS) ───────────────────────────────────────────

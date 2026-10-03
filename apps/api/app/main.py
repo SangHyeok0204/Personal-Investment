@@ -31,6 +31,7 @@ from app.core.seasonality_sync import seasonality_sync_loop
 from app.core.ai_snapshot_sync import ai_snapshot_sync_loop
 from app.core.sec_sync import sec_sync_loop
 from app.core.etf_listing_sync import etf_listing_sync_loop
+from app.core.ops_alerts import ops_alert_loop
 from app.core.errors import register_exception_handlers
 
 
@@ -48,6 +49,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(ai_snapshot_sync_loop()),
         # 국내 ETF 신규상장: 오늘(KST) KRX 목록이 없으면 받는다(+DART 상장 예정). 메모리 캐시.
         asyncio.create_task(etf_listing_sync_loop()),
+        # 트립와이어(O1): 멈춘 작업·계속 실패하는 원천·LLM 상한 80%·에스컬레이션 → ops_alert_state(5분).
+        asyncio.create_task(ops_alert_loop()),
     ]
     try:
         yield

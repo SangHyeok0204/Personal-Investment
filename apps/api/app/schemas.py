@@ -1736,6 +1736,17 @@ class AlertRuleOut(BaseModel):
     triggered_since: datetime | None
 
 
+class OpsAlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    kind: str
+    message: str
+    first_seen: datetime
+    last_seen: datetime
+    detail: dict[str, Any] | None = None
+
+
 class AlertsOut(BaseModel):
     """알림 규칙 목록 + 지금 판정.
 
@@ -1750,6 +1761,9 @@ class AlertsOut(BaseModel):
     disabled_count: int
     delivery_configured: bool
     notes: list[str]
+    #: 서버 트립와이어(core/ops_alerts) — 열려 있고 확인 안 한 것만. triggered_count 에는 안 든다.
+    ops: list[OpsAlertOut] = []
+
 
 
 # ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────

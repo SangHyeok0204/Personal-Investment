@@ -20,16 +20,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import alert_rules as ar
-from app.core import quote_cache
+from app.core import ops_alerts, quote_cache
 from app.core.errors import AppError
 from app.db.session import get_db
-from app.models import AlertRule, Asset, CurrentPosition, Order
+from app.models import AlertRule, Asset, CurrentPosition, OpsAlertState, Order
 from app.schemas import (
     AlertKindOut,
     AlertRuleIn,
     AlertRuleOut,
     AlertRulePatch,
     AlertsOut,
+    OpsAlertOut,
 )
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
@@ -228,7 +229,28 @@ def list_alerts(db: Session = Depends(get_db)) -> AlertsOut:
         #   "보냈다"고 말하게 된다.
         delivery_configured=False,
         notes=_NOTES,
+        ops=[_ops_out(r) for r in ops_alerts.open_unacked(db)],
     )
+
+
+def _ops_out(row: OpsAlertState) -> OpsAlertOut:
+    return OpsAlertOut(
+        key=row.key, kind=row.kind, message=ops_alerts.message(row),
+        first_seen=row.first_seen, last_seen=row.last_seen, detail=row.detail,
+    )
+
+
+# ★서버 트립와이어(core/ops_alerts) 확인 — 열린 채로 두되 종에서 숨긴다. 풀렸다 다시 잡히면 또 뜬다.
+@router.post("/ops/{key}/ack", response_model=OpsAlertOut)
+def ack_ops_alert(key: str, db: Session = Depends(get_db)) -> OpsAlertOut:
+    row = db.get(OpsAlertState, key)
+    if row is None:
+        raise AppError(status_code=404, code="not_found", message="운영 알림이 없습니다.")
+    if row.acked_at is None:
+        row.acked_at = ar.now_utc()
+        db.commit()
+        db.refresh(row)
+    return _ops_out(row)
 
 
 @router.post("", response_model=AlertRuleOut, status_code=201)

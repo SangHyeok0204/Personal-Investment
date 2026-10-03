@@ -18,7 +18,7 @@ import {
   useAutoRefresh,
 } from "@/components/layout/auto-refresh-context";
 import Link from "next/link";
-import { getAlerts, runBrokerageSync } from "@/lib/api";
+import { ackOpsAlert, getAlerts, runBrokerageSync } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
@@ -359,6 +359,7 @@ export function Topbar({
  *   종의 숫자와 목록의 숫자가 따로 놀 수 있다.
  */
 function AlertBell() {
+  const queryClient = useQueryClient();
   const alerts = useQuery({
     queryKey: ["alerts"],
     queryFn: getAlerts,
@@ -368,8 +369,15 @@ function AlertBell() {
     // 때는 조용히 아무것도 안 그린다(아래 count == null).
     retry: 1,
   });
+  // ★(O1) 서버 트립와이어는 '확인'을 누르면 종에서 빠진다(열린 채로 — 다시 알리지 않는다).
+  const ack = useMutation({
+    mutationFn: ackOpsAlert,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["alerts"] }),
+  });
 
-  const count = alerts.data?.triggered_count ?? null;
+  const ops = alerts.data?.ops ?? [];
+  // 배지 = 조건에 걸린 규칙 + 열린 운영 알림.
+  const count = alerts.data ? alerts.data.triggered_count + ops.length : null;
   const firing = (alerts.data?.rules ?? []).filter((r) => r.state === "TRIGGERED");
   const title =
     count == null
@@ -377,8 +385,9 @@ function AlertBell() {
       : count === 0
         ? "걸린 알림이 없습니다"
         : [
-            `${count}건이 조건에 걸렸습니다`,
+            `${count}건이 걸렸습니다`,
             ...firing.map((r) => `· ${r.name ?? r.ticker ?? r.kind_label}: ${r.message}`),
+            ...ops.map((o) => `· [운영] ${o.message}`),
             alerts.data?.delivery_configured
               ? ""
               : "전달 경로가 아직 없어 이 종이 유일한 알림입니다.",
@@ -387,24 +396,82 @@ function AlertBell() {
             .join("\n");
 
   return (
-    <Link
-      href="/settings/alerts"
-      title={title}
-      aria-label={title}
-      className="relative text-ink-secondary transition-colors hover:text-ink"
-    >
-      <Bell className="h-5 w-5" />
-      {count != null && count > 0 && (
-        <span
-          className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center
-                     rounded-full bg-ask px-1 text-[10px] font-bold leading-none text-white"
+    <div className="group relative">
+      <Link
+        href="/settings/alerts"
+        // 운영 알림이 있으면 아래 목록이 뜬다 — 네이티브 툴팁과 겹치지 않게 뺀다.
+        title={ops.length > 0 ? undefined : title}
+        aria-label={title}
+        className="relative block text-ink-secondary transition-colors hover:text-ink"
+      >
+        <Bell className="h-5 w-5" />
+        {count != null && count > 0 && (
+          <span
+            className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center
+                       rounded-full bg-ask px-1 text-[10px] font-bold leading-none text-white"
+          >
+            {count > 9 ? "9+" : count}
+          </span>
+        )}
+      </Link>
+      {ops.length > 0 && (
+        <div
+          className="invisible absolute right-0 top-full z-50 pt-2 opacity-0 transition-opacity
+                     group-focus-within:visible group-focus-within:opacity-100
+                     group-hover:visible group-hover:opacity-100"
         >
-          {count > 9 ? "9+" : count}
-        </span>
+          <div className="w-[320px] rounded-xl bg-white p-1.5 shadow-[0_16px_36px_rgba(36,59,94,0.22)] ring-1 ring-hairline">
+            <div className="px-3 pb-1 pt-2 text-[10px] font-bold text-ink-faint">
+              운영 알림 · 서버가 5분마다 확인
+            </div>
+            {ops.map((o) => (
+              <div
+                key={o.key}
+                className="flex items-start justify-between gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-ge-blue-bg"
+              >
+                <div className="min-w-0">
+                  <div className="text-[12px] font-extrabold text-ge-navy">
+                    {OPS_LABEL[o.kind] ?? o.kind}
+                  </div>
+                  <div className="break-words text-[11px] font-semibold text-ink-secondary">
+                    {o.message}
+                  </div>
+                  <div className="text-[10px] text-ink-faint">
+                    {new Date(o.first_seen).toLocaleString("ko-KR")}부터
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => ack.mutate(o.key)}
+                  disabled={ack.isPending}
+                  className="shrink-0 rounded-lg border border-hairline bg-white px-2 py-1 text-[11px] font-bold text-ge-point transition-colors hover:bg-ge-blue-bg disabled:text-ink-faint"
+                >
+                  확인
+                </button>
+              </div>
+            ))}
+            {firing.length > 0 && (
+              <Link
+                href="/settings/alerts"
+                className="block rounded-lg px-3 py-2 text-[11px] font-bold text-ge-point transition-colors hover:bg-ge-blue-bg"
+              >
+                조건에 걸린 규칙 {firing.length}건 보기
+              </Link>
+            )}
+          </div>
+        </div>
       )}
-    </Link>
+    </div>
   );
 }
+
+/** 운영 알림 종류 → 화면 이름. */
+const OPS_LABEL: Record<string, string> = {
+  JOB_STUCK: "작업 멈춤",
+  SOURCE_ERROR: "원천 계속 실패",
+  LLM_CAP_80PCT: "LLM 하루 상한 80%",
+  LLM_ESCALATION: "LLM 판단 요청",
+};
 
 /** 계좌 선택 목록의 한 줄. */
 function AccountOption({
