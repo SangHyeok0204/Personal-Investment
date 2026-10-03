@@ -30,7 +30,6 @@ import {
   getPortfolioSummary,
   type AllocationDimension,
   type LiveQuote,
-  type PnlBreakdownPoint,
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
@@ -180,7 +179,10 @@ export default function PortfolioPage() {
       : stockKrw;
 
   // ★평가손익은 **증권사(키움) 한 원천**이다 — /summary 가 더한 pl_amt_krw(제비용·세금 반영).
+  //   영웅문에 찍히는 평가손익과 같은 값이어야 한다(2026-10-03 사용자 확인).
   const pnlKrw = s?.unrealized_pnl_krw ?? null;
+  const pnlRate =
+    s?.unrealized_return != null ? formatPercentString(s.unrealized_return) : null;
 
   // 실현손익(누적)은 원장 값(/realized 와 같은 식·같은 시작일 — 투자 시작일부터).
   // 총기간 손익은 **화면에서** 실현 + 평가 − 시작 시점 평가로 만든다 — 서버의 오늘 점
@@ -191,17 +193,12 @@ export default function PortfolioPage() {
   // 타일 설명용 짧은 날짜("6/01").
   const pnlStartShort = pnlStart ? `${Number(pnlStart.slice(5, 7))}/${pnlStart.slice(8, 10)}` : null;
   const unrealizedAtStart = breakdown.data?.unrealized_at_start_krw ?? null;
-  // ★2026-10-03 사용자 지정: 평가손익 타일은 **시작일 이후 변화**(평가 − 시작 시점 평가)다.
-  //   그래야 타일 셋이 그대로 더해진다: 실현 + 평가 변화 = 총기간. 키움 평가손익 실제값은 부제로.
-  //   (전에는 평가손익을 보유분 수준 그대로 보여, 실현 + 평가 ≠ 총기간 이라 버그로 읽혔다.)
-  const pnlChangeKrw =
-    pnlKrw != null && unrealizedAtStart != null
-      ? String(Number(pnlKrw) - Number(unrealizedAtStart))
-      : null;
+  // ★2026-10-03 사용자 지정: 평가손익은 키움 실제값(영웅문과 같은 값), 실현은 시작일에 0 에서
+  //   누적, **총기간 = 실현 + 평가**. 시작일 시점 평가익(unrealizedAtStart)은 깎지 않는다 —
+  //   총기간 선은 시작일에 0 이 아니라 그날 평가손익에서 출발한다.
+  //   (한때 평가손익을 '시작일 이후 변화'로 보였더니 영웅문 숫자와 달라 되돌렸다.)
   const totalPeriodKrw =
-    realizedKrw != null && pnlChangeKrw != null
-      ? String(Number(realizedKrw) + Number(pnlChangeKrw))
-      : null;
+    realizedKrw != null && pnlKrw != null ? String(Number(realizedKrw) + Number(pnlKrw)) : null;
 
   // ⚠️조각도 **오른쪽 표와 같은 값**을 써야 한다. 분자(조각)와 분모(totalKrw)가
   //   다른 원천이면 같은 화면에서 SOXL 이 도넛 19.9% · 표 20.5% 로 갈리고(실측)
@@ -261,20 +258,13 @@ export default function PortfolioPage() {
   const pnlSeries = useMemo(() => {
     const items = pnlItems;
     const num = (v: string | null) => (v == null ? null : Number(v));
-    const base = num(breakdown.data?.unrealized_at_start_krw ?? null);
     return [
       { name: "총기간 손익", emphasis: true, values: items.map((p) => num(p.total_period_pnl_krw)) },
-      // 타일과 같은 정의 — 시작 시점 평가손익을 뺀 변화. 그래야 매 점에서 실현 + 평가 변화 = 총기간.
-      {
-        name: "평가손익(변화)",
-        values: items.map((p) => {
-          const u = num(p.unrealized_krw);
-          return u == null || base == null ? null : u - base;
-        }),
-      },
+      // 키움 평가손익 수준(과거는 역산) — 매 점에서 실현 + 평가 = 총기간.
+      { name: "평가손익", values: items.map((p) => num(p.unrealized_krw)) },
       { name: "실현손익(누적)", values: items.map((p) => num(p.realized_cum_krw)) },
     ];
-  }, [pnlItems, breakdown.data]);
+  }, [pnlItems]);
 
   // 드릴다운 그래프 — 구간을 자르지 않고 시작일부터 전부. 서버 값을 그대로 쓴다.
   //   실현 = 매매(비용 뺀 뒤) + 배당(세후·원천징수 뒤). 배당에서 세금을 또 빼지 않는다.
@@ -290,35 +280,18 @@ export default function PortfolioPage() {
   // 총기간 = 실현(누적) + (평가손익 − 시작 시점 평가손익). 시작 평가를 모르면 둘째 항도 모른다.
   const totalSeries = useMemo(() => {
     const items = breakdown.data?.items ?? [];
-    const base = numOrNull(breakdown.data?.unrealized_at_start_krw ?? null);
     return [
       { name: "총기간 손익", emphasis: true, values: items.map((p) => numOrNull(p.total_period_pnl_krw)) },
       { name: "실현(누적)", values: items.map((p) => numOrNull(p.realized_cum_krw)) },
-      {
-        name: `평가손익 − ${pnlStartShort ?? "시작"} 평가손익`,
-        values: items.map((p) => {
-          const u = numOrNull(p.unrealized_krw);
-          return u == null || base == null ? null : u - base;
-        }),
-      },
+      { name: "평가손익", values: items.map((p) => numOrNull(p.unrealized_krw)) },
     ];
-  }, [breakdown.data, pnlStartShort]);
-  // 타일과 같은 값으로 쓰는 둘째 항(평가손익은 /summary 그대로) — 합이 타일과 똑같다.
-  const unrealizedDeltaKrw =
-    pnlKrw != null && unrealizedAtStart != null
-      ? String(Number(pnlKrw) - Number(unrealizedAtStart))
-      : null;
+  }, [breakdown.data]);
 
   // 커서가 가리키는 날의 점. 범위(30일 등)가 바뀌어 인덱스가 넘치면 없는 셈 친다.
   const pnlHoverPoint = pnlHover == null ? null : (pnlItems[pnlHover] ?? null);
   const allItems = breakdown.data?.items ?? [];
   const realizedHoverPoint = realizedHover == null ? null : (allItems[realizedHover] ?? null);
   const totalHoverPoint = totalHover == null ? null : (allItems[totalHover] ?? null);
-  // 그날의 '평가손익 − 시작 평가손익'. 둘 중 하나라도 모르면 모른다(0 이 아니다).
-  const deltaAt = (p: PnlBreakdownPoint) =>
-    p.unrealized_krw == null || unrealizedAtStart == null
-      ? null
-      : String(Number(p.unrealized_krw) - Number(unrealizedAtStart));
 
   // 조각 하나에 든 종목들. ⚠️값은 **동기화 스냅샷**(market_value_krw)으로 낸다 —
   //   배분 카드가 그 기준이라, 실시간 값을 쓰면 바스켓 합이 조각 금액과 어긋난다.
@@ -374,10 +347,8 @@ export default function PortfolioPage() {
           />
           <StatTile
             label="평가손익"
-            value={formatKrwSigned(pnlChangeKrw)}
-            // ⚠️칸이 좁다(1280 폭에서 "키움 +₩35…" 로 잘렸다) — 정의만. 키움 실제값(보유분 전체)은
-            //   손익 분해 카드 아래 "현재 평가손익(키움)" 에 있다.
-            hint={`${pnlStartShort ?? "시작"}부터 평가익 변화`}
+            value={formatKrwSigned(pnlKrw)}
+            hint={pnlRate != null ? `보유분 · 원가 대비 ${pnlRate}` : "보유분 · 키움 기준"}
             accent="auto"
             loading={summary.isLoading}
             onClick={() => setTrendOpen(true)}
@@ -388,7 +359,7 @@ export default function PortfolioPage() {
           <StatTile
             label="총기간 손익"
             value={formatKrwSigned(totalPeriodKrw)}
-            hint={`${pnlStartShort ?? "시작일"}부터 · 실현+평가 변화`}
+            hint={`실현(${pnlStartShort ?? "시작"}~) + 평가`}
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
             onClick={() => setTotalOpen(true)}
@@ -436,7 +407,7 @@ export default function PortfolioPage() {
             title={leftView === "pnl" ? "손익 분해" : "자산 추이"}
             subtitle={
               leftView === "pnl"
-                ? `${pnlStart ?? "시작일"}부터 · 셋 다 0에서 누적 · 총기간 = 실현 + 평가손익 변화`
+                ? `${pnlStart ?? "시작일"}부터 · 실현은 0에서 누적 · 총기간 = 실현 + 평가손익`
                 : performance.data?.first_date
                   ? `${performance.data.first_date} ~ ${performance.data.last_date}`
                   : "예탁자산 시계열"
@@ -765,7 +736,7 @@ export default function PortfolioPage() {
         open={totalOpen}
         onClose={() => { setTotalOpen(false); setTotalHover(null); }}
         title="총기간 손익 일별 추이"
-        subtitle={`${pnlStart ?? "시작일"}부터 · 총기간 = 실현(누적) + (평가손익 − ${pnlStartShort ?? "시작"} 평가손익)`}
+        subtitle={`${pnlStart ?? "시작일"}부터 · 총기간 = 실현(누적, ${pnlStartShort ?? "시작"}에 0) + 평가손익`}
         width={940}
       >
         {breakdown.data && allDates.length > 0 ? (
@@ -785,9 +756,9 @@ export default function PortfolioPage() {
                 tone={toneOf(totalHoverPoint ? totalHoverPoint.realized_cum_krw : realizedKrw)}
               />
               <Figure
-                label={`평가손익 − ${pnlStartShort ?? "시작"} 평가손익${dayTag(totalHoverPoint)}`}
-                value={formatKrwSigned(totalHoverPoint ? deltaAt(totalHoverPoint) : unrealizedDeltaKrw)}
-                tone={toneOf(totalHoverPoint ? deltaAt(totalHoverPoint) : unrealizedDeltaKrw)}
+                label={totalHoverPoint ? `평가손익${dayTag(totalHoverPoint)}` : "평가손익(키움)"}
+                value={formatKrwSigned(totalHoverPoint ? totalHoverPoint.unrealized_krw : pnlKrw)}
+                tone={toneOf(totalHoverPoint ? totalHoverPoint.unrealized_krw : pnlKrw)}
               />
               <Figure
                 label={totalHoverPoint ? `총기간 손익${dayTag(totalHoverPoint)}` : "총기간 손익 = 타일"}
@@ -803,7 +774,7 @@ export default function PortfolioPage() {
             <p className="text-[11px] leading-snug text-ink-muted">
               과거 평가손익은 역산 값입니다(키움 일별 손익이 있는 마지막 날
               {breakdown.data.daily_pnl_until ? ` ${breakdown.data.daily_pnl_until}` : ""}까지 — 시작
-              평가 + 총기간 − 실현). 오늘 점만 키움 실제 평가손익이라, 마지막 일별 행과 오늘 사이에
+              시점 평가 + 일별 손익 − 실현). 오늘 점만 키움 실제 평가손익이라, 마지막 일별 행과 오늘 사이에
               계단이 생길 수 있습니다.
             </p>
           </div>

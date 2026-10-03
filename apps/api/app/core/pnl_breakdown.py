@@ -2,10 +2,10 @@
 
 ★정의(2026-10-01 사용자 지정, 계좌 전체 · 원화, **투자 시작일(INVESTMENT_START,
   2026-06-01)부터**):
-  · 총기간 손익   = 키움 일별 계좌손익(usa21670 pnl_krw)을 시작일부터 그날까지 더한 값.
-    **0 에서 출발한다** — 첫 점(시작일)은 그날 하루의 손익이다. 시작일 앞날에 0 점을
-    따로 찍지 않는다(그래프가 시작일에서 시작해야 하고, '시작일 장 시작 = 0' 이라는
-    뜻은 첫 점이 그날 하루 손익이라는 것으로 이미 드러난다).
+  · 총기간 손익   = 실현손익(시작일~) + 평가손익(그날 수준). ★2026-10-03 사용자 지정 —
+    시작일 시점의 평가익(`unrealized_at_start`)을 0 으로 깎지 않는다. 그래서 시작일 첫 점은
+    0 이 아니라 '그날 평가손익'에서 출발하고, 타일 셋이 그대로 더해지며 평가손익은 키움
+    영웅문과 같다. (전에는 키움 일별 손익을 시작일부터 0 에서 더했다 — 평가 − 시작 평가.)
     **예수금은 넣지 않는다** — 입출금은 손익이 아니다.
   · 실현손익(누적) = 매도로 확정된 손익(수수료·세금 뺀 뒤) + 배당, 시작일부터 누적
     (역시 0 에서 출발). `/realized` 의 `breakdown.net_krw` 와 같은 식·같은 시작일이다.
@@ -17,7 +17,8 @@
     예수금 안에 있다(더하면 두 번 센다).
 
 ★등식(모든 점, 오늘 포함):
-    총기간(시작일~) − 실현(시작일~) = 평가(그날) − 평가(시작 시점)
+    총기간 = 실현(시작일~) + 평가(그날)
+  과거 평가(역산) = 평가(시작 시점) + 일별 손익(시작일~그날) − 실현(시작일~그날)
   '평가(시작 시점)' = `unrealized_at_start` = 시작일 **장 시작 전**(= 앞날 마감)의 역산
   평가손익 = 시작일 앞의 일별 손익 합 − 시작일 앞의 실현 합. 앞날 마감을 쓰는 것은
   총기간·실현이 시작일 하루치부터 더하기 때문이다(시작일 마감을 쓰면 첫 점에서 등식이
@@ -25,7 +26,7 @@
 
 ★오늘(`live`) — 키움 일별 행은 하루 늦게 온다. 오늘 점은
     평가손익 = **키움 실제 평가손익**(/summary)
-    총기간 손익 = 실현손익(시작일~오늘) + 실제 평가손익 − unrealized_at_start
+    총기간 손익 = 실현손익(시작일~오늘) + 실제 평가손익
   로 둔다(등식을 오늘에도 지키는 가장 단순한 규칙). 그래서 타일 셋과 그래프 끝점이
   똑같다. ⚠️대가: 마지막 일별 행과 오늘 사이에 **계단**이 생길 수 있다 — 일별 손익
   합과 '실현 + 평가'가 정확히 같지 않기 때문이다(키움 일별 손익에는 외화 예수금 환산
@@ -128,18 +129,17 @@ def build_series(
 
         if live is not None and day == live.date:
             unrealized = live.unrealized_krw
-            total_period = (
-                realized_running + unrealized - base
-                if unrealized is not None and base is not None else None
-            )
             total_value = live.total_value_krw
         else:
-            total_period = pnl_running if daily is not None else None
+            # 과거 평가손익(역산) = 출발값 + 시작일부터의 일별 손익 − 시작일부터의 실현.
             unrealized = (
-                base + total_period - realized_running
-                if total_period is not None and base is not None else None
+                base + pnl_running - realized_running
+                if daily is not None and base is not None else None
             )
             total_value = total_value_by_date.get(day)
+        # ★2026-10-03 사용자 지정: 총기간 = 실현(시작일~) + 평가(그날 실제 수준). 평가손익은
+        #   키움 영웅문과 같은 값이어야 하고(시작 시점 평가익을 0 으로 깎지 않는다), 실현만 0 에서 출발.
+        total_period = None if unrealized is None else realized_running + unrealized
 
         points.append(
             Point(
