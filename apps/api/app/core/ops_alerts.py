@@ -71,6 +71,10 @@ def detect(db, now: datetime) -> dict[str, tuple[str, dict]]:
     for src in db.execute(select(SourceStatus)).scalars():
         if src.last_error_at is None or src.last_error_at <= (src.last_ok_at or _EPOCH):
             continue
+        # ★2026-10-03: STOP 파일·LLM_DAILY_CAP=0 은 사람이 일부러 멈춘 것이지 원천 고장이 아니다.
+        #   B1 시험 뒤 남은 claude `stopped` 가 7분 만에 SOURCE_ERROR 로 열렸다(마지막 성공이 오래돼서).
+        if src.last_error_kind == "stopped":
+            continue
         since = src.last_ok_at or src.last_error_at
         if now - since > SOURCE_ERROR_AFTER:
             found[f"SOURCE_ERROR:{src.source}"] = ("SOURCE_ERROR", {

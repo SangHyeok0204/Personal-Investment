@@ -62,6 +62,9 @@ def test_source_error_after_6h(db, storage):
     db.add(SourceStatus(source="fresh", kind="source", last_ok_at=NOW - timedelta(hours=2),
                         last_error_at=NOW - timedelta(hours=1), last_error_kind="timeout"))
     db.add(SourceStatus(source="ok", kind="source", last_ok_at=NOW, last_error_at=NOW - timedelta(days=2)))
+    # 사람이 일부러 멈춘 것(STOP) — 마지막 성공이 오래돼도 원천 고장이 아니다.
+    db.add(SourceStatus(source="claude", kind="source", last_ok_at=NOW - timedelta(days=1),
+                        last_error_at=NOW - timedelta(minutes=7), last_error_kind="stopped"))
     db.commit()
     assert ops_alerts.tick(db, NOW)["opened"] == ["SOURCE_ERROR:investing"]
     assert len(_rows(db, "SOURCE_ERROR")) == 1
