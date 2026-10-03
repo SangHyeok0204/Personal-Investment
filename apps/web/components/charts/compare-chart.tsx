@@ -56,6 +56,7 @@ export function CompareChart({
   height = 280,
   valueFormat = (v: number) => `${v.toFixed(0)}`,
   legendFormat,
+  onHoverChange,
 }: {
   dates: string[];
   series: CompareSeries[];
@@ -63,9 +64,16 @@ export function CompareChart({
   valueFormat?: (v: number) => string;
   /** 범례 숫자 형식. 없으면 축과 같다 — 축은 자리가 좁아 접은 단위(만)를 쓸 때 준다. */
   legendFormat?: (v: number) => string;
+  /** 커서가 가리키는 날짜 인덱스(벗어나면 null) — 차트 밖의 숫자 칸이 같은 날을 따라가게. */
+  onHoverChange?: (index: number | null) => void;
 }) {
   const { attach, width } = useWidth();
-  const [hover, setHover] = useState<number | null>(null);
+  const [hover, setHoverState] = useState<number | null>(null);
+  const setHover = (index: number | null) => {
+    if (index === hover) return;
+    setHoverState(index);
+    onHoverChange?.(index);
+  };
 
   const model = useMemo(() => {
     if (width === 0 || dates.length === 0) return null;

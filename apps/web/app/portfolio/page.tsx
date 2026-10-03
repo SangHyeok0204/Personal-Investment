@@ -30,6 +30,7 @@ import {
   getPortfolioSummary,
   type AllocationDimension,
   type LiveQuote,
+  type PnlBreakdownPoint,
   type PortfolioHolding,
   type PortfolioSummary,
 } from "@/lib/api";
@@ -102,6 +103,11 @@ export default function PortfolioPage() {
   //   은퇴한 체결·실현손익 화면의 쓸모 있던 부분(일별 누적 · 건별 목록)이 여기로 왔다.
   const [realizedOpen, setRealizedOpen] = useState(false);
   const [totalOpen, setTotalOpen] = useState(false);
+  // ★2026-10-03 사용자 요청: 차트 커서가 가리키는 날의 값으로 아래 숫자 칸도 바뀐다(범례와 같이).
+  //   null 이면 오늘(타일과 같은 값). 손익 분해 카드는 pnlItems, 두 팝업은 전체 items 의 인덱스.
+  const [pnlHover, setPnlHover] = useState<number | null>(null);
+  const [realizedHover, setRealizedHover] = useState<number | null>(null);
+  const [totalHover, setTotalHover] = useState<number | null>(null);
 
   const summary = useQuery({
     queryKey: ["portfolioSummary", accountId],
@@ -303,6 +309,17 @@ export default function PortfolioPage() {
       ? String(Number(pnlKrw) - Number(unrealizedAtStart))
       : null;
 
+  // 커서가 가리키는 날의 점. 범위(30일 등)가 바뀌어 인덱스가 넘치면 없는 셈 친다.
+  const pnlHoverPoint = pnlHover == null ? null : (pnlItems[pnlHover] ?? null);
+  const allItems = breakdown.data?.items ?? [];
+  const realizedHoverPoint = realizedHover == null ? null : (allItems[realizedHover] ?? null);
+  const totalHoverPoint = totalHover == null ? null : (allItems[totalHover] ?? null);
+  // 그날의 '평가손익 − 시작 평가손익'. 둘 중 하나라도 모르면 모른다(0 이 아니다).
+  const deltaAt = (p: PnlBreakdownPoint) =>
+    p.unrealized_krw == null || unrealizedAtStart == null
+      ? null
+      : String(Number(p.unrealized_krw) - Number(unrealizedAtStart));
+
   // 조각 하나에 든 종목들. ⚠️값은 **동기화 스냅샷**(market_value_krw)으로 낸다 —
   //   배분 카드가 그 기준이라, 실시간 값을 쓰면 바스켓 합이 조각 금액과 어긋난다.
   const basketRows = useMemo(() => {
@@ -484,18 +501,19 @@ export default function PortfolioPage() {
                     series={pnlSeries}
                     valueFormat={compactKrw}
                     legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+                    onHoverChange={setPnlHover}
                   />
                   {/* 실현손익이 무엇으로 이루어졌나 — 타일에 다 못 적는 정의를 여기 둔다. */}
                   <dl className="grid grid-cols-2 gap-3 border-t border-hairline pt-3 sm:grid-cols-4">
                     <Figure
-                      label="매매 실현(비용 뺀 뒤)"
-                      value={formatKrwSigned(breakdown.data.realized_trading_krw)}
-                      tone={toneOf(breakdown.data.realized_trading_krw)}
+                      label={`매매 실현(비용 뺀 뒤)${dayTag(pnlHoverPoint)}`}
+                      value={formatKrwSigned(pnlHoverPoint?.realized_trading_cum_krw ?? breakdown.data.realized_trading_krw)}
+                      tone={toneOf(pnlHoverPoint?.realized_trading_cum_krw ?? breakdown.data.realized_trading_krw)}
                     />
                     <Figure
-                      label="배당(원천징수 뒤)"
-                      value={formatKrwSigned(breakdown.data.dividend_krw)}
-                      tone={toneOf(breakdown.data.dividend_krw)}
+                      label={`배당(원천징수 뒤)${dayTag(pnlHoverPoint)}`}
+                      value={formatKrwSigned(pnlHoverPoint?.realized_dividend_cum_krw ?? breakdown.data.dividend_krw)}
+                      tone={toneOf(pnlHoverPoint?.realized_dividend_cum_krw ?? breakdown.data.dividend_krw)}
                     />
                     {/* 평가손익은 0 에서 출발하지 않는다 — 시작 시점 수준을 적어 두어야
                         "총기간 − 실현 = 평가 − 이 값" 이 화면에서 읽힌다. */}
@@ -506,9 +524,9 @@ export default function PortfolioPage() {
                     />
                     {/* 키움이 지금 보여 주는 평가손익(보유분 전체) — 변화 = 이 값 − 시작 시점 값. */}
                     <Figure
-                      label="현재 평가손익(키움)"
-                      value={formatKrwSigned(pnlKrw)}
-                      tone={toneOf(pnlKrw)}
+                      label={pnlHoverPoint ? `평가손익${dayTag(pnlHoverPoint)}` : "현재 평가손익(키움)"}
+                      value={formatKrwSigned(pnlHoverPoint ? pnlHoverPoint.unrealized_krw : pnlKrw)}
+                      tone={toneOf(pnlHoverPoint ? pnlHoverPoint.unrealized_krw : pnlKrw)}
                     />
                   </dl>
                 </div>
@@ -671,7 +689,7 @@ export default function PortfolioPage() {
       {/* 실현손익(누적) 타일 → 일별 누적(매매 · 배당 · 합) + 건별 목록. */}
       <Modal
         open={realizedOpen}
-        onClose={() => setRealizedOpen(false)}
+        onClose={() => { setRealizedOpen(false); setRealizedHover(null); }}
         title="실현손익(누적) 일별 추이"
         subtitle={`${pnlStart ?? "시작일"}부터 · 매매는 수수료·세금 뺀 뒤 · 배당은 세후(원천징수 후)`}
         width={940}
@@ -684,22 +702,23 @@ export default function PortfolioPage() {
               series={realizedSeries}
               valueFormat={compactKrw}
               legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+              onHoverChange={setRealizedHover}
             />
             <dl className="grid grid-cols-3 gap-3 border-t border-hairline pt-3">
               <Figure
-                label="주식 실현(매매)"
-                value={formatKrwSigned(breakdown.data.realized_trading_krw)}
-                tone={toneOf(breakdown.data.realized_trading_krw)}
+                label={`주식 실현(매매)${dayTag(realizedHoverPoint)}`}
+                value={formatKrwSigned(realizedHoverPoint?.realized_trading_cum_krw ?? breakdown.data.realized_trading_krw)}
+                tone={toneOf(realizedHoverPoint?.realized_trading_cum_krw ?? breakdown.data.realized_trading_krw)}
               />
               <Figure
-                label="배당(세후)"
-                value={formatKrwSigned(breakdown.data.dividend_krw)}
-                tone={toneOf(breakdown.data.dividend_krw)}
+                label={`배당(세후)${dayTag(realizedHoverPoint)}`}
+                value={formatKrwSigned(realizedHoverPoint?.realized_dividend_cum_krw ?? breakdown.data.dividend_krw)}
+                tone={toneOf(realizedHoverPoint?.realized_dividend_cum_krw ?? breakdown.data.dividend_krw)}
               />
               <Figure
-                label="합계 = 타일"
-                value={formatKrwSigned(realizedKrw)}
-                tone={toneOf(realizedKrw)}
+                label={realizedHoverPoint ? `합계${dayTag(realizedHoverPoint)}` : "합계 = 타일"}
+                value={formatKrwSigned(realizedHoverPoint ? realizedHoverPoint.realized_cum_krw : realizedKrw)}
+                tone={toneOf(realizedHoverPoint ? realizedHoverPoint.realized_cum_krw : realizedKrw)}
               />
             </dl>
             <div className="max-h-[30vh] overflow-y-auto">
@@ -744,7 +763,7 @@ export default function PortfolioPage() {
       {/* 총기간 손익 타일 → 일별 총기간 손익 + 분해(실현 누적 · 평가손익 − 시작 평가손익). */}
       <Modal
         open={totalOpen}
-        onClose={() => setTotalOpen(false)}
+        onClose={() => { setTotalOpen(false); setTotalHover(null); }}
         title="총기간 손익 일별 추이"
         subtitle={`${pnlStart ?? "시작일"}부터 · 총기간 = 실현(누적) + (평가손익 − ${pnlStartShort ?? "시작"} 평가손익)`}
         width={940}
@@ -757,18 +776,23 @@ export default function PortfolioPage() {
               series={totalSeries}
               valueFormat={compactKrw}
               legendFormat={(v) => formatKrwSigned(String(Math.round(v)))}
+              onHoverChange={setTotalHover}
             />
             <dl className="grid grid-cols-2 gap-3 border-t border-hairline pt-3 sm:grid-cols-4">
-              <Figure label="실현(누적)" value={formatKrwSigned(realizedKrw)} tone={toneOf(realizedKrw)} />
               <Figure
-                label={`평가손익 − ${pnlStartShort ?? "시작"} 평가손익`}
-                value={formatKrwSigned(unrealizedDeltaKrw)}
-                tone={toneOf(unrealizedDeltaKrw)}
+                label={`실현(누적)${dayTag(totalHoverPoint)}`}
+                value={formatKrwSigned(totalHoverPoint ? totalHoverPoint.realized_cum_krw : realizedKrw)}
+                tone={toneOf(totalHoverPoint ? totalHoverPoint.realized_cum_krw : realizedKrw)}
               />
               <Figure
-                label="총기간 손익 = 타일"
-                value={formatKrwSigned(totalPeriodKrw)}
-                tone={toneOf(totalPeriodKrw)}
+                label={`평가손익 − ${pnlStartShort ?? "시작"} 평가손익${dayTag(totalHoverPoint)}`}
+                value={formatKrwSigned(totalHoverPoint ? deltaAt(totalHoverPoint) : unrealizedDeltaKrw)}
+                tone={toneOf(totalHoverPoint ? deltaAt(totalHoverPoint) : unrealizedDeltaKrw)}
+              />
+              <Figure
+                label={totalHoverPoint ? `총기간 손익${dayTag(totalHoverPoint)}` : "총기간 손익 = 타일"}
+                value={formatKrwSigned(totalHoverPoint ? totalHoverPoint.total_period_pnl_krw : totalPeriodKrw)}
+                tone={toneOf(totalHoverPoint ? totalHoverPoint.total_period_pnl_krw : totalPeriodKrw)}
               />
               <Figure
                 label={`${pnlStartShort ?? "시작"} 시점 평가손익`}
@@ -1092,6 +1116,11 @@ function ClassCell({ value, missing = "—" }: { value: string | null; missing?:
       {empty ? missing : value}
     </Cell>
   );
+}
+
+/** 숫자 칸 라벨 꼬리 — 커서가 가리키는 날("· 09-15"). 커서가 없으면(오늘) 빈 문자열. */
+function dayTag(p: { date: string } | null): string {
+  return p ? ` · ${p.date.slice(5)}` : "";
 }
 
 function numOrNull(v: string | null): number | null {
