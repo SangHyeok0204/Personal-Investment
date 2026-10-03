@@ -186,6 +186,15 @@ def test_llm_failure_writes_no_summary_and_stops(vdb):
     assert src == "usage_limit"
 
 
+def test_stop_raises_without_marking_item_failed(vdb):
+    # ★(B1) 비상 정지는 항목 실패가 아니다 — 작업째 올려 main.py 가 PENDING 으로 되돌린다.
+    llm = FakeLlm(error=LlmError("stopped", "STOP 파일 있음"))
+    with pytest.raises(LlmError):
+        pv.collect(vdb, FakePlaud(FILES, transcripts={"f1": "a", "f2": "b"}), llm, now=NOW)
+    assert len(llm.prompts) == 1
+    assert all(r.status != "failed" and r.attempts == 0 for r in _rows(vdb).values())
+
+
 def test_bad_reply_fails_and_retries_until_cap(vdb):
     for i in range(pv.MAX_ATTEMPTS + 1):
         llm = FakeLlm(reply="요약을 못 했습니다")

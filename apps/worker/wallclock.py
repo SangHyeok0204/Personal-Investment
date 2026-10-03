@@ -87,7 +87,7 @@ def _alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        pass             # 남의 프로세스 — 살아 있다
     return True
 
 
@@ -137,7 +137,7 @@ def run_in_child(fn, *args, timeout: float | None = None, **kwargs):
                 if time.monotonic() >= end:
                     kill_tree(proc)
                     raise WallClockTimeout(
-                        f"timeout_wallclock: {getattr(fn, '__name__', fn)} {int(timeout)}초 초과 — 자식 프로세스 강제 종료")
+                        f"timeout_wallclock: {getattr(fn, '__name__', fn)} {int(timeout)}초 초과 — 자식 프로세스 강제 종료") from None
     finally:
         q.close()
     proc.join(KILL_GRACE_SECONDS)

@@ -1765,7 +1765,6 @@ class AlertsOut(BaseModel):
     ops: list[OpsAlertOut] = []
 
 
-
 # ── 시장 뉴스 (주제별) ───────────────────────────────────────────────────────
 
 class TopicArticleOut(BaseModel):

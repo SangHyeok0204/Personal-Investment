@@ -97,9 +97,9 @@ def _read(path: Path) -> dict:
         return {}
 
 
-def _read_n(path: Path) -> int:
+def _count(data: dict) -> int:
     try:
-        return int(_read(path).get("n", 0))
+        return int(data.get("n", 0))
     except (TypeError, ValueError):
         return 0
 
@@ -119,14 +119,14 @@ def _write(path: Path, data: dict) -> None:
 def calls_today(storage_dir: str | None = None) -> int:
     path = _counter_path(storage_dir)
     with _counter_lock(path):
-        return _read_n(path)
+        return _count(_read(path))
 
 
 def _bump(storage_dir: str | None) -> int:
     path = _counter_path(storage_dir)
     with _counter_lock(path):
         data = _read(path)
-        n = _read_n(path) + 1
+        n = _count(data) + 1
         _write(path, {**data, "n": n})
     return n
 
@@ -142,7 +142,7 @@ def _add_cost(storage_dir: str | None, cost_usd) -> None:
             prev = float(data.get("usd_notional") or 0)
         except (TypeError, ValueError):
             prev = 0.0
-        _write(path, {**data, "n": _read_n(path), "usd_notional": round(prev + float(cost_usd), 6)})
+        _write(path, {**data, "n": _count(data), "usd_notional": round(prev + float(cost_usd), 6)})
 
 
 def daily_cap() -> int:

@@ -51,6 +51,23 @@ def test_job_stuck_opens_once_then_resolves(db, storage):
     assert _rows(db, "JOB_STUCK")[0].resolved_at is not None
 
 
+def test_resolved_key_reopens_with_fresh_state(db, storage):
+    counter = storage / "llm" / f"calls-{today_kst():%Y-%m-%d}.json"
+    counter.write_text(json.dumps({"n": 33}))
+    ops_alerts.tick(db, NOW)
+    _rows(db, "LLM_CAP_80PCT")[0].acked_at = NOW
+    db.commit()
+    counter.unlink()
+    ops_alerts.tick(db, NOW + timedelta(minutes=5))
+    counter.write_text(json.dumps({"n": 35}))
+    later = NOW + timedelta(minutes=10)
+    # 풀린 뒤 또 잡히면 같은 행을 새로 연다 — 확인 표시도 지워져 종에 다시 뜬다.
+    assert ops_alerts.tick(db, later)["opened"] == ["LLM_CAP_80PCT"]
+    row = _rows(db, "LLM_CAP_80PCT")[0]
+    assert row.resolved_at is None and row.acked_at is None and row.first_seen == later
+    assert row.detail == {"calls_today": 35, "cap": 40}
+
+
 def test_job_stuck_uses_wallclock_limit(db, storage):
     _running_job(db, 170, "EARNINGS_REVENUE")     # 상한 3시간 — 실측 최대 127분, 정상 범위
     assert ops_alerts.tick(db, NOW)["opened"] == []
