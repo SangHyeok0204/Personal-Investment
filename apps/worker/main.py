@@ -11,6 +11,7 @@ from sqlalchemy import text
 from db import get_engine, wait_for_db
 from handlers import HANDLERS
 from joblog import log_job
+from llm.cli import daily_cap
 from source_health import record_error, record_ok
 import wallclock
 
@@ -250,8 +251,10 @@ def main():
     engine = get_engine(database_url)
     wait_for_db(engine)
 
-    logger.info("Worker %s started on queues %s, polling every %ss",
-                worker_name, queues, poll_interval)
+    # ★(M2) 실제로 먹은 설정을 한 줄로 — env 가 worker 까지 닿았는지 로그로 확인한다.
+    stop_file = "present" if os.path.exists(os.path.join(storage_dir, "llm", "STOP")) else "absent"
+    logger.info("Worker %s started on queues %s, polling every %ss llm_daily_cap=%s stop_file=%s",
+                worker_name, queues, poll_interval, daily_cap(), stop_file)
 
     last_housekeeping = 0.0
     while not _shutdown:

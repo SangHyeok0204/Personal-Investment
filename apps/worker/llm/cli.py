@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -75,16 +77,44 @@ def _counter_path(storage_dir: str | None) -> Path:
     return base / f"calls-{datetime.now(KST):%Y-%m-%d}.json"
 
 
-def calls_today(storage_dir: str | None = None) -> int:
+@contextmanager
+def _counter_lock(path: Path):
+    # ★(M2) 읽기-더하기-쓰기를 한 덩어리로 — 스레드·프로세스가 겹쳐도 셈이 빠지지 않게.
+    #   데이터 파일은 os.replace 로 inode 가 바뀌므로 잠금은 옆의 .lock 파일에 건다.
+    with open(path.with_suffix(".lock"), "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _read_n(path: Path) -> int:
     try:
-        return int(json.loads(_counter_path(storage_dir).read_text())["n"])
+        return int(json.loads(path.read_text())["n"])
     except (OSError, ValueError, KeyError):
         return 0
 
 
+def calls_today(storage_dir: str | None = None) -> int:
+    path = _counter_path(storage_dir)
+    with _counter_lock(path):
+        return _read_n(path)
+
+
 def _bump(storage_dir: str | None) -> int:
-    n = calls_today(storage_dir) + 1
-    _counter_path(storage_dir).write_text(json.dumps({"n": n}))
+    path = _counter_path(storage_dir)
+    with _counter_lock(path):
+        n = _read_n(path) + 1
+        # 임시 파일 → os.replace: 쓰다 죽어도 반쪽 JSON 이 남지 않는다.
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(json.dumps({"n": n}))
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
     return n
 
 
