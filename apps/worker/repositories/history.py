@@ -332,6 +332,16 @@ def tickers_for_dividends(conn, account_id):
     #
     # ⚠️거래소 코드도 같은 이유로 **티커별 표**(alembic 0017)를 먼저 본다.
     #   assets 에만 적어 두면 판 종목은 코드를 잃어 매번 다시 더듬는다.
+    #
+    # ⚠️그래도 **한 번도 코드를 못 남긴 판 종목**은 영영 못 찾는다. 탐색은
+    #   "최근 5일에 행이 온 코드만 인정"인데 판 종목은 최근 행이 없다 — 그래서
+    #   SGOV·QLD·AVGO 등 7종목이 동기화마다 '확인 못 함'으로 보고됐다(실측
+    #   2026-10-05, SGOV 는 배당 14건이 이미 있는데도). 표가 생기기(0017) 전에
+    #   들어온 배당이라 코드가 안 남았다. 마지막 근거로 **실현손익의 거래소명**
+    #   (ust21530 stex_nm)을 쓴다 — 체결·주문의 stex_nm 은 "미국"뿐이라 못 쓰지만
+    #   실현손익은 거래소를 적어 준다. 실측에서 탐색으로 찾은 코드 7종목과 전부
+    #   일치했다(나스닥→ND, 뉴욕증권거래소→NY; NYSE Arca 인 SOXL 도 NY).
+    #   모르는 이름은 None 으로 두어 예전처럼 탐색에 맡긴다.
     rows = conn.execute(
         text(
             "WITH held AS ( "
@@ -341,12 +351,17 @@ def tickers_for_dividends(conn, account_id):
             "  SELECT DISTINCT ticker FROM trades WHERE account_id = :acc "
             "), all_tickers AS ( "
             "  SELECT ticker FROM held UNION SELECT ticker FROM traded "
+            "), realized AS ( "
+            "  SELECT ticker, max(CASE trim(exchange) "
+            "    WHEN '나스닥' THEN 'ND' WHEN '뉴욕증권거래소' THEN 'NY' END) AS code "
+            "  FROM realized_pnl GROUP BY ticker "
             ") "
-            "SELECT t.ticker, coalesce(c.code, max(a.broker_exchange_code)) "
+            "SELECT t.ticker, coalesce(c.code, max(a.broker_exchange_code), r.code) "
             "FROM all_tickers t "
             "LEFT JOIN assets a ON a.ticker = t.ticker "
             "LEFT JOIN broker_exchange_codes c ON c.ticker = t.ticker "
-            "GROUP BY t.ticker, c.code ORDER BY t.ticker"
+            "LEFT JOIN realized r ON r.ticker = t.ticker "
+            "GROUP BY t.ticker, c.code, r.code ORDER BY t.ticker"
         ),
         {"acc": account_id},
     ).all()

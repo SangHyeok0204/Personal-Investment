@@ -148,3 +148,48 @@ def test_history_links_asset_when_master_exists_and_tolerates_missing(db):
         )
     assert rows["NVDA"] == asset_id
     assert rows["QLD"] is None
+
+
+def _sold(db, account_id, ticker, exchange):
+    """판 종목 — 체결과 실현손익만 있고 assets·코드 표에는 없다."""
+    with db.begin() as conn:
+        # trade_no 가 같으면 같은 체결로 덮이니 종목마다 번호를 다르게 준다.
+        history_repo.upsert_trades(
+            conn, account_id, [_trade(ticker=ticker, trade_no=f"S-{ticker}")]
+        )
+        history_repo.upsert_realized_pnl(
+            conn, account_id,
+            [RealizedPnlRow(sell_date=date(2026, 8, 28), ticker=ticker, name=ticker,
+                            currency="USD", quantity=Decimal("1"), exchange=exchange)],
+        )
+
+
+def test_dividend_targets_take_exchange_from_realized_pnl_for_sold_tickers(db):
+    """⚠️판 종목은 탐색(최근 5일에 행이 온 코드만 인정)으로 영영 못 찾는다.
+
+    실측: SGOV 는 배당이 14건이나 있는데 코드가 안 남아, 동기화마다 '거래소를
+    못 찾음'으로 건너뛰었다. 실현손익은 거래소명을 적어 주므로 그걸 쓴다.
+    """
+    account_id = _account(db)
+    _sold(db, account_id, "SGOV", "뉴욕증권거래소")
+    _sold(db, account_id, "QCOM", "나스닥")
+    _sold(db, account_id, "ODD", "미국")  # 체결·주문처럼 거래소를 안 알려 주는 값
+
+    with db.begin() as conn:
+        targets = dict(history_repo.tickers_for_dividends(conn, account_id))
+
+    assert targets["SGOV"] == "NY"
+    assert targets["QCOM"] == "ND"
+    # 모르는 이름은 짐작하지 않는다 — 예전처럼 탐색에 맡긴다.
+    assert targets["ODD"] is None
+
+
+def test_remembered_exchange_code_wins_over_realized_pnl(db):
+    """실제로 행이 온 코드(티커별 표)가 실현손익의 거래소명보다 우선이다."""
+    account_id = _account(db)
+    _sold(db, account_id, "SOXL", "나스닥")
+    with db.begin() as conn:
+        history_repo.remember_probed_codes(conn, {"SOXL": "NY"})
+        targets = dict(history_repo.tickers_for_dividends(conn, account_id))
+
+    assert targets["SOXL"] == "NY"
