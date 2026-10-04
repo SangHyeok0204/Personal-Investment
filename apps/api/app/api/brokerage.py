@@ -163,6 +163,31 @@ def _probe(credentials, markets: list[str]) -> tuple[dict, list[AccountPreview]]
     return check, accounts
 
 
+@router.get("/price-sources")
+def get_price_sources() -> dict:
+    """시세 소스 상태 — 연동/설정 화면용. ★2026-10-04: 화면 배지가 상태와 무관하게 '미등록'으로
+    박혀 있었다(토스 키는 .env 에 있고 실제로 시세가 온다). 키는 내보내지 않는다 — 있는지만.
+
+    ⚠️여기서 토스 토큰을 새로 받지 않는다(클라이언트당 유효 토큰 1개 — 페이지를 열 때마다
+      발급하면 같은 키를 쓰는 다른 수집기를 끊는다). 순서는 `quote_cache._build_source` 와 같다.
+    """
+    from app.core import quote_cache
+
+    toss_ok = bool(credentials_store.read_env_value("TOSS_CLIENT_ID")
+                   and credentials_store.read_env_value("TOSS_CLIENT_SECRET"))
+    us_open = quote_cache.us_regular_session_open()
+    kiwoom_ok = bool(credentials_store.read_settings().get("configured"))
+    toss_rank = (1 if us_open else 2) if toss_ok else None
+    return {
+        "us_regular_session_open": us_open,
+        "sources": [
+            {"id": "toss", "configured": toss_ok, "rank": toss_rank},
+            {"id": "yahoo", "configured": True, "rank": 2 if (toss_ok and us_open) else 1},
+            {"id": "kiwoom-quote", "configured": kiwoom_ok, "rank": None},
+        ],
+    }
+
+
 @router.get("/credentials", response_model=CredentialsStatusOut)
 def get_credentials_status() -> CredentialsStatusOut:
     """현재 등록된 키의 **상태만**. 키는 나가지 않는다."""

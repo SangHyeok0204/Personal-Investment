@@ -5,7 +5,7 @@ import { AlertTriangle, Landmark, LineChart } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { PlannedList, StubCard } from "@/components/stub";
-import { getPortfolioConnections, type PortfolioConnection } from "@/lib/api";
+import { getPortfolioConnections, getPriceSources, type PortfolioConnection } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { cn } from "@/lib/utils";
@@ -27,12 +27,20 @@ const PRICE_SOURCES = [
   {
     id: "toss",
     name: "토스증권 Open API",
-    role: "국내 종목 현재가",
-    note: "보유 종목의 실시간 가격. 계좌 조회가 아니다.",
+    // ★2026-10-04: '국내 종목 현재가' 는 틀린 설명이었다 — 미국 보유·관심종목 시세에 쓴다.
+    role: "미국 종목 현재가 · 정규장 우선",
+    note: "보유·관심종목의 실시간 가격. 계좌 조회가 아니다. 미국장이 닫힌 동안은 예비(한국 데이마켓의 얇은 체결가라 현재가로 쓰지 않는다).",
     caveats: [
       "클라이언트당 유효 토큰 1개 — 같은 키를 쓰는 다른 수집기와 동시 가동 금지",
       "IP 허용목록 필요 (WTS 설정 → Open API)",
     ],
+  },
+  {
+    id: "yahoo",
+    name: "Yahoo Finance",
+    role: "미국 종목 현재가 · 장외 우선",
+    note: "키 없이 받는다. 미국장이 닫힌 동안의 기본 소스(16:00 ET 종가), 52주 범위·일봉도 여기서.",
+    caveats: [],
   },
   {
     id: "kiwoom-quote",
@@ -42,6 +50,35 @@ const PRICE_SOURCES = [
     caveats: [],
   },
 ];
+
+/** 시세 소스 배지 — 키가 있으면 '연동됨'(+ 지금 먼저 쓰는지), 없으면 '미등록'. 키움은 잔고 응답이라 '폴백'. */
+function PriceSourceChip({
+  status,
+  loading,
+}: {
+  status: { configured: boolean; rank: number | null } | undefined;
+  loading: boolean;
+}) {
+  if (loading) return <span className="shrink-0 text-[11px] font-bold text-ink-faint">확인 중…</span>;
+  if (!status) return <span className="shrink-0 text-[11px] font-bold text-ink-faint">—</span>;
+  const label = !status.configured
+    ? "미등록"
+    : status.rank === 1
+      ? "연동됨 · 지금 사용"
+      : status.rank != null
+        ? "연동됨 · 대기(예비)"
+        : "연동됨 · 폴백";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold",
+        status.configured ? "bg-status-success/10 text-status-success" : "bg-slate-100 text-ink-muted",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
 
 function StateChip({ status }: { status: string }) {
   const tone =
@@ -61,6 +98,8 @@ function StateChip({ status }: { status: string }) {
 
 export default function ConnectionsPage() {
   const { open: openConnect } = useConnectDialog();
+  // ★2026-10-04: 시세 소스 배지가 '미등록'으로 박혀 있었다 — 서버가 본 실제 상태를 쓴다.
+  const priceSources = useQuery({ queryKey: ["priceSources"], queryFn: getPriceSources, staleTime: 60_000 });
   const connections = useQuery({
     queryKey: ["portfolioConnections"],
     queryFn: getPortfolioConnections,
@@ -160,9 +199,7 @@ export default function ConnectionsPage() {
                         {s.note}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-extrabold text-ink-muted">
-                      미등록
-                    </span>
+                    <PriceSourceChip status={priceSources.data?.sources.find((p) => p.id === s.id)} loading={priceSources.isLoading} />
                   </div>
                   {s.caveats.length > 0 && (
                     <ul className="mt-2.5 space-y-1 border-t border-hairline pt-2.5">

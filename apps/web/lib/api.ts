@@ -262,6 +262,22 @@ export function getPortfolioAccounts(): Promise<PortfolioAccountList> {
   return request<PortfolioAccountList>("/api/v1/portfolio/accounts");
 }
 
+// 시세 소스 상태 — 키는 내보내지 않고 '있는지'와 지금 우선순위만(1 = 지금 먼저 쓰는 소스).
+export interface PriceSourceStatus {
+  id: "toss" | "yahoo" | "kiwoom-quote";
+  configured: boolean;
+  rank: number | null;
+}
+
+export interface PriceSources {
+  us_regular_session_open: boolean;
+  sources: PriceSourceStatus[];
+}
+
+export function getPriceSources(): Promise<PriceSources> {
+  return request<PriceSources>("/api/v1/brokerage/price-sources");
+}
+
 export function getPortfolioConnections(): Promise<PortfolioConnection[]> {
   return request<PortfolioConnection[]>("/api/v1/portfolio/connections");
 }
