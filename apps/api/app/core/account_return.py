@@ -39,15 +39,35 @@
     원화 수익률(t) = 원화 손익(t) ÷ 투입 원금(t)
     총자산(t)      = pnl_breakdown 점의 `total_value_krw` 를 그대로 쓴다 — 과거는 그날
                      `deposit_assets_krw`(모든 계좌 행이 있는 날만), 행이 없는 날은 그날
-                     마지막 스냅샷 총자산, 오늘은 /summary 총자산.
+                     마지막 스냅샷 총자산, 오늘은 /summary 총자산. 단 미국 휴장이면 마지막
+                     일별 행 값(아래 ★미국 휴장일).
   짝: 환율 제외 계좌 ↔ 지수 USD, 원화 실질 계좌 ↔ 지수 원화 환산.
-  실측(2026-10-04): 10-01 행 37,392,099 → −1,499,881(−3.86%), 오늘 38,027,894 →
-  −864,085(−2.22%). 같은 기간 키움 손익 합 +2,308,295 와의 차 ≈ 3.8M 이 환산 손실
-  (환율 1,507 → 1,343)이다.
+  실측(2026-10-04): 10-01 행 37,392,099 → −1,499,881(−3.86%). 같은 기간 키움 손익 합
+  +2,308,295 와의 차 ≈ 3.8M 이 환산 손실(환율 1,507 → 1,343)이다. 오늘(일)은 미국
+  휴장이라 10-03 행 38,444,390 → −447,590(−1.15%) — 규칙 전 live 38,027,894(−2.22%).
   ⚠️총자산을 모르는 날(행도 스냅샷도 없거나 자산 칸이 빈 날)은 원화 손익·수익률이 None
-    이다 — 앞날 값을 끌어오지 않는다. 원금을 모르면 역시 None. 기준점은 0.
+    이다 — 앞날 값을 끌어오지 않는다(예외: 아래 미국 휴장일 규칙). 원금을 모르면 역시
+    None. 기준점은 0.
   ⚠️마지막 일별 행 뒤(보통 오늘)에 들어온 입금은 총자산에는 있고 원금에는 아직 없다 —
     그만큼 원화 손익이 부풀어 보인다(행이 오면 바로잡힌다). 환율 제외 쪽은 손익에 영향 없음.
+
+★미국 휴장일엔 마지막 일별 행 그대로(`carry_closed_days`) — 2026-10-04 사용자 지정.
+  일별 행의 총자산은 **키움 정산 환율**, 오늘 live 총자산은 **지금 환율**로 환산한다. 행
+  뒤에 미국 장이 한 번도 안 열렸는데(주말·휴장) live 를 쓰면 기준 환율만 바뀐 것이 차트 끝
+  하락으로 보였다 — 실측(2026-10-04 일): 10-02 행 38,444,390(−1.15%) → 오늘 live
+  38,027,894(−2.22%), 그 −1.07%p 전부가 환율 기준 차이였다.
+    · 행이 **없는** 날 d 에서, 직전 행 날짜 r 뒤로 끝난 미국 정규장(ET 날짜 s, r < s ≤ d)이
+      없고 (d 가 마지막 점이면) 지금 정규장이 열려 있지도 않으면 → 총자산 = r 의 값.
+    · 그 외(행 뒤에 장이 열렸거나 열려 있다) → 지금처럼 live/스냅샷.
+    · 날짜 대응: 미국 ET 날짜 D 의 정규장은 키움 base_date D 행에 들어간다. 실측 — 금요일 행
+      = 토·일 행(10-02 = 10-03, 09-25 = 09-26 = 09-27), 월요일 행에서 바뀐다. 벤치마크의
+      lag 0 상관(+0.699)과도 맞다.
+    · ⚠️공휴일 파일을 두지 않는다 — 장이 열렸는지는 이미 받는 ^GSPC 일봉(봉이 있으면 연
+      날)으로 본다(`quote_cache.us_session_dates`). 예전 수집기의 휴일 파일은 외부 드라이브
+      의존이라 일부러 지웠다. ^GSPC 를 못 받으면(None) 지금처럼 live 다 — 깨지지 않는다.
+    · 시계열이 r 뒤를 덮지 못하면(일봉 첫 날 > r) 모른다 → 그날은 손대지 않는다.
+    · 환율 제외(return_ratio)는 키움 손익이라 상관없다 — 이 규칙은 원화 실질에만 쓴다.
+      /portfolio 총 평가액 타일은 그대로 live 다(pnl_breakdown 은 바꾸지 않는다).
 
 이 모듈은 DB 를 모른다 — 이미 날짜별로 합산한 값을 받아 줄을 세운다.
 """
@@ -55,7 +75,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -82,6 +102,37 @@ class Point:
 
 def _q(value: Decimal | None, step: Decimal = _MONEY) -> Decimal | None:
     return None if value is None else value.quantize(step, rounding=ROUND_HALF_UP)
+
+
+def carry_closed_days(
+    pnl_points: Sequence[pb.Point],
+    row_dates: set[date],
+    us_sessions: Sequence[date] | None,
+    session_open: bool,
+) -> list[pb.Point]:
+    """미국 장이 안 열린 행 없는 날의 `total_value_krw` 를 직전 일별 행 값으로 바꾼다(머리말).
+
+    `row_dates` 는 일별 행(모든 계좌 · 자산 칸 있음)이 있는 날, `us_sessions` 는 끝난
+    미국 정규장 날짜(ET, 오름차순) — None 이면 모른다(그대로 돌려준다). `session_open` 은
+    지금 정규장이 열려 있나 — 마지막 점(오늘)에만 쓴다.
+    """
+    if not us_sessions:
+        return list(pnl_points)
+    first_known = us_sessions[0]
+    out: list[pb.Point] = []
+    prev_row: pb.Point | None = None
+    for i, p in enumerate(pnl_points):
+        if p.date in row_dates:
+            prev_row = p
+        elif (
+            prev_row is not None
+            and prev_row.date >= first_known
+            and not any(prev_row.date < s <= p.date for s in us_sessions)
+            and not (session_open and i == len(pnl_points) - 1)
+        ):
+            p = replace(p, total_value_krw=prev_row.total_value_krw)
+        out.append(p)
+    return out
 
 
 def build(

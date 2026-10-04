@@ -1407,7 +1407,8 @@ def get_account_return(
       = 38,891,980) = +7.96%.
     ⚠️위 수익률은 키움 손익 기준이라 USD 자산의 환산 손익이 빠진다(환율 제외). 원화 실질
       (환차 포함) = (총자산 − A0 − 순외부입금 누적) ÷ 같은 원금 → krw_return_ratio.
-      실측(2026-10-04): 38,027,894 − 38,891,980 = −864,085 → −2.22%.
+      ★미국 휴장일엔 오늘 총자산 = 마지막 일별 행(키움 정산 환율) — live 환율과 섞지
+      않는다(2026-10-04 사용자 지정). 실측(10-04 일): 38,444,390 − 38,891,980 → −1.15%.
     정의·결측 규칙은 `app.core.account_return` 머리말.
     """
     start = inv.INVESTMENT_START
@@ -1456,8 +1457,10 @@ def get_account_return(
         start_assets = assets if valued_n == rows_n else None
 
     # 순외부입금 — 행이 있는 날만. 입금·출금 칸이 하나라도 비면 그날 흐름은 None(모른다).
+    # 총자산 행이 온전한 날(모든 계좌 · 자산 칸)도 같이 센다 — 미국 휴장일 이월(아래)용.
     net_flow_by_date: dict[date, Decimal | None] = {}
-    for day, dep, wd, rows_n, dep_n, wd_n in db.execute(
+    valued_row_dates: set[date] = set()
+    for day, dep, wd, rows_n, dep_n, wd_n, assets_n in db.execute(
         select(
             AccountDailyPerformance.base_date,
             func.sum(AccountDailyPerformance.deposit_krw),
@@ -1465,6 +1468,7 @@ def get_account_return(
             func.count(),
             func.count(AccountDailyPerformance.deposit_krw),
             func.count(AccountDailyPerformance.withdrawal_krw),
+            func.count(AccountDailyPerformance.deposit_assets_krw),
         )
         .where(
             AccountDailyPerformance.account_id.in_(account_ids),
@@ -1473,7 +1477,17 @@ def get_account_return(
         .group_by(AccountDailyPerformance.base_date)
     ).all():
         net_flow_by_date[day] = dep - wd if dep_n == rows_n and wd_n == rows_n else None
+        if rows_n == len(account_ids) and assets_n == rows_n:
+            valued_row_dates.add(day)
 
+    # ★미국 휴장일(마지막 행 뒤 장이 안 열렸다)엔 원화 실질 총자산 = 마지막 행 값(머리말).
+    #   ^GSPC 를 못 받으면 None → 지금처럼 live.
+    pnl_points = ar.carry_closed_days(
+        pnl_points,
+        valued_row_dates,
+        quote_cache.us_session_dates(),
+        quote_cache.us_regular_session_open(),
+    )
     points = ar.build(
         pnl_points, breakdown.unrealized_at_start_krw, start_assets, net_flow_by_date
     )

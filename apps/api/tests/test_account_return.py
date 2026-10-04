@@ -11,9 +11,13 @@
   6) 숫자가 맞물린다: 손익 = 실현 + (평가 − 시작 평가), 원금 − A0 = 흐름 누적,
      수익률 × 원금 = 손익.
   7) 원화 실질(환차 포함) = (총자산 − 원금) ÷ 원금. 기준점 0, 총자산·원금을 모르면 None.
+  8) ★2026-10-04 미국 휴장일(마지막 행 뒤 정규장이 안 열렸다)엔 원화 실질 총자산 = 마지막
+     일별 행 값. 장이 열렸거나 열려 있으면 live, ^GSPC 를 모르면 live(그대로).
 """
 import uuid
 from datetime import date, timedelta
+
+import pytest
 from decimal import Decimal
 
 from app.core import account_return as ar
@@ -26,6 +30,13 @@ from tests.test_portfolio import kiwoom  # noqa: F401 - 픽스처 재사용
 
 D = date.fromisoformat
 S = D("2026-06-01")
+
+
+@pytest.fixture(autouse=True)
+def _no_us_calendar(monkeypatch):
+    """API 테스트가 ^GSPC 를 네트워크로 받지 않게 — 기본은 '모른다'(live 그대로)."""
+    monkeypatch.setattr("app.core.quote_cache.us_session_dates", lambda now=None: None)
+    monkeypatch.setattr("app.core.quote_cache.us_regular_session_open", lambda now=None: False)
 
 
 def _pnl(values: list[Decimal | None]) -> list[pb.Point]:
@@ -185,6 +196,48 @@ def test_krw_real_unknown_stays_null():
     assert no_a0[0].krw_return_ratio is None and no_a0[1].krw_return_ratio is None
 
 
+def _krw_end(points: list[pb.Point]) -> list[Decimal | None]:
+    return [p.krw_return_ratio for p in ar.build(points, Decimal("0"), Decimal("10000"),
+                                                 {S: Decimal("0")})][1:]
+
+
+def test_us_closed_days_carry_last_row_assets():
+    """S 행 10,000(정산 환율). S+1·S+2 는 행이 없고 live 환율로 9,800·9,700 — 그 사이 미국
+    장이 안 열렸으면(마지막 끝난 장 S−3) 둘 다 S 행 값이다. 환율 제외 쪽은 그대로."""
+    pts = _with_assets([(Decimal("0"), Decimal("10000")), (Decimal("50"), Decimal("9800")),
+                        (Decimal("50"), Decimal("9700"))])
+    carried = ar.carry_closed_days(pts, {S}, [S - timedelta(days=3)], session_open=False)
+    assert [p.total_value_krw for p in carried] == [Decimal("10000")] * 3
+    assert _krw_end(carried) == [Decimal("0")] * 3
+    # 손익(환율 제외)은 건드리지 않는다.
+    assert [p.total_period_pnl_krw for p in carried] == [p.total_period_pnl_krw for p in pts]
+
+
+def test_us_session_open_or_after_row_stays_live():
+    pts = _with_assets([(Decimal("0"), Decimal("10000")), (Decimal("0"), Decimal("9800")),
+                        (Decimal("0"), Decimal("9700"))])
+    # 지금 정규장이 열려 있다 → 오늘(마지막 점)만 live, S+1 은 여전히 이월.
+    live_now = ar.carry_closed_days(pts, {S}, [S - timedelta(days=3)], session_open=True)
+    assert [p.total_value_krw for p in live_now] == [
+        Decimal("10000"), Decimal("10000"), Decimal("9700")
+    ]
+    # 행 뒤(S+1)에 장이 끝났다 → 그날부터 live.
+    after = ar.carry_closed_days(pts, {S}, [S - timedelta(days=3), S + timedelta(days=1)],
+                                 session_open=False)
+    assert [p.total_value_krw for p in after] == [p.total_value_krw for p in pts]
+    # 행이 있는 날은 언제나 행 값이다.
+    assert ar.carry_closed_days(pts, {S, S + timedelta(days=1), S + timedelta(days=2)},
+                                [S - timedelta(days=3)], session_open=False) == pts
+
+
+def test_missing_us_calendar_falls_back_to_live():
+    pts = _with_assets([(Decimal("0"), Decimal("10000")), (Decimal("0"), Decimal("9700"))])
+    assert ar.carry_closed_days(pts, {S}, None, session_open=False) == pts
+    assert ar.carry_closed_days(pts, {S}, [], session_open=False) == pts
+    # 일봉이 행 뒤부터만 있다 → 그 사이 장을 모른다 → 손대지 않는다.
+    assert ar.carry_closed_days(pts, {S}, [S + timedelta(days=5)], session_open=False) == pts
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 def test_account_return_without_accounts_is_null(client):
@@ -312,3 +365,32 @@ def test_benchmark_shows_usd_and_krw_with_latest_index_close(client, db, kiwoom,
     after = by.get((last + timedelta(days=1)).isoformat())
     if after is not None:
         assert after["benchmarks_usd"]["S&P 500"] is None
+
+
+def test_today_on_us_closed_day_uses_last_row_assets(client, db, kiwoom, monkeypatch):  # noqa: F811
+    """★2026-10-04: 마지막 행(S+3) 뒤 미국 장이 안 열렸다 → 오늘 원화 실질 총자산 = S+3 행
+    599,980. 환율 제외 수익률(키움 손익)은 live 그대로. 총 평가액(pnl-breakdown)도 live."""
+    _seed(db, kiwoom["account"].id, INVESTMENT_START - timedelta(days=400))
+    for row in db.query(AccountDailyPerformance):
+        row.deposit_krw = row.withdrawal_krw = Decimal("0")
+    db.commit()
+    live = client.get("/api/v1/portfolio/account-return").json()
+
+    monkeypatch.setattr("app.core.quote_cache.us_session_dates",
+                        lambda now=None: [INVESTMENT_START - timedelta(days=3)])
+    body = client.get("/api/v1/portfolio/account-return").json()
+    pnl = client.get("/api/v1/portfolio/pnl-breakdown").json()
+
+    invested = Decimal(body["invested_krw"])
+    assert Decimal(body["krw_pnl_since_start_krw"]) == Decimal("599980") - invested
+    assert body["return_ratio"] == live["return_ratio"]
+    assert Decimal(pnl["total_value_krw"]) != Decimal("599980")  # 타일은 live 그대로
+    by = {i["date"]: i for i in body["items"]}
+    s3 = by[(INVESTMENT_START + timedelta(days=3)).isoformat()]
+    assert body["items"][-1]["krw_return_ratio"] == s3["krw_return_ratio"]
+
+    # 지금 정규장이 열려 있으면 다시 live.
+    monkeypatch.setattr("app.core.quote_cache.us_regular_session_open", lambda now=None: True)
+    assert client.get("/api/v1/portfolio/account-return").json()["krw_return_ratio"] == (
+        live["krw_return_ratio"]
+    )

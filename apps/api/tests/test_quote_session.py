@@ -158,3 +158,31 @@ def test_yahoo_is_never_flagged() -> None:
 def test_missing_bar_date_does_not_invent_a_warning() -> None:
     """봉 날짜를 모르면 표시하지 않는다 — 없는 경고를 만들지 않는다."""
     assert is_thin_session_quote(_toss(None), et("2026-09-22T04:53")) is False
+
+
+def test_us_session_dates_from_gspc_drop_unfinished_bar(monkeypatch) -> None:
+    """★2026-10-04: 공휴일 파일 없이 ^GSPC 일봉으로 '끝난 미국 정규장' 날짜를 읽는다.
+    진행 중인 오늘 봉은 빼고, 못 받으면 None(호출한 쪽이 live 로 둔다)."""
+    from datetime import date
+    from decimal import Decimal
+
+    from app.core import quote_cache
+    from prices.history import Series
+
+    days = [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)]
+    spx = Series(symbol="^GSPC", dates=days, closes=[Decimal("1")] * 3,
+                 currency="USD", latest=Decimal("1"))
+    quote_cache.clear_cache()
+    monkeypatch.setattr(quote_cache, "fetch_history", lambda *a, **k: {"^GSPC": spx})
+    # 10-05(월) 장중 — 그날 봉은 아직 끝나지 않았다.
+    assert quote_cache.us_session_dates(et("2026-10-05T12:00")) == days[:2]
+    assert quote_cache.us_session_dates(et("2026-10-05T16:00")) == days
+
+    quote_cache.clear_cache()
+
+    def boom(*a, **k):
+        raise RuntimeError("network")
+
+    monkeypatch.setattr(quote_cache, "fetch_history", boom)
+    assert quote_cache.us_session_dates() is None
+    quote_cache.clear_cache()

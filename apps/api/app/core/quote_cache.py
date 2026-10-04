@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -306,6 +306,17 @@ def get_trading_changes(
     wanted = [s for s in dict.fromkeys(symbols) if s]
     if not wanted:
         return {}
+    series_by = _cached_history(wanted)
+    out: dict[str, dict[int, Decimal | None]] = {}
+    for symbol in wanted:
+        series = series_by.get(symbol)
+        closes = _completed_closes(series, now) if series else []
+        out[symbol] = trading_day_changes(closes)
+    return out
+
+
+def _cached_history(wanted: list[str]) -> dict[str, Series | None]:
+    """심볼별 일봉 시계열(`RANGE_TTL_SECONDS` 캐시). 못 받으면 None — 예외를 내지 않는다."""
     mono = time.monotonic()
     with _lock:
         need = [
@@ -323,14 +334,21 @@ def get_trading_changes(
         with _lock:
             for symbol in need:
                 _history_cache[symbol] = (stored, fetched.get(symbol))
+    with _lock:
+        return {s: (hit[1] if (hit := _history_cache.get(s)) else None) for s in wanted}
 
-    out: dict[str, dict[int, Decimal | None]] = {}
-    for symbol in wanted:
-        hit = _history_cache.get(symbol)
-        series = hit[1] if hit else None
-        closes = _completed_closes(series, now) if series else []
-        out[symbol] = trading_day_changes(closes)
-    return out
+
+def us_session_dates(now: datetime | None = None) -> list[date] | None:
+    """**끝난** 미국 정규장 날짜(ET) 오름차순 — ^GSPC 일봉에서 읽는다. 못 받으면 None.
+
+    ★공휴일 파일을 두지 않는다(2026-10-04) — 지수에 봉이 있으면 장이 열린 날이다.
+      진행 중인 오늘 봉은 뺀다(`us_session_finished_for`). 열려 있는지는
+      `us_regular_session_open` 이 따로 본다.
+    """
+    series = _cached_history(["^GSPC"]).get("^GSPC")
+    if series is None or not series.dates:
+        return None
+    return [d for d in series.dates if us_session_finished_for(d, now)]
 
 
 def clear_cache() -> None:
