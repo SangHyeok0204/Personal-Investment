@@ -164,8 +164,13 @@ def _apply(engine, rows, got: dict, today: date, state: dict) -> None:
 
 
 def _mark_failed(engine, rows, today: date, filled=()) -> None:
-    """다가오는 발표 중 매출 컨센을 못 받은 것만 '수집 실패'(이번 회차에 채운 것 · 이미 값 있는 것은 그대로)."""
-    ids = [r.id for r in rows if r.report_date >= today and r.id not in filled]
+    """다가오는 발표 중 매출 컨센을 못 받은 것만 '수집 실패'(이번 회차에 채운 것 · 이미 값 있는 것은 그대로).
+
+    ⚠️크롤 범위(`INVESTING_AHEAD`) 밖의 먼 발표는 시도조차 안 했다 — '수집 실패'가 아니라 '수집 전'으로 둔다
+      (실측 2026-10-04: NVDA·WMT·ADI 등 36~51일 뒤 발표 6건이 실패로 떠 있었다).
+    """
+    horizon = today + timedelta(days=INVESTING_AHEAD)
+    ids = [r.id for r in rows if today <= r.report_date <= horizon and r.id not in filled]
     if ids:
         with engine.begin() as c:
             c.execute(text("UPDATE earnings_events SET revenue_forecast_status = 'failed' "

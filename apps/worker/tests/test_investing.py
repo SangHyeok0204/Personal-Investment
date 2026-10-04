@@ -78,6 +78,23 @@ def test_blocked_marks_upcoming_failed(rdb):
     assert st == {"BE": "failed", "NVDA": None} and src == "blocked"     # 다가오는 발표만 "수집 실패"
 
 
+def test_far_events_beyond_crawl_horizon_are_not_marked_failed(rdb):
+    """크롤 범위(35일) 밖 발표는 시도조차 안 했다 — 실패가 아니라 '수집 전'(실측 2026-10-04 NVDA·WMT 등)."""
+    with rdb.begin() as c:
+        c.execute(text("INSERT INTO watchlist_items (id, ticker) VALUES (:i, 'WMT')"), {"i": uuid.uuid4()})
+        c.execute(text("INSERT INTO earnings_events (ticker, quarter, report_date, eps_forecast, source) "
+                       "VALUES ('WMT', '2026Q3', '2026-11-10', 0.6, 'nasdaq')"))
+
+    def crawl(days, on_day=None):
+        raise RuntimeError("write EINVAL")
+
+    with pytest.raises(RuntimeError):
+        er.collect(rdb, date(2026, 9, 27), crawl=crawl)
+    with rdb.begin() as c:
+        st = dict(c.execute(text("SELECT ticker, revenue_forecast_status FROM earnings_events")).all())
+    assert st["BE"] == "failed" and st["WMT"] is None
+
+
 def test_partial_crawl_keeps_saved_days_and_fails_only_unfilled(rdb):
     """⚠️2026-10-04 — 드라이버가 죽으면 모은 날짜가 다 날아갔다. 이제 받은 날은 그때그때 저장된다."""
     today = date(2026, 9, 27)
