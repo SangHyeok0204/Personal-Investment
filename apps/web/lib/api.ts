@@ -503,6 +503,9 @@ export interface AccountReturnPoint {
   /** 그날 순외부입금(입금 − 출금). 흐름이 없으면 null — 차트 표식용. */
   net_flow_krw: string | null;
   return_ratio: string | null;
+  /** 원화 실질(환차 포함) = 총자산 − 투입 원금. 총자산을 모르는 날은 null. */
+  krw_pnl_since_start_krw: string | null;
+  krw_return_ratio: string | null;
 }
 
 export interface AccountReturn {
@@ -515,7 +518,11 @@ export interface AccountReturn {
   pnl_since_start_krw: string | null;
   invested_krw: string | null;
   cum_net_flow_krw: string | null;
+  /** 환율 제외 — 키움 손익(USD 손익 × 그때 환율) 기준. 보유 USD 의 환산 손익이 빠진다. */
   return_ratio: string | null;
+  /** 원화 실질(환차 포함) — (총자산 − A0 − 순외부입금 누적) ÷ 같은 원금. */
+  krw_pnl_since_start_krw: string | null;
+  krw_return_ratio: string | null;
   return_date: string | null;
   items: AccountReturnPoint[];
 }
@@ -991,13 +998,18 @@ export interface BenchmarkIndexSinceStart {
 export interface BenchmarkSinceStart {
   start: string;
   base_date: string;
+  /** 환율 제외(키움 손익) — 지수 USD 와 짝. */
   account_return: string | null;
   account_date: string | null;
+  /** 원화 실질(환차 포함, 총자산) — 지수 원화 환산과 짝. */
+  account_return_krw: string | null;
+  account_krw_date: string | null;
   indices: BenchmarkIndexSinceStart[];
   /** 기준점(시작일 − 1일) = 100. */
   series: {
     date: string;
     account: string | null;
+    account_krw: string | null;
     benchmarks_usd: Record<string, string | null>;
     benchmarks_krw: Record<string, string | null>;
   }[];

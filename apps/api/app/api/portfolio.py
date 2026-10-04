@@ -1405,6 +1405,9 @@ def get_account_return(
         차이가 그날 손익과 맞는다.
       실측(2026-10-04): 4,550,502 − 1,456,492 = 3,094,010 ÷ (29,176,951 + 9,715,029
       = 38,891,980) = +7.96%.
+    ⚠️위 수익률은 키움 손익 기준이라 USD 자산의 환산 손익이 빠진다(환율 제외). 원화 실질
+      (환차 포함) = (총자산 − A0 − 순외부입금 누적) ÷ 같은 원금 → krw_return_ratio.
+      실측(2026-10-04): 38,027,894 − 38,891,980 = −864,085 → −2.22%.
     정의·결측 규칙은 `app.core.account_return` 머리말.
     """
     start = inv.INVESTMENT_START
@@ -1415,6 +1418,7 @@ def get_account_return(
             start=start, base_date=base_date, as_of=None, start_assets_krw=None,
             unrealized_at_start_krw=None, flows_until=None, pnl_since_start_krw=None,
             invested_krw=None, cum_net_flow_krw=None, return_ratio=None,
+            krw_pnl_since_start_krw=None, krw_return_ratio=None,
             return_date=None, items=[],
         )
 
@@ -1487,6 +1491,8 @@ def get_account_return(
         invested_krw=last.invested_krw if last else None,
         cum_net_flow_krw=last.cum_net_flow_krw if last else None,
         return_ratio=last.return_ratio if last else None,
+        krw_pnl_since_start_krw=last.krw_pnl_since_start_krw if last else None,
+        krw_return_ratio=last.krw_return_ratio if last else None,
         return_date=known[-1].date if known else None,
         items=[
             AccountReturnPointOut(
@@ -1496,6 +1502,8 @@ def get_account_return(
                 cum_net_flow_krw=p.cum_net_flow_krw,
                 net_flow_krw=p.net_flow_krw,
                 return_ratio=p.return_ratio,
+                krw_pnl_since_start_krw=p.krw_pnl_since_start_krw,
+                krw_return_ratio=p.krw_return_ratio,
             )
             for p in points
         ],
@@ -2428,6 +2436,7 @@ def _benchmark_since_start(
     """투자 시작일 이후 — 내 계좌 수익률(정본) vs 지수 USD · 원화. ★2026-10-04 사용자 지정.
 
     · 계좌는 `/account-return` 을 그대로 쓴다(끝 = 그쪽 마지막 점, 보통 오늘 live).
+      두 기준을 같이 낸다 — 환율 제외(키움 손익) ↔ 지수 USD, 원화 실질(총자산) ↔ 지수 원화.
     · 지수는 **USD 가 먼저** — 지수 자체의 움직임. 원화 환산은 그 옆에 '환율 효과 포함'.
     · 지수의 끝은 **그 지수의 마지막 종가**다. ⚠️예전에는 계좌 마지막 일별 행(10/01)에
       묶여 지수 최근 종가(10/02)가 빠졌다. 원화 환산의 끝 환율도 그 종가일 이하 마지막 값.
@@ -2474,6 +2483,7 @@ def _benchmark_since_start(
         )
 
     account_by_date = {i.date: i.return_ratio for i in acct.items}
+    account_krw_by_date = {i.date: i.krw_return_ratio for i in acct.items}
     last_day = max(
         [d for d in account_by_date] + [i.end_date for i in indices if i.end_date],
         default=None,
@@ -2500,17 +2510,21 @@ def _benchmark_since_start(
         series_out.append(
             BenchmarkSinceStartPointOut(
                 date=day, account=index100(account_by_date.get(day)),
+                account_krw=index100(account_krw_by_date.get(day)),
                 benchmarks_usd=usd, benchmarks_krw=krw,
             )
         )
         day += timedelta(days=1)
 
     known = [i for i in acct.items if i.return_ratio is not None]
+    known_krw = [i for i in acct.items if i.krw_return_ratio is not None]
     return BenchmarkSinceStartOut(
         start=acct.start,
         base_date=base,
         account_return=known[-1].return_ratio if known else None,
         account_date=known[-1].date if known else None,
+        account_return_krw=known_krw[-1].krw_return_ratio if known_krw else None,
+        account_krw_date=known_krw[-1].date if known_krw else None,
         indices=indices,
         series=series_out,
     )

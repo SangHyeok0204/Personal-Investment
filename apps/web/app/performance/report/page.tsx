@@ -125,9 +125,10 @@ export default function ReportPage() {
             value={
               acctPoint?.return_ratio == null ? null : formatPercentString(acctPoint.return_ratio)
             }
+            // 보조: 원화 실질(환차 포함, 총자산 − 원금). 위 값은 환율 제외(키움 손익).
             hint={
               acctPoint
-                ? `${account.data?.start.slice(5)}~${acctPoint.date.slice(5)} 누적 · 참고 TWR(기간) ${formatPercentString(data?.twr)}`
+                ? `${acctPoint.krw_return_ratio != null ? `원화 실질 ${formatPercentString(acctPoint.krw_return_ratio)} · ` : ""}~${acctPoint.date.slice(5)} · 참고 TWR ${formatPercentString(data?.twr)}`
                 : "시작일 이후 손익 ÷ 투입 원금"
             }
             actionHint="눌러서 벤치마크 대비 보기"

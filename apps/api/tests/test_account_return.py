@@ -10,6 +10,7 @@
   5) 오늘 점은 /pnl-breakdown 의 live 점(실현 + 키움 실제 평가)과 같은 손익을 쓴다.
   6) 숫자가 맞물린다: 손익 = 실현 + (평가 − 시작 평가), 원금 − A0 = 흐름 누적,
      수익률 × 원금 = 손익.
+  7) 원화 실질(환차 포함) = (총자산 − 원금) ÷ 원금. 기준점 0, 총자산·원금을 모르면 None.
 """
 import uuid
 from datetime import date, timedelta
@@ -137,6 +138,53 @@ def test_numbers_reconcile_on_every_point():
     assert points[-1].pnl_since_start_krw == Decimal("110")
 
 
+def _with_assets(values: list[tuple[Decimal | None, Decimal | None]]) -> list[pb.Point]:
+    """(총기간 손익, 총자산) 짝으로 만든 pnl_breakdown 점."""
+    return [
+        pb.Point(date=S + timedelta(days=i), realized_cum_krw=Decimal("0"),
+                 unrealized_krw=None, total_period_pnl_krw=pnl, total_value_krw=assets)
+        for i, (pnl, assets) in enumerate(values)
+    ]
+
+
+def test_krw_real_return_uses_total_assets_minus_invested():
+    """키움 손익은 +100(+1%)인데 환산 손실로 총자산은 9,700 — 원화 실질은 −3%.
+    입금 5,000 날: 총자산 14,800 − 원금 15,000 = −200 → −1.3333%."""
+    points = ar.build(
+        _with_assets([(Decimal("100"), Decimal("9700")), (Decimal("100"), Decimal("14800"))]),
+        Decimal("0"), Decimal("10000"),
+        {S: Decimal("0"), S + timedelta(days=1): Decimal("5000")},
+    )
+    base, d0, d1 = points
+    assert base.krw_pnl_since_start_krw == Decimal("0")
+    assert base.krw_return_ratio == Decimal("0")
+    assert d0.return_ratio == Decimal("0.01")  # 환율 제외는 그대로
+    assert d0.krw_pnl_since_start_krw == Decimal("-300")
+    assert d0.krw_return_ratio == Decimal("-0.03")
+    assert d1.krw_pnl_since_start_krw == Decimal("-200")
+    assert d1.krw_return_ratio == Decimal("-0.013333")
+
+
+def test_krw_real_unknown_stays_null():
+    points = ar.build(
+        _with_assets([(Decimal("100"), None), (Decimal("100"), Decimal("10100")),
+                      (Decimal("100"), Decimal("10100"))]),
+        Decimal("0"), Decimal("10000"),
+        # S+2 흐름 칸이 비었다 → 원금을 모른다.
+        {S: Decimal("0"), S + timedelta(days=1): Decimal("0"), S + timedelta(days=2): None},
+    )
+    _, d0, d1, d2 = points
+    # 총자산을 모르면 None — 0 으로 읽어 −100% 가 되지 않는다.
+    assert d0.krw_pnl_since_start_krw is None and d0.krw_return_ratio is None
+    assert d1.krw_return_ratio == Decimal("0.01")
+    # 원금을 모르면 None.
+    assert d2.krw_pnl_since_start_krw is None and d2.krw_return_ratio is None
+    # A0 를 모르면 기준점부터 None.
+    no_a0 = ar.build(_with_assets([(Decimal("1"), Decimal("1"))]), Decimal("0"), None,
+                     {S: Decimal("0")})
+    assert no_a0[0].krw_return_ratio is None and no_a0[1].krw_return_ratio is None
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 def test_account_return_without_accounts_is_null(client):
@@ -181,6 +229,13 @@ def test_today_point_matches_live_values(client, db, kiwoom):  # noqa: F811
     last = body["items"][-1]
     assert last["date"] == pnl["items"][-1]["date"] == body["return_date"]
     assert last["return_ratio"] == body["return_ratio"]
+    # 원화 실질 = (오늘 총자산(pnl-breakdown live) − 원금) ÷ 원금.
+    expected_krw = Decimal(pnl["total_value_krw"]) - Decimal("579800")
+    assert Decimal(body["krw_pnl_since_start_krw"]) == expected_krw
+    assert Decimal(body["krw_return_ratio"]) == (expected_krw / Decimal("579800")).quantize(
+        Decimal("0.000001")
+    )
+    assert last["krw_return_ratio"] == body["krw_return_ratio"]
 
     by = {i["date"]: i for i in body["items"]}
     day = lambda n: by[(INVESTMENT_START + timedelta(days=n)).isoformat()]  # noqa: E731
@@ -195,6 +250,9 @@ def test_today_point_matches_live_values(client, db, kiwoom):  # noqa: F811
     assert Decimal(day(2)["pnl_since_start_krw"]) == Decimal("50")
     assert Decimal(day(2)["return_ratio"]) > 0
     assert Decimal(day(3)["invested_krw"]) == Decimal("579800")
+    # S+3 행 총자산 599,980 − 원금 579,800 = 20,180.
+    assert Decimal(day(3)["krw_pnl_since_start_krw"]) == Decimal("20180")
+    assert Decimal(base["krw_return_ratio"]) == 0
 
 
 # ── 벤치마크(투자 시작일 이후) ────────────────────────────────────────────────
@@ -237,11 +295,15 @@ def test_benchmark_shows_usd_and_krw_with_latest_index_close(client, db, kiwoom,
     assert acct["return_ratio"] is not None
     assert ss["account_return"] == acct["return_ratio"]
     assert ss["account_date"] == acct["return_date"] == acct["items"][-1]["date"]
+    # 원화 실질(환차 포함)도 같은 출처 — 지수 원화 환산과 짝.
+    assert ss["account_return_krw"] == acct["krw_return_ratio"]
+    assert ss["account_krw_date"] == acct["items"][-1]["date"]
 
     by = {p["date"]: p for p in ss["series"]}
     first = ss["series"][0]
     assert first["date"] == ss["base_date"]
     assert Decimal(first["account"]) == Decimal("100")
+    assert Decimal(first["account_krw"]) == Decimal("100")
     assert Decimal(first["benchmarks_usd"]["S&P 500"]) == Decimal("100")
     end = by[last.isoformat()]
     assert Decimal(end["benchmarks_usd"]["S&P 500"]) == Decimal("110")

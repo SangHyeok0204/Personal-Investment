@@ -23,7 +23,7 @@ import {
   getPerformance,
   type DailyPerformancePoint,
 } from "@/lib/api";
-import { formatKrwSigned, formatKrwString } from "@/lib/format";
+import { formatKrwCompactString, formatKrwSigned, formatKrwString } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // 수익률 추이.
@@ -163,11 +163,16 @@ export default function ReturnsPage() {
           <StatTile
             label={`내 계좌 수익률${acct ? ` (${acct.start.slice(5)}~)` : ""}`}
             value={accountPct}
-            hint={
+            // ★2026-10-04 "둘 다 표시": 위 값은 환율 제외(키움 손익). 원화 실질(환차 포함,
+            //   총자산 − 원금)을 보조로 같이 적는다.
+            hint={[
+              acct?.krw_return_ratio != null ? `원화 실질 ${pctOf(acct.krw_return_ratio)}` : null,
               acct?.pnl_since_start_krw != null && acct.invested_krw != null
-                ? `${formatKrwSigned(acct.pnl_since_start_krw)} ÷ 원금 ${formatKrwString(acct.invested_krw)}`
-                : "시작일 이후 손익 ÷ 투입 원금"
-            }
+                ? `${Number(acct.pnl_since_start_krw) > 0 ? "+" : ""}${formatKrwCompactString(acct.pnl_since_start_krw)} ÷ ${formatKrwCompactString(acct.invested_krw)}`
+                : "시작일 이후 손익 ÷ 투입 원금",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             accent="auto"
             loading={account.isLoading}
           />
@@ -272,7 +277,7 @@ export default function ReturnsPage() {
                   }))}
                   tooltipFormat={(p) => {
                     const row = returnPoints.find((r) => r.date === p.date);
-                    return `${p.value == null ? "—" : `${p.value > 0 ? "+" : ""}${p.value.toFixed(2)}%`} · 손익 ${formatKrwSigned(row?.pnl_since_start_krw)} ÷ 원금 ${formatKrwString(row?.invested_krw)}`;
+                    return `${p.value == null ? "—" : `${p.value > 0 ? "+" : ""}${p.value.toFixed(2)}%`} · 손익 ${formatKrwSigned(row?.pnl_since_start_krw)} ÷ 원금 ${formatKrwString(row?.invested_krw)} · 원화 실질 ${pctOf(row?.krw_return_ratio) ?? "—"}`;
                   }}
                 />
               ) : (

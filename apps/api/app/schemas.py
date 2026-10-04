@@ -406,6 +406,9 @@ class AccountReturnPointOut(BaseModel):
     # 그날 순외부입금(입금 − 출금). 흐름이 없거나 모르면 None — 차트 표식용.
     net_flow_krw: Decimal | None
     return_ratio: Decimal | None
+    # 원화 실질(환차 포함) = 총자산 − 투입 원금. 총자산을 모르는 날은 None.
+    krw_pnl_since_start_krw: Decimal | None
+    krw_return_ratio: Decimal | None
 
 
 class AccountReturnOut(BaseModel):
@@ -416,6 +419,8 @@ class AccountReturnOut(BaseModel):
       투입 원금      = start_assets_krw(A0) + 시작일부터의 순외부입금 누적
     정의·결측 규칙은 `app.core.account_return` 머리말. 맨 앞 점은 기준점(시작일 − 1일, 0).
     아래 지금 값(pnl_since_start_krw …)은 시계열 마지막 점(오늘, live)과 같다.
+    ⚠️return_ratio 는 키움 손익 기준이라 보유 USD 의 환산 손익이 빠진다(환율 제외).
+      krw_return_ratio 는 총자산 기준 원화 실질(환차 포함)이다 — 분모는 같다.
     """
 
     start: date
@@ -429,6 +434,8 @@ class AccountReturnOut(BaseModel):
     invested_krw: Decimal | None
     cum_net_flow_krw: Decimal | None
     return_ratio: Decimal | None
+    krw_pnl_since_start_krw: Decimal | None
+    krw_return_ratio: Decimal | None
     # 수익률을 아는 마지막 날(보통 오늘).
     return_date: date | None
     items: list[AccountReturnPointOut]
@@ -1041,6 +1048,8 @@ class BenchmarkSinceStartPointOut(BaseModel):
 
     date: date
     account: Decimal | None
+    # 원화 실질(환차 포함) 계좌 — 지수 원화 환산과 짝.
+    account_krw: Decimal | None
     benchmarks_usd: dict[str, Decimal | None]
     benchmarks_krw: dict[str, Decimal | None]
 
@@ -1050,8 +1059,12 @@ class BenchmarkSinceStartOut(BaseModel):
 
     start: date
     base_date: date
+    # 환율 제외(키움 손익) — 지수 USD 와 짝.
     account_return: Decimal | None
     account_date: date | None
+    # 원화 실질(환차 포함, 총자산 기준) — 지수 원화 환산과 짝.
+    account_return_krw: Decimal | None
+    account_krw_date: date | None
     indices: list[BenchmarkIndexSinceStartOut]
     series: list[BenchmarkSinceStartPointOut]
 

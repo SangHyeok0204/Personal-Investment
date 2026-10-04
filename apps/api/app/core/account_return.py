@@ -32,6 +32,23 @@
     시작일 앞에 행이 **하나도** 없으면 그때 계좌에 돈이 없었던 것이므로 0 이다(의도한 0).
   · 원금이 0 이하이면 나눌 수 없다 — None.
 
+★원화 실질(환차 포함) — 2026-10-04 사용자 지정("둘 다 표시"). 위 수익률은 키움 손익
+  (USD 손익 × 그때 환율)에서 나오므로 **보유 USD 자산의 환산 손실·이익이 빠진다**(환율
+  제외). 원화로 실제 얼마가 됐는지는 총자산으로 따로 잰다 — 분모는 같다:
+    원화 손익(t)   = 총자산(t) − A0 − 순외부입금 누적(t)
+    원화 수익률(t) = 원화 손익(t) ÷ 투입 원금(t)
+    총자산(t)      = pnl_breakdown 점의 `total_value_krw` 를 그대로 쓴다 — 과거는 그날
+                     `deposit_assets_krw`(모든 계좌 행이 있는 날만), 행이 없는 날은 그날
+                     마지막 스냅샷 총자산, 오늘은 /summary 총자산.
+  짝: 환율 제외 계좌 ↔ 지수 USD, 원화 실질 계좌 ↔ 지수 원화 환산.
+  실측(2026-10-04): 10-01 행 37,392,099 → −1,499,881(−3.86%), 오늘 38,027,894 →
+  −864,085(−2.22%). 같은 기간 키움 손익 합 +2,308,295 와의 차 ≈ 3.8M 이 환산 손실
+  (환율 1,507 → 1,343)이다.
+  ⚠️총자산을 모르는 날(행도 스냅샷도 없거나 자산 칸이 빈 날)은 원화 손익·수익률이 None
+    이다 — 앞날 값을 끌어오지 않는다. 원금을 모르면 역시 None. 기준점은 0.
+  ⚠️마지막 일별 행 뒤(보통 오늘)에 들어온 입금은 총자산에는 있고 원금에는 아직 없다 —
+    그만큼 원화 손익이 부풀어 보인다(행이 오면 바로잡힌다). 환율 제외 쪽은 손익에 영향 없음.
+
 이 모듈은 DB 를 모른다 — 이미 날짜별로 합산한 값을 받아 줄을 세운다.
 """
 
@@ -58,6 +75,9 @@ class Point:
     # 그날 순외부입금(차트 표식용). 행이 없거나 흐름이 없으면 None — '흐름 0' 과 같다.
     net_flow_krw: Decimal | None
     return_ratio: Decimal | None
+    # 원화 실질(환차 포함) — 총자산 − A0 − 순외부입금 누적. 정의는 머리말.
+    krw_pnl_since_start_krw: Decimal | None
+    krw_return_ratio: Decimal | None
 
 
 def _q(value: Decimal | None, step: Decimal = _MONEY) -> Decimal | None:
@@ -73,6 +93,7 @@ def build(
     """`pnl_points`(pnl_breakdown.build_series 결과, 시작일부터 달력 하루마다) 위에
     수익률 시계열을 얹는다. 맨 앞에 기준점(시작일 − 1일, 수익률 0)을 붙인다.
 
+    원화 실질 수익률의 총자산은 각 점의 `total_value_krw` 다(머리말).
     `net_flow_by_date` 는 일별 행이 있는 날의 순외부입금이다. 값이 None 이면 그날
     행은 있는데 흐름 칸이 비어 있다(모른다). 키가 없으면 그날 행이 없다.
     """
@@ -87,6 +108,8 @@ def build(
         cum_net_flow_krw=_ZERO.quantize(_MONEY),
         net_flow_krw=None,
         return_ratio=_ZERO.quantize(_RATIO) if start_assets else None,
+        krw_pnl_since_start_krw=_ZERO.quantize(_MONEY),
+        krw_return_ratio=_ZERO.quantize(_RATIO) if start_assets else None,
     )
     out = [baseline]
     cum: Decimal | None = _ZERO
@@ -108,6 +131,17 @@ def build(
             if pnl is not None and invested is not None and invested > 0
             else None
         )
+        # 원화 실질 — 그날 총자산(pnl_breakdown 의 total_value_krw)에서 원금을 뺀다.
+        krw_pnl = (
+            None
+            if p.total_value_krw is None or invested is None
+            else p.total_value_krw - invested
+        )
+        krw_ratio = (
+            krw_pnl / invested
+            if krw_pnl is not None and invested is not None and invested > 0
+            else None
+        )
         out.append(
             Point(
                 date=p.date,
@@ -116,6 +150,8 @@ def build(
                 cum_net_flow_krw=_q(cum),
                 net_flow_krw=_q(flow) if flow else None,
                 return_ratio=_q(ratio, _RATIO),
+                krw_pnl_since_start_krw=_q(krw_pnl),
+                krw_return_ratio=_q(krw_ratio, _RATIO),
             )
         )
     return out

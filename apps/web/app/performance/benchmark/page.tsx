@@ -48,6 +48,11 @@ import { cn } from "@/lib/utils";
 //     환율 변동도 같이 적는다. 끝은 **그 지수의 마지막 종가**이고 기준일을 적는다.
 //   · 월별 초과수익 막대·기간별 표는 연쇄 수익률이라 '참고: 시간가중(TWR)'으로 남긴다.
 //   ⚠️원화 −9% 대는 계산이 맞다 — 같은 구간 환율이 −11% 빠졌다(키움 환율도 같은 방향).
+//
+// ★2026-10-04 사용자 지정("둘 다 표시"): 내 계좌도 두 기준을 같이 보이고 지수와 짝짓는다.
+//   · 내 계좌 (환율 제외) = 키움 손익(USD 손익 × 그때 환율) 기준 ↔ S&P 500 (USD).
+//   · 내 계좌 원화 실질 (환차 포함) = 총자산 − 투입 원금 ↔ S&P 500 원화 환산.
+//   같은 기준끼리만 비교해야 환율이 실력처럼(또는 불운처럼) 섞이지 않는다.
 
 /** 표 헤더용 짧은 이름. 이름마다 따로 정한다 — 길이로 자르면 서로 겹친다. */
 const SHORT_NAME: Record<string, string> = {
@@ -157,11 +162,13 @@ export default function BenchmarkPage() {
     if (!ss || ss.series.length === 0) return null;
     const num = (v: string | null | undefined) => (v == null ? null : Number(v));
     const series: CompareSeries[] = [
-      { name: "내 계좌", emphasis: true, values: ss.series.map((p) => num(p.account)) },
+      { name: "내 계좌 (환율 제외)", emphasis: true, values: ss.series.map((p) => num(p.account)) },
       ...ss.indices.flatMap((i) => [
         { name: `${i.name} (USD)`, values: ss.series.map((p) => num(p.benchmarks_usd[i.name])) },
         { name: `${i.name} (원화)`, values: ss.series.map((p) => num(p.benchmarks_krw[i.name])) },
       ]),
+      // 원화 실질 계좌는 맨 뒤 — 색(연갈색)이 계좌 계열로 읽히고 지수 색 순서가 그대로다.
+      { name: "내 계좌 (원화 실질)", values: ss.series.map((p) => num(p.account_krw)) },
     ];
     return { dates: ss.series.map((p) => p.date), series };
   }, [ss]);
@@ -172,14 +179,16 @@ export default function BenchmarkPage() {
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="일별 계좌 수익률" />}
 
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+        {/* 짝: (환율 제외 계좌 · S&P USD) (원화 실질 계좌 · S&P 원화) · 환율. 좁은 화면에서도
+            두 칸씩 한 줄이라 짝이 그대로 보인다. */}
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-5">
           <StatTile
-            label="내 계좌 수익률"
+            label="내 계좌 (환율 제외)"
             value={ss ? pctOrNull(ss.account_return) : null}
             hint={
               ss?.account_date
-                ? `${ss.start} ~ ${ss.account_date} · 손익 ÷ 투입 원금`
-                : "시작일 이후 손익 ÷ 투입 원금"
+                ? `키움 손익 · USD 와 짝 · ~${ss.account_date.slice(5)}`
+                : "키움 손익 · USD 와 짝"
             }
             actionHint="눌러서 기간별 보기(참고 TWR)"
             onClick={() => setPeriodsOpen(true)}
@@ -191,8 +200,19 @@ export default function BenchmarkPage() {
             value={main ? pctOrNull(main.return_usd) : null}
             hint={
               main?.end_date
-                ? `지수 자체 · ${main.base_date} → ${main.end_date} 종가`
+                ? `지수 자체 · ${main.base_date?.slice(5)} → ${main.end_date.slice(5)} 종가`
                 : "지수 자체의 움직임"
+            }
+            accent="auto"
+            loading={benchmark.isLoading}
+          />
+          <StatTile
+            label="내 계좌 원화 실질 (환차 포함)"
+            value={ss ? pctOrNull(ss.account_return_krw) : null}
+            hint={
+              ss?.account_krw_date
+                ? `총자산 · 원화 환산과 짝 · ~${ss.account_krw_date.slice(5)}`
+                : "총자산 · 원화 환산과 짝"
             }
             accent="auto"
             loading={benchmark.isLoading}
@@ -209,7 +229,7 @@ export default function BenchmarkPage() {
             value={main ? pctOrNull(main.fx_change) : null}
             hint={
               main?.fx_base && main.fx_end
-                ? `${Number(main.fx_base).toFixed(2)} → ${Number(main.fx_end).toFixed(2)} (${main.fx_end_date})`
+                ? `${Number(main.fx_base).toFixed(2)} → ${Number(main.fx_end).toFixed(2)} (${main.fx_end_date?.slice(5)})`
                 : "원화 환산의 차이"
             }
             accent="auto"

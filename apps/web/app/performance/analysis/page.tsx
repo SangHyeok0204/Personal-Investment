@@ -137,11 +137,15 @@ export default function PerformanceAnalysisPage() {
           <StatTile
             label="내 계좌 수익률"
             value={acct?.return_ratio == null ? null : pct(acct.return_ratio)}
-            hint={
+            // 보조: 원화 실질(환차 포함, 총자산 − 원금). 위 값은 환율 제외(키움 손익).
+            hint={[
+              acct?.krw_return_ratio != null ? `원화 실질 ${pct(acct.krw_return_ratio)}` : null,
               acct?.return_date
-                ? `${acct.start.slice(5)}~${acct.return_date.slice(5)} · 손익 ÷ 원금`
-                : "시작일 이후 손익 ÷ 투입 원금"
-            }
+                ? `~${acct.return_date.slice(5)}`
+                : "시작일 이후 손익 ÷ 투입 원금",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             accent="auto"
             loading={account.isLoading}
           />
