@@ -303,11 +303,11 @@ def filings_coverage(db: Session) -> dict:
 
 
 def _valuechain_labels(db: Session, tickers: list[str]) -> dict[str, str]:
-    """티커 → "섹터코드·주 소속 분류코드"(예: bio·B-1-2). `storage/valuechain/*.ttl`
+    """티커 → "섹터 이름 › 주 소속 분류 이름"(예: 디지털·컴퓨팅 › 로직 반도체). `storage/valuechain/*.ttl`
     전 섹터를 로드해 회사 티커로 맞춘다(`api/valuechain.py` 의 held/watch 판정과 같은 방식) —
     보유 종목은 국가까지 맞추고, 관심종목처럼 국가를 모르면 티커만으로 맞춘다.
     ★여러 섹터에 속하면 테마 라벨 먼저, 분류(generated/) 라벨 다음으로 " / " 로 최대 2개
-      (예: bio·A-1 / tx-healthcare·H01)."""
+      (예: 바이오 › … / 헬스케어 › …)."""
     ticker_set = {t.upper() for t in tickers}
     if not ticker_set:
         return {}
@@ -327,7 +327,10 @@ def _valuechain_labels(db: Session, tickers: list[str]) -> dict[str, str]:
                 continue
             t = co.ticker.upper()
             if t in ticker_set:
-                candidates[t].append((co.country, f"{s.code}·{m.primary}", s.kind == "taxonomy"))
+                cat = s.categories.get(m.primary)
+                # ★화면에는 이름을 보인다 — 코드(tx-digital·T01)는 사람이 못 읽는다(2026-10-05 점검).
+                candidates[t].append((co.country, f"{s.name} › {cat.name if cat else m.primary}",
+                                      s.kind == "taxonomy"))
 
     out: dict[str, str] = {}
     for t, opts in candidates.items():
@@ -335,6 +338,10 @@ def _valuechain_labels(db: Session, tickers: list[str]) -> dict[str, str]:
         matched = [o for o in opts if o[0] == want] if want else []
         picked = sorted(matched or opts, key=lambda o: o[2])      # 안정 정렬: 테마 → 분류, 섹터 순서 유지
         out[t] = " / ".join(list(dict.fromkeys(label for _, label, _ in picked))[:2])
+    # 분류에 없는 ETF 는 사용자가 지정한 L1 만 있다(`vc.ETF_L1_OVERRIDES`) — 시장 리서치 표와 같은 L1 을 보인다.
+    for t, (l1, _) in vc.ticker_l1_map().items():
+        if t in ticker_set and t not in out:
+            out[t] = f"{l1} (ETF 지정)"
     return out
 
 

@@ -161,10 +161,10 @@ def test_stocks_coverage(api, db):
     assert rows["NVDA"]["cells"][0] == 1  # 실적 이벤트
     assert rows["NVDA"]["cells"][2] == 1  # Form4 거래
     # storage/valuechain 실데이터 — 테마(bio) 먼저, 분류(generated/tx-digital) 다음
-    assert rows["NVDA"]["cells"][-1] == "bio·A-2 / tx-digital·T01"
+    assert rows["NVDA"]["cells"][-1] == "바이오 › 파운데이션 모델 / 디지털·컴퓨팅 › 반도체 칩제품"
     assert rows["NVDA"]["link"] == "/research/earnings"  # 실적 이벤트가 있다
     # 13D/G: Form4 거래가 없어 CIK 를 모른다. 밸류체인: 분류 섹터에만 있다
-    assert rows["AMD"]["cells"] == [0, 0, 0, 0, None, "tx-digital·T01"]
+    assert rows["AMD"]["cells"] == [0, 0, 0, 0, None, "디지털·컴퓨팅 › 반도체 칩제품"]
     assert rows["AMD"]["link"] == "/research/filings"  # 실적 이벤트가 없다
 
 
@@ -198,7 +198,7 @@ def test_stocks_coverage_valuechain_column(api, db, monkeypatch, tmp_path):
     d = r.json()
     assert d["table"]["columns"] == ["실적 이벤트", "워치포인트", "Form4 거래", "보유 구루", "13D/G", "밸류체인"]
     rows = {row["key"]: row for row in d["table"]["rows"]}
-    assert rows["NVDA"]["cells"][-1] == "test·A"
+    assert rows["NVDA"]["cells"][-1] == "테스트 › 상류"
     assert rows["AMD"]["cells"][-1] == "—"
 
 
@@ -235,7 +235,7 @@ def test_stocks_coverage_valuechain_multi_sector(api, db, monkeypatch, tmp_path)
     db.commit()
 
     rows = {row["key"]: row for row in api.get("/api/v1/research/coverage/stocks").json()["table"]["rows"]}
-    assert rows["NVDA"]["cells"][-1] == "th1·A / tx-t·A"
-    assert rows["AMD"]["cells"][-1] == "tx-t·A"                # 분류 전용 → 1개
-    assert rows["TEM"]["cells"][-1] == "th1·A / th2·A"         # 최대 2개(테마 우선)
+    assert rows["NVDA"]["cells"][-1] == "th1 › 상류 / tx-t › 상류"
+    assert rows["AMD"]["cells"][-1] == "tx-t › 상류"                # 분류 전용 → 1개
+    assert rows["TEM"]["cells"][-1] == "th1 › 상류 / th2 › 상류"         # 최대 2개(테마 우선)
     assert rows["MSFT"]["cells"][-1] == "—"
