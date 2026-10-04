@@ -5,14 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { Modal } from "@/components/ui/modal";
-import { SignedStackedBarChart } from "@/components/charts/signed-stacked-bar-chart";
 import { CHART_MUTED, CHART_PALETTE } from "@/components/charts/donut-chart";
 import { CardEmpty, Cell, DataTable, HeaderChip, ListButton, StatTile, StubCard } from "@/components/stub";
 import { CoveragePanel } from "@/components/research/coverage-panel";
 import {
   getGuruOverview,
   getGuruQuarter,
+  getGuruQuarterlyL1,
   getGuruStock,
+  type GuruL1Quarter,
   type GuruMyHolding,
   type GuruStockMove,
 } from "@/lib/api";
@@ -28,18 +29,28 @@ import { GuruManager } from "./guru-manager";
 //   3. 섹터 맵이 못 덮는 비중은 '미분류'(회색)로 그대로 둔다. 두 분기 커버리지 격차가 1%p 이상이면
 //      미분류의 순변화는 매핑 결손 탓일 수 있다 — 막대 라벨에 * 표시.
 //   4. 비중은 거장마다 따로 낸 뒤 **거장 평균**으로 합친다(금액을 더하지 않는다 — 단위가 섞여 있다).
+//   5. ★2026-10-04 분기 막대 = 그 분기 명단 거장 13F 보유 금액 합(USD, 서버가 공시마다 단위 보정 뒤 더함).
+//      조각 = 밸류체인 L1 몫(색 = /research/valuechain L1 카드 색). 티커·L1 이 없는 보유는 회색 '미분류' 한 조각.
+//      ⚠️낸 거장 수가 분기마다 다르면 합도 다르다 — 툴팁에 거장 수를 같이 적는다.
 
 const UNCLASSIFIED = "미분류";
 
-function bp(v: number | null | undefined, signed = true): string {
+// ★2026-10-04 화면 단위는 % — 서버는 bp(합 10000)로 계산하고 여기서만 바꾼다(100bp = 1%p).
+//   비중 차이는 %p(소수 2자리), 비중 자체는 %(wpct).
+function pp(v: number | null | undefined, signed = true): string {
   if (v == null) return "—";
   const s = signed && v > 0 ? "+" : "";
-  return `${s}${Math.round(v).toLocaleString()}bp`;
+  return `${s}${(v / 100).toFixed(2)}%p`;
 }
 
 function wpct(v: number | null | undefined): string {
   if (v == null) return "—";
   return `${(v / 100).toFixed(v >= 100 ? 1 : 2)}%`;
+}
+
+function usd(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return `$${(v / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })}B`;
 }
 
 function nameOf(r: { ticker: string | null; name: string | null }): string {
@@ -57,9 +68,11 @@ export default function GuruPage() {
   const [tab, setTab] = useState<QuarterTab>("entries");
   const [stock, setStock] = useState<GuruMyHolding | null>(null);
   const [hoverQ, setHoverQ] = useState<string | null>(null);
+  const [hoverSeg, setHoverSeg] = useState<string | null>(null);
 
   const q = useQuery({ queryKey: ["guruOverview"], queryFn: getGuruOverview, staleTime: 10 * 60_000 });
   const d = q.data;
+  const l1 = useQuery({ queryKey: ["guruQuarterlyL1"], queryFn: getGuruQuarterlyL1, staleTime: 30 * 60_000 });
 
   const detail = useQuery({
     queryKey: ["guruQuarter", quarter],
@@ -85,17 +98,9 @@ export default function GuruPage() {
     return out;
   }, [d]);
 
-  const columns = useMemo(
-    () =>
-      (d?.sector_history ?? []).map((h) => ({
-        key: h.period,
-        label: h.label,
-        flag: h.unclassified_unreliable,
-        segments: h.rows.map((r) => ({ key: r.sector, value: r.net_bp })),
-      })),
-    [d],
-  );
-  const shownQ = d?.sector_history.find((h) => h.period === hoverQ) ?? d?.sector_history.at(-1);
+  const l1q = l1.data?.quarters ?? [];
+  const shownQ = l1q.find((h) => h.period === hoverQ) ?? l1q.at(-1);
+  const shownSeg = shownQ?.segments.find((x) => x.l1 === hoverSeg);
 
   const latest = d?.latest;
   const quorumOk = latest?.usable ?? false;
@@ -163,63 +168,62 @@ export default function GuruPage() {
           className={cn(
             "grid min-h-0 flex-1 gap-3",
             "grid-cols-1 auto-rows-[minmax(0,1fr)]",
-            "lg:auto-rows-auto lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]",
+            "lg:auto-rows-auto lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
           )}
         >
           <StubCard
-            title="분기별 섹터 순유입"
-            subtitle="거장 평균 비중 변화(bp) · 막대를 누르면 그 분기 종목 변동"
+            title="분기별 거장 투자금액 · 밸류체인 L1"
+            subtitle="13F 보유 합(USD) · 색 = 산업 밸류체인 L1 · 막대를 누르면 그 분기 종목 변동"
             scrollBody
             action={d?.curr ? <ListButton onClick={() => openQuarter(d.curr!.period)} /> : undefined}
           >
-            {q.isLoading || !d ? (
-              <CardEmpty text={q.isLoading ? "불러오는 중…" : "데이터 없음"} />
+            {l1.isLoading || !l1.data ? (
+              <CardEmpty text={l1.isLoading ? "불러오는 중…" : "데이터 없음"} />
             ) : (
               <div className="flex h-full flex-col gap-2">
-                <SignedStackedBarChart
-                  columns={columns}
-                  colors={colors}
-                  height={260}
-                  formatValue={(v) => bp(v)}
+                <L1Bars
+                  quarters={l1q}
                   selected={shownQ?.period}
-                  onHover={setHoverQ}
-                  onPick={(k) => openQuarter(k, "sector")}
+                  hoverSeg={hoverSeg}
+                  onHover={(p, seg) => {
+                    setHoverQ(p);
+                    setHoverSeg(seg);
+                  }}
+                  onPick={(p) => openQuarter(p, "sector")}
                 />
                 {shownQ && (
                   <div className="rounded-lg bg-ge-th/60 px-3 py-2">
-                    <div className="mb-1 flex items-baseline justify-between text-[11px] font-bold text-ink">
+                    <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] font-bold text-ink">
                       <span>
-                        {shownQ.label} vs {shownQ.prev.label} · 거장 {shownQ.n_participants}명
+                        {shownQ.label} · 거장 {shownQ.n_filed}명 · 총 {usd(shownQ.total_usd)}
                       </span>
-                      <span
-                        className={cn(
-                          "text-[10px] font-semibold",
-                          shownQ.unclassified_unreliable ? "text-ge-point" : "text-ink-faint",
-                        )}
-                      >
-                        섹터 커버리지 {shownQ.coverage_prev}% → {shownQ.coverage_curr}%
-                        {shownQ.unclassified_unreliable ? " · * 미분류 변화는 매핑 격차 탓일 수 있음" : ""}
+                      <span className="text-[10.5px] font-semibold text-ink-secondary">
+                        {shownSeg
+                          ? `${shownSeg.l1} · ${usd(shownSeg.usd)} · ${pct(shownSeg.share_pct)}`
+                          : `미분류 ${pct(shownQ.unclassified_share_pct)} (티커·L1 없음)`}
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3">
-                      {shownQ.rows.map((r) => (
-                        <div key={r.sector} className="flex items-center gap-1.5 text-[11px]">
-                          <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: colors[r.sector] }} />
-                          <span className="truncate text-ink-secondary">{r.sector}</span>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-3 gap-y-0.5">
+                      {shownQ.segments.map((x) => (
+                        <div
+                          key={x.l1}
+                          className={cn(
+                            "flex items-center gap-1.5 text-[11px]",
+                            hoverSeg && hoverSeg !== x.l1 && "opacity-50",
+                          )}
+                        >
                           <span
-                            className={cn(
-                              "ml-auto font-semibold tabular-nums",
-                              r.net_bp > 0 ? "text-bid" : r.net_bp < 0 ? "text-ask" : "text-ink-faint",
-                            )}
-                          >
-                            {bp(r.net_bp)}
-                          </span>
+                            className="h-2 w-2 shrink-0 rounded-sm"
+                            style={{ backgroundColor: x.color ?? CHART_MUTED }}
+                          />
+                          <span className="truncate text-ink-secondary">{x.l1}</span>
+                          <span className="ml-auto font-semibold tabular-nums text-ink">{pct(x.share_pct)}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
-                <p className="mt-auto text-[10.5px] font-semibold text-ink-faint">⚠️ {d.disclaimer}</p>
+                <p className="mt-auto text-[10.5px] font-semibold text-ink-faint">⚠️ {l1.data.disclaimer}</p>
               </div>
             )}
           </StubCard>
@@ -353,8 +357,8 @@ export default function GuruPage() {
                 <Cell>
                   {r.buyers}/{r.sellers}
                 </Cell>
-                <Cell>{bp(r.gross_bp, false)}</Cell>
-                <Cell tone={r.net_bp > 0 ? "up" : r.net_bp < 0 ? "down" : undefined}>{bp(r.net_bp)}</Cell>
+                <Cell>{pp(r.gross_bp, false)}</Cell>
+                <Cell tone={r.net_bp > 0 ? "up" : r.net_bp < 0 ? "down" : undefined}>{pp(r.net_bp)}</Cell>
                 <Cell tone={r.agreement < 0.5 ? "muted" : undefined}>{(r.agreement * 100).toFixed(0)}%</Cell>
               </tr>
             ))}
@@ -367,7 +371,7 @@ export default function GuruPage() {
                   <span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: colors[r.sector] }} />
                   {r.sector}
                 </Cell>
-                <Cell tone={r.net_bp > 0 ? "up" : r.net_bp < 0 ? "down" : undefined}>{bp(r.net_bp)}</Cell>
+                <Cell tone={r.net_bp > 0 ? "up" : r.net_bp < 0 ? "down" : undefined}>{pp(r.net_bp)}</Cell>
                 <Cell>{wpct(r.prev_wgt_bp)}</Cell>
                 <Cell>{wpct(r.curr_wgt_bp)}</Cell>
                 <Cell>
@@ -376,7 +380,7 @@ export default function GuruPage() {
                 <Cell left tone="muted">
                   {r.top
                     .slice(0, 3)
-                    .map((t) => `${nameOf(t)} ${bp(t.delta_bp)}`)
+                    .map((t) => `${nameOf(t)} ${pp(t.delta_bp)}`)
                     .join(" · ")}
                 </Cell>
               </tr>
@@ -412,6 +416,90 @@ export default function GuruPage() {
         )}
       </Modal>
     </>
+  );
+}
+
+function pct(v: number | null | undefined): string {
+  return v == null ? "—" : `${v.toFixed(2)}%`;
+}
+
+/** ★2026-10-04 분기 막대 — 높이 = 총 투자금액(분기 공통 척도), 조각 = L1 몫(아래부터 범례 순, 미분류 맨 위).
+ *  ⚠️조각에 최소 높이를 주지 않는다 — 작은 L1 이 부풀면 몫 비교가 깨진다. */
+function L1Bars({
+  quarters,
+  selected,
+  hoverSeg,
+  onHover,
+  onPick,
+}: {
+  quarters: GuruL1Quarter[];
+  selected?: string;
+  hoverSeg: string | null;
+  onHover: (period: string | null, seg: string | null) => void;
+  onPick: (period: string) => void;
+}) {
+  const height = 200;
+  const max = Math.max(...quarters.map((x) => x.total_usd), 0);
+  if (quarters.length === 0 || max <= 0) return <CardEmpty text="표시할 분기가 없습니다" />;
+  return (
+    <div className="w-full">
+      <div className="mb-1 flex items-baseline justify-between text-[10px] font-semibold text-ink-faint">
+        <span>최대 {usd(max)} · 0 부터</span>
+        <span>{quarters.length}분기</span>
+      </div>
+      <div
+        className="relative flex w-full items-end gap-[6px] border-b border-hairline"
+        style={{ height: height + 20 }}
+        onMouseLeave={() => onHover(null, null)}
+      >
+        {quarters.map((x) => {
+          const h = (x.total_usd / max) * height;
+          return (
+            <button
+              key={x.period}
+              type="button"
+              disabled={!x.has_prev}
+              title={x.has_prev ? undefined : "직전 비교 분기가 없어 종목 변동을 열 수 없습니다"}
+              onClick={() => onPick(x.period)}
+              onMouseEnter={() => onHover(x.period, null)}
+              className={cn(
+                "flex min-w-0 flex-1 flex-col items-stretch justify-end transition-opacity disabled:cursor-default",
+                selected && selected !== x.period && "opacity-55",
+              )}
+              style={{ height: height + 20 }}
+            >
+              <span className="mb-0.5 truncate text-center text-[9.5px] font-bold tabular-nums text-ink-secondary">
+                {usd(x.total_usd)}
+              </span>
+              <span className="flex w-full shrink-0 flex-col-reverse overflow-hidden rounded-t-[3px]" style={{ height: h }}>
+                {x.segments.map((sg) => (
+                  <span
+                    key={sg.l1}
+                    onMouseEnter={() => onHover(x.period, sg.l1)}
+                    title={`${x.label} · ${sg.l1} · ${usd(sg.usd)} · ${pct(sg.share_pct)}`}
+                    className={cn("w-full", hoverSeg === sg.l1 && "outline outline-1 outline-white")}
+                    style={{ height: `${(sg.share ?? 0) * 100}%`, backgroundColor: sg.color ?? CHART_MUTED }}
+                  />
+                ))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-1 flex w-full gap-[6px]">
+        {quarters.map((x) => (
+          <span
+            key={x.period}
+            className={cn(
+              "min-w-0 flex-1 truncate text-center text-[10px] font-semibold tabular-nums",
+              selected === x.period ? "text-ge-navy" : "text-ink-faint",
+            )}
+          >
+            {x.label}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -458,7 +546,7 @@ function MineTable({ rows, onPick }: { rows: GuruMyHolding[]; onPick: (r: GuruMy
           <Cell tone={r.n_gurus === 0 ? "muted" : undefined}>{r.n_gurus}명</Cell>
           <Cell tone={r.n_gurus === 0 ? "muted" : undefined}>{wpct(r.avg_bp)}</Cell>
           <Cell tone={r.delta_bp == null || r.delta_bp === 0 ? "muted" : r.delta_bp > 0 ? "up" : "down"}>
-            {bp(r.delta_bp)}
+            {pp(r.delta_bp)}
           </Cell>
         </tr>
       ))}

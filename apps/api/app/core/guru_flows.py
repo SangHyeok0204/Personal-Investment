@@ -50,6 +50,9 @@ class GuruData:
     mat: dict[tuple[date, str], dict[str, float]]           # (분기, cik) → {종목키: bp}
     label: dict[str, dict] = field(default_factory=dict)     # 종목키 → {cusip, name, ticker}
     warnings: list[str] = field(default_factory=list)
+    # ★2026-10-04 (분기, cik) → {종목키: USD}. 단위 보정 뒤 금액 — 분기 총 투자금액 막대에만 쓴다.
+    #   비교(편입·조정·섹터 이동)는 여전히 mat(비중)로만 한다.
+    usd: dict[tuple[date, str], dict[str, float]] = field(default_factory=dict)
 
 
 def quarter_label(d: date) -> str:
@@ -301,3 +304,55 @@ def stock_trend(data: GuruData, ticker: str, periods: list[date]) -> list[dict]:
             rows.append({**_g(data, k), "points": pts})
     rows.sort(key=lambda r: -max(v or 0 for v in r["points"]))
     return rows
+
+
+# ── 분기 총 투자금액 × 밸류체인 L1 (★2026-10-04) ─────────────────────────────
+
+
+def _l1_of(ticker: str | None, tmap: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    """티커 → (L1 이름, 색). 클래스 표기(BRK.A ↔ BRK-A)만 맞춰 본다 — 이름으로 추측하지 않는다."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    return tmap.get(t) or tmap.get(t.replace(".", "-")) or tmap.get(t.replace("-", "."))
+
+
+def quarter_l1(data: GuruData, periods: list[date], tmap: dict[str, tuple[str, str]],
+               palette: list[tuple[str, str]]) -> list[dict]:
+    """분기마다 명단 거장의 13F 보유 금액 합(USD)과 그 안의 L1 몫.
+
+    ★막대 길이 = total_usd(그 분기에 낸 거장들의 합 — 낸 거장 수가 다르면 합도 다르다, n_filed 를 같이 준다).
+    ★몫(share)은 분기 합 대비 비율, 미분류 포함 합 = 1. share_pct 는 같은 값의 %(소수 2자리).
+    ⚠️CUSIP 이 티커로 안 풀리거나 티커에 L1 이 없으면 '미분류' 한 조각으로 — 버리지도, 추측하지도 않는다.
+    """
+    order = {name: i for i, (name, _) in enumerate(palette)}
+    out = []
+    for p in periods:
+        amt: dict[str, float] = defaultdict(float)
+        color: dict[str, str] = {}
+        unc = 0.0
+        n_filed = 0
+        for k in data.gurus:
+            book = data.usd.get((p, k))
+            if not book:
+                continue
+            n_filed += 1
+            for key, v in book.items():
+                l1 = _l1_of((data.label.get(key) or {}).get("ticker"), tmap)
+                if l1 is None:
+                    unc += v
+                else:
+                    amt[l1[0]] += v
+                    color[l1[0]] = l1[1]
+        total = sum(amt.values()) + unc
+        segs = [{"l1": n, "color": color[n], "usd": v}
+                for n, v in sorted(amt.items(), key=lambda x: (order.get(x[0], len(order)), x[0]))]
+        segs.append({"l1": UNCLASSIFIED, "color": None, "usd": unc})
+        for sgm in segs:                             # 몫은 반올림 전 금액으로 — 합이 정확히 1
+            share = sgm["usd"] / total if total > 0 else None
+            sgm.update(usd=round(sgm["usd"], 2), share=share,
+                       share_pct=round(share * 100, 2) if share is not None else None)
+        out.append({"period": p.isoformat(), "label": quarter_label(p), "n_filed": n_filed,
+                    "total_usd": round(total, 2), "segments": segs,
+                    "unclassified_share_pct": segs[-1]["share_pct"]})
+    return out

@@ -108,3 +108,67 @@ def test_loader_merges_new_holdings_with_unit_correction(db):
     d = load_guru_data(db)
     book = d.mat[(date(2023, 9, 30), "0001067983")]
     assert book == {"037833100": 7500.0, "14040H105": 2500.0}
+
+
+# ── ★2026-10-04 분기 총 투자금액 × 밸류체인 L1 ────────────────────────────────
+
+TMAP = {"XX": ("디지털·컴퓨팅", "#4F5AA8"), "BRK-A": ("금융", "#2E5B88")}
+PALETTE = [("금융", "#2E5B88"), ("디지털·컴퓨팅", "#4F5AA8")]
+
+
+def test_quarter_l1_totals_and_shares_sum_to_one():
+    label = {**LABEL, "B": {"cusip": "B", "name": "BERKSHIRE", "ticker": "BRK.A"},   # 클래스 표기 BRK.A ↔ BRK-A
+             "Z": {"cusip": "Z", "name": "NO TICKER", "ticker": None}}             # 티커 없음 → 미분류
+    usd = {(Q1, "a"): {"X": 600.0, "Y": 400.0}, (Q1, "b"): {"B": 1000.0},
+           (Q2, "a"): {"X": 300.0, "Z": 100.0}}
+    d = gf.GuruData(gurus=dict(GURUS), mat=gf.normalize(usd), label=label, usd=usd)
+    q1, q2 = gf.quarter_l1(d, [Q1, Q2], TMAP, PALETTE)
+    assert q1["total_usd"] == 2000.0 and q1["n_filed"] == 2                  # 거장들 보유 금액 합
+    assert q2["total_usd"] == 400.0 and q2["n_filed"] == 1                   # 안 낸 b 는 이월하지 않는다
+    by1 = {s["l1"]: s for s in q1["segments"]}
+    assert [s["l1"] for s in q1["segments"]] == ["금융", "디지털·컴퓨팅", gf.UNCLASSIFIED]   # 범례 순, 미분류 끝
+    assert by1["금융"]["usd"] == 1000.0 and by1["금융"]["share"] == 0.5
+    assert by1[gf.UNCLASSIFIED]["usd"] == 400.0 and q1["unclassified_share_pct"] == 20.0   # YY 는 L1 없음
+    for q in (q1, q2):
+        assert abs(sum(s["share"] for s in q["segments"]) - 1.0) < 1e-12        # 미분류 포함 합 = 1
+    assert {s["l1"]: s["share_pct"] for s in q2["segments"]} == {"디지털·컴퓨팅": 75.0, gf.UNCLASSIFIED: 25.0}
+
+
+def test_quarter_l1_share_pct_is_bp_over_100():
+    # 서버 % 변환: 몫(분수) × 100 = %, 소수 2자리. 1/3 → 33.33%(= 3333bp / 100)
+    usd = {(Q1, "a"): {"X": 1.0, "Y": 2.0}}
+    d = gf.GuruData(gurus=dict(GURUS), mat=gf.normalize(usd), label=LABEL, usd=usd)
+    (q,) = gf.quarter_l1(d, [Q1], TMAP, PALETTE)
+    seg = {s["l1"]: s for s in q["segments"]}["디지털·컴퓨팅"]
+    assert seg["share_pct"] == 33.33 and round(d.mat[(Q1, "a")]["X"]) / 100 == seg["share_pct"]
+
+
+def test_quarterly_l1_endpoint_matches_loader_totals(client, db, monkeypatch):
+    from app.api import guru as guru_api
+    from app.core import valuechain as vc
+    monkeypatch.setattr(vc, "ticker_l1_map", lambda: {"AAPL": ("디지털·컴퓨팅", "#4F5AA8")})
+    monkeypatch.setattr(vc, "l1_palette", lambda: [("디지털·컴퓨팅", "#4F5AA8")])
+    guru_api._cache.clear()
+    db.execute(text("INSERT INTO guru_roster (cik, guru_name, firm, filer_name, kind) "
+                    "VALUES ('0000000001', 'A', 'A', 'A', 'guru'), ('0000000002', 'B', 'B', 'B', 'guru')"))
+    db.execute(text(
+        "INSERT INTO sec_filings (form_type, accession_number, filing_date, period_of_report, watch_cik) VALUES "
+        "('13F-HR', 'a1', '2026-05-15', '2026-03-31', '0000000001'), ('13F-HR', 'b1', '2026-05-15', '2026-03-31', '0000000002'), "
+        "('13F-HR', 'a2', '2026-08-14', '2026-06-30', '0000000001'), ('13F-HR', 'b2', '2026-08-14', '2026-06-30', '0000000002')"))
+    db.execute(text("INSERT INTO cusip_map (cusip, ticker) VALUES ('037833100', 'AAPL')"))
+    db.execute(text(
+        "INSERT INTO holdings_13f (accession_number, seq, cusip, name_of_issuer, value, shares, shr_type, put_call) VALUES "
+        "('a1', 0, '037833100', 'APPLE', 300000000, 1000000, 'SH', NULL), "
+        "('b1', 0, '99999X999', 'UNMAPPED', 100000000, 1000000, 'SH', NULL), "
+        "('a2', 0, '037833100', 'APPLE', 150000, 1000000, 'SH', NULL), "                 # 천 달러 → $150M
+        "('b2', 0, '99999X999', 'UNMAPPED', 50000000, 1000000, 'SH', NULL)"))
+    db.commit()
+    body = client.get("/api/v1/research/guru/quarterly-l1").json()
+    assert [q["label"] for q in body["quarters"]] == ["26Q1", "26Q2"]               # 오래된 것부터
+    q1, q2 = body["quarters"]
+    assert q1["total_usd"] == 400_000_000.0 and q2["total_usd"] == 200_000_000.0
+    assert q1["has_prev"] is False and q2["has_prev"] is True
+    assert q2["unclassified_share_pct"] == 25.0                                      # CUSIP 미해석 → 미분류
+    assert abs(sum(s["share"] for s in q2["segments"]) - 1.0) < 1e-12
+    data = load_guru_data(db)                                                        # 거장별 보유표와 맞는다
+    assert q2["total_usd"] == sum(sum(b.values()) for (p, _), b in data.usd.items() if p == date(2026, 6, 30))

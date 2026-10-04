@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core import guru_flows as gf
+from app.core import valuechain as vc
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.guru13f import Filing13F, effective_accessions
@@ -80,7 +81,8 @@ def load_guru_data(db: Session, n_periods: int = N_PERIODS) -> gf.GuruData:
             lb = label.get(k)
             if lb is None or (not lb["ticker"] and ticker):
                 label[k] = {"cusip": k, "name": name, "ticker": ticker, "sector": sector}
-    return gf.GuruData(gurus=gurus, mat=gf.normalize(books), label=label, warnings=warnings)
+    return gf.GuruData(gurus=gurus, mat=gf.normalize(books), label=label, warnings=warnings,
+                       usd={k: dict(b) for k, b in books.items() if sum(b.values()) > 0})   # mat 과 같은 묶음
 
 
 def _data(db: Session) -> gf.GuruData:
@@ -169,6 +171,33 @@ def quarter(period: date = Query(..., description="비교할 분기말(정족수
             "total_entries": len(ee["entries"]), "total_exits": len(ee["exits"]),
             "rebalance": gf.rebalance(data, curr, prev)[:40],
             "sector": gf.sector_flows(data, curr, prev, gf.load_sector_map())}
+
+
+@router.get("/quarterly-l1")
+def quarterly_l1(db: Session = Depends(get_db)):
+    """★2026-10-04 분기별 총 투자금액(USD, 명단 거장 13F 보유 합) × 밸류체인 L1 몫 — 막대 = 금액, 조각 = L1.
+
+    분기 = 정족수 통과 최근 HISTORY_PAIRS 개(오래된 것부터). 13F 데이터(`_data`)·L1 표(`ticker_l1_map`)
+    객체가 그대로면 지난 결과를 그대로 준다 — 분기 데이터는 거의 바뀌지 않는다.
+    """
+    data = _data(db)
+    tmap = vc.ticker_l1_map()
+    with _lock:
+        hit = _cache.get("l1")
+        if hit and hit[0] is data and hit[1] is tmap:
+            return hit[2]
+    palette = vc.l1_palette()
+    usable = gf.usable_periods(data)
+    periods = usable[:HISTORY_PAIRS]
+    rows = gf.quarter_l1(data, list(reversed(periods)), tmap, palette)
+    for r in rows:                                   # 직전 분기가 있어야 종목 변동 창을 연다
+        i = usable.index(date.fromisoformat(r["period"]))
+        r["has_prev"] = i + 1 < len(usable)
+    out = {"disclaimer": DISCLAIMER, "n_gurus": len(data.gurus), "unclassified": gf.UNCLASSIFIED,
+           "legend": [{"l1": n, "color": c} for n, c in palette], "quarters": rows}
+    with _lock:
+        _cache["l1"] = (data, tmap, out)
+    return out
 
 
 @router.get("/stock")
