@@ -403,3 +403,48 @@ def validate(directory: Path | None = None) -> list[str]:
     sectors, errors = load_all(directory)
     _, _, catalog_problems = load_catalog(directory)
     return errors + catalog_problems + [p for s in sectors for p in s.problems] + _cross_file_problems(sectors)
+
+
+
+_l1_memo: tuple[list[Sector], dict[str, tuple[str, str]]] | None = None
+
+
+def ticker_l1_map(directory: Path | None = None) -> dict[str, tuple[str, str]]:
+    """티커(대문자) → (L1 이름, L1 기준색 #hex). ★2026-10-04 시장 리서치·13F 화면 색칠 공용.
+
+    ★규칙: **분류 섹터(kind="taxonomy", generated/tx-*.ttl) 하나 = L1 하나** 만 본다. 테마
+      섹터(bio 등)는 L1 이 아니고 색도 없다. 한 티커가 여러 L1 에 있으면 `load_all` 순서
+      (파일 이름 순)의 **첫 L1** 을 쓴다 — 결정적이다(2026-10-04 실측 중복 0건).
+    ⚠️티커가 없는 기업·분류에 없는 티커(ETF 등)·색이 없는 L1 은 결과에 없다 — 호출부가 색을
+      칠하지 않는다. 비슷한 이름으로 추측해 붙이지 않는다.
+    ⚠️티커만으로 맞춘다(관심종목 표에 국가가 없다). 분류 생성물은 현재 전부 US 다.
+    ★섹터 객체가 그대로면(mtime 캐시 적중) 지난 결과를 재사용한다 — 5초 폴링 경로에서 부른다.
+      돌려준 dict 는 공유 객체다. 고치지 말 것.
+    """
+    global _l1_memo
+    sectors, _ = load_all(directory)
+    memo = _l1_memo
+    if memo is not None and len(memo[0]) == len(sectors) and all(a is b for a, b in zip(memo[0], sectors)):
+        return memo[1]
+    out: dict[str, tuple[str, str]] = {}
+    for s in sectors:
+        if s.kind != "taxonomy" or not s.color:
+            continue
+        for m in s.memberships:
+            t = (s.companies[m.company].ticker or "").strip().upper()
+            if t:
+                out.setdefault(t, (s.name, s.color))
+    _l1_memo = (sectors, out)
+    return out
+
+
+def l1_palette(directory: Path | None = None) -> list[tuple[str, str]]:
+    """L1 범례 — (이름, 기준색) 목록. 순서는 catalog.ttl 의 묶음 순서(허브와 같다),
+    카탈로그에 없는 L1 은 그 뒤에 파일 이름 순. 색이 없는 L1 은 뺀다."""
+    sectors, _ = load_all(directory)
+    tx = [s for s in sectors if s.kind == "taxonomy" and s.color]
+    groups, entries, _ = load_catalog(directory)
+    group_order = {g.id: i for i, g in enumerate(groups)}
+    rank = {e.code: group_order[e.group] for e in entries if e.group in group_order}
+    ordered = sorted(tx, key=lambda s: (s.code not in rank, rank.get(s.code, 0)))   # sorted 는 안정 정렬
+    return [(s.name, s.color) for s in ordered if s.color]
