@@ -408,6 +408,18 @@ def validate(directory: Path | None = None) -> list[str]:
 
 _l1_memo: tuple[list[Sector], dict[str, tuple[str, str]]] | None = None
 
+# ★2026-10-04 사용자 지정: 분류(밸류체인)에 없는 ETF 의 L1. 값이 L1 이름이면 그 L1 에, "=티커" 면
+#   그 티커와 같은 L1 에 둔다(레버리지 단일종목 ETF). 분류에 이미 있는 티커는 덮어쓰지 않는다.
+#   ⚠️여기 없는 ETF(예: SCHD 배당 ETF)는 여전히 L1 없음 — 추측해 붙이지 않는다.
+ETF_L1_OVERRIDES: dict[str, str] = {
+    "SOXL": "디지털·컴퓨팅",     # 반도체 3배
+    "TSL": "=TSLA",              # 테슬라 1.25배 — 테슬라와 같은 L1
+    "XLB": "자원·기초소재",      # S&P 500 원자재
+    "GLD": "자원·기초소재",      # 금
+    "BITO": "자원·기초소재",     # 비트코인 선물
+    "EETH": "자원·기초소재",     # 이더리움
+}
+
 
 def ticker_l1_map(directory: Path | None = None) -> dict[str, tuple[str, str]]:
     """티커(대문자) → (L1 이름, L1 기준색 #hex). ★2026-10-04 시장 리서치·13F 화면 색칠 공용.
@@ -415,8 +427,8 @@ def ticker_l1_map(directory: Path | None = None) -> dict[str, tuple[str, str]]:
     ★규칙: **분류 섹터(kind="taxonomy", generated/tx-*.ttl) 하나 = L1 하나** 만 본다. 테마
       섹터(bio 등)는 L1 이 아니고 색도 없다. 한 티커가 여러 L1 에 있으면 `load_all` 순서
       (파일 이름 순)의 **첫 L1** 을 쓴다 — 결정적이다(2026-10-04 실측 중복 0건).
-    ⚠️티커가 없는 기업·분류에 없는 티커(ETF 등)·색이 없는 L1 은 결과에 없다 — 호출부가 색을
-      칠하지 않는다. 비슷한 이름으로 추측해 붙이지 않는다.
+    ⚠️티커가 없는 기업·분류에 없는 티커·색이 없는 L1 은 결과에 없다 — 호출부가 색을 칠하지
+      않는다. 비슷한 이름으로 추측해 붙이지 않는다. 예외: 사용자가 지정한 ETF(`ETF_L1_OVERRIDES`).
     ⚠️티커만으로 맞춘다(관심종목 표에 국가가 없다). 분류 생성물은 현재 전부 US 다.
     ★섹터 객체가 그대로면(mtime 캐시 적중) 지난 결과를 재사용한다 — 5초 폴링 경로에서 부른다.
       돌려준 dict 는 공유 객체다. 고치지 말 것.
@@ -434,6 +446,17 @@ def ticker_l1_map(directory: Path | None = None) -> dict[str, tuple[str, str]]:
             t = (s.companies[m.company].ticker or "").strip().upper()
             if t:
                 out.setdefault(t, (s.name, s.color))
+    # ETF 지정 — L1 이름이 분류에 실제로 있을 때만(색을 그 L1 에서 가져온다). 없으면 붙이지 않는다.
+    color_by_name = {sec.name: sec.color for sec in sectors if sec.kind == "taxonomy" and sec.color}
+    for etf, target in ETF_L1_OVERRIDES.items():
+        if etf in out:
+            continue
+        if target.startswith("="):
+            hit = out.get(target[1:])
+            if hit:
+                out[etf] = hit
+        elif target in color_by_name:
+            out[etf] = (target, color_by_name[target])
     _l1_memo = (sectors, out)
     return out
 

@@ -79,12 +79,22 @@ def test_ticker_l1_map_taxonomy_only() -> None:
     assert m["NVDA"] == (tx["tx-digital"].name, tx["tx-digital"].color)
     assert m["NVDA"][1].startswith("#")
     assert m["JPM"] == (tx["tx-financials"].name, tx["tx-financials"].color)
-    for etf in ("SOXL", "GLD", "SCHD"):
-        assert etf not in m
+    # 지정 안 된 ETF 는 매핑 없음(추측하지 않는다).
+    assert "SCHD" not in m
     # 바이오 테마 전용 한국 종목(분류 생성물에 없음)도 L1 이 없다.
     assert "468530" not in m
     assert set(m.values()) <= {(s.name, s.color) for s in tx.values()}
     assert vc.ticker_l1_map() is m            # 파일이 그대로면 결과를 재사용한다
+
+
+def test_etf_l1_overrides_follow_user_assignment() -> None:
+    """★2026-10-04 사용자 지정 ETF L1 — SOXL 디지털·컴퓨팅, TSL = TSLA 의 L1, 원자재·금·코인 = 자원·기초소재."""
+    m = vc.ticker_l1_map()
+    tx = {s.name: s.color for s in vc.load_all()[0] if s.kind == "taxonomy" and s.color}
+    assert m["SOXL"] == ("디지털·컴퓨팅", tx["디지털·컴퓨팅"])
+    assert m["TSL"] == m["TSLA"]
+    for etf in ("XLB", "GLD", "BITO", "EETH"):
+        assert m[etf] == ("자원·기초소재", tx["자원·기초소재"])
 
 
 def test_l1_palette_follows_catalog_order() -> None:
