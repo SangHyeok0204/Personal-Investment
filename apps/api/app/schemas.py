@@ -657,6 +657,14 @@ class WatchlistItemOut(BaseModel):
     fifty_two_week_high: Decimal | None
     # 52주 저점 0 ~ 고점 1 사이의 위치.
     fifty_two_week_position: Decimal | None
+    # ★2026-10-04 5·20·60 **거래일** 변화율(비율). 마지막 완결 일 종가 vs N거래일 전 종가.
+    #   이력이 모자라거나 못 받으면 None — 0 으로 채우지 않는다.
+    change_5d: Decimal | None = None
+    change_20d: Decimal | None = None
+    change_60d: Decimal | None = None
+    # ★2026-10-04 밸류체인 분류 L1(행 색칠). 분류에 없는 티커는 None — 추측하지 않는다.
+    l1_name: str | None = None
+    l1_color: str | None = None
     # 현재가 대비 목표가/손절가까지의 비율. 가격이 없으면 None(0 이 아니다).
     #: 리밸런싱 목표 비중. 없으면 None — **0 으로 두지 않는다**(목표를 안 세운
     #: 것과 "0% 로 두겠다"는 다른 말이다).

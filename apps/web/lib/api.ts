@@ -691,6 +691,13 @@ export interface WatchlistItem {
   fifty_two_week_high: string | null;
   /** 52주 저점 0 ~ 고점 1 사이의 위치. */
   fifty_two_week_position: string | null;
+  /** 5·20·60 거래일 변화율(비율). 마지막 완결 일 종가 기준. 이력이 모자라면 null. */
+  change_5d: string | null;
+  change_20d: string | null;
+  change_60d: string | null;
+  /** 밸류체인 분류 L1 이름·기준색. 분류에 없는 티커(ETF 등)는 null — 색을 칠하지 않는다. */
+  l1_name: string | null;
+  l1_color: string | null;
   /** 리밸런싱 목표 비중. null 이면 목표를 안 세운 것 — 0% 와 다른 말이다. */
   rebalance_weight: string | null;
   to_target: string | null;

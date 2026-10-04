@@ -29,6 +29,7 @@ if str(_WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKER_DIR))
 
 from app.core import credentials_store  # noqa: E402
+from app.core.market_history import Series, fetch_history  # noqa: E402
 from prices import CompositePriceSource, Quote, YahooPriceSource  # noqa: E402
 from prices.toss import TossPriceSource  # noqa: E402
 
@@ -46,6 +47,14 @@ _cache: dict[str, tuple[float, Quote]] = {}
 # 심볼 → (저장시각, 52주저점, 52주고점). 저점/고점이 None 이어도 캐시한다 —
 # 못 받는 심볼을 매번 다시 묻지 않기 위해서다.
 _range_cache: dict[str, tuple[float, Decimal | None, Decimal | None]] = {}
+# 심볼 → (저장시각, 일봉 시계열 | None). 52주 범위와 같은 1시간 주기 — 일 종가는
+# 하루에 한 번 바뀐다. None 도 캐시한다(못 받는 심볼을 5초마다 다시 묻지 않는다).
+_history_cache: dict[str, tuple[float, Series | None]] = {}
+
+# ★2026-10-04 시장 리서치 표의 5D/20D/60D — **거래일** 기준(달력일이 아니다).
+TRADING_DAY_PERIODS: tuple[int, ...] = (5, 20, 60)
+# 60거래일 + 기준 1개 = 61개가 필요하다. 3mo 는 휴장이 끼면 모자랄 수 있어 6mo 로 받는다.
+_HISTORY_RANGE = "6mo"
 
 
 def us_regular_session_open(now: datetime | None = None) -> bool:
@@ -247,8 +256,86 @@ def get_quotes(
     return (_fill_52w(out) if with_range else out), len(fetched)
 
 
+def trading_day_changes(
+    closes: list[Decimal], periods: tuple[int, ...] = TRADING_DAY_PERIODS
+) -> dict[int, Decimal | None]:
+    """마지막 종가 vs N거래일 전 종가의 변화율(비율). `closes` 는 오름차순·완결 봉만.
+
+    ★N거래일 전 = `closes[-1 - N]`. 5D 면 닫힌 봉 6개가 필요하다.
+    ⚠️모자라면 None 이다 — 있는 만큼으로 줄여 계산하면 기간이 통째로 틀린 값이 된다.
+    ⚠️기준 종가가 0 이하면 None(나눗셈이 의미가 없다).
+    """
+    out: dict[int, Decimal | None] = {}
+    for n in periods:
+        if len(closes) < n + 1 or closes[-1 - n] <= 0:
+            out[n] = None
+        else:
+            out[n] = closes[-1] / closes[-1 - n] - 1
+    return out
+
+
+def _completed_closes(series: Series, now: datetime | None = None) -> list[Decimal]:
+    """진행 중인 오늘 봉을 걷어낸 **완결 일봉 종가**.
+
+    ★5D/20D/60D 는 마지막 **완결** 일 종가 기준이다(2026-10-04 사용자 지정).
+      장중에는 야후 일봉 마지막 칸이 '지금 가격'이라, 그대로 쓰면 값이 5초마다
+      흔들리고 1시간 캐시와도 어긋난다. 당일 등락은 옆 칸(실시간)이 맡는다.
+    ⚠️KRW(한국)는 15:30 KST 마감, 그 외는 미국 정규장(`us_session_finished_for`)으로 본다.
+    """
+    if not series.dates:
+        return []
+    last = series.dates[-1]
+    if series.currency == "KRW":
+        kst = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("Asia/Seoul"))
+        done = last < kst.date() or (
+            last == kst.date() and kst.hour * 60 + kst.minute >= 15 * 60 + 30
+        )
+    else:
+        done = us_session_finished_for(last, now)
+    return list(series.closes if done else series.closes[:-1])
+
+
+def get_trading_changes(
+    symbols: list[str], now: datetime | None = None
+) -> dict[str, dict[int, Decimal | None]]:
+    """심볼별 5D/20D/60D 변화율. 시계열을 못 받은 심볼은 값이 전부 None.
+
+    일봉 시계열은 `RANGE_TTL_SECONDS`(1시간) 캐시한다 — 5초 폴링마다 60일치를
+    다시 받지 않는다. 완결 봉 판정은 매 호출 다시 한다(캐시 중 장이 닫혀도 맞게).
+    """
+    wanted = [s for s in dict.fromkeys(symbols) if s]
+    if not wanted:
+        return {}
+    mono = time.monotonic()
+    with _lock:
+        need = [
+            s
+            for s in wanted
+            if (hit := _history_cache.get(s)) is None
+            or mono - hit[0] >= RANGE_TTL_SECONDS
+        ]
+    if need:
+        try:
+            fetched = fetch_history(need, range_=_HISTORY_RANGE)
+        except Exception:
+            fetched = {}
+        stored = time.monotonic()
+        with _lock:
+            for symbol in need:
+                _history_cache[symbol] = (stored, fetched.get(symbol))
+
+    out: dict[str, dict[int, Decimal | None]] = {}
+    for symbol in wanted:
+        hit = _history_cache.get(symbol)
+        series = hit[1] if hit else None
+        closes = _completed_closes(series, now) if series else []
+        out[symbol] = trading_day_changes(closes)
+    return out
+
+
 def clear_cache() -> None:
     """테스트용. 프로덕션 경로에서는 부르지 않는다."""
     with _lock:
         _cache.clear()
         _range_cache.clear()
+        _history_cache.clear()

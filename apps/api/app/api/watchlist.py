@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import quote_cache, sec_sync
+from app.core import valuechain as vc
 from app.core.naming import display_names, lookup_name
 from app.core.errors import AppError
 from app.db.session import get_db
@@ -70,6 +71,10 @@ def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
     quotes, fetched = quote_cache.get_quotes(
         [i.ticker for i in items], with_range=True
     )
+    # ★5D/20D/60D 는 마지막 **완결** 일 종가 기준(진행 중인 오늘 봉 제외), 1시간 캐시.
+    trading = quote_cache.get_trading_changes([i.ticker for i in items])
+    # ★티커 → 밸류체인 분류 L1(첫 L1 규칙은 `vc.ticker_l1_map`). 없으면 색 없음.
+    l1_of = vc.ticker_l1_map()
 
     out: list[WatchlistItemOut] = []
     missing: list[str] = []
@@ -79,6 +84,8 @@ def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
             missing.append(item.ticker)
 
         price = quote.price if quote else None
+        periods = trading.get(item.ticker, {})
+        l1 = l1_of.get(item.ticker)
         out.append(
             WatchlistItemOut(
                 id=item.id,
@@ -114,6 +121,11 @@ def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
                     if price and item.stop_price is not None and price > 0
                     else None
                 ),
+                change_5d=_ratio(periods.get(5)),
+                change_20d=_ratio(periods.get(20)),
+                change_60d=_ratio(periods.get(60)),
+                l1_name=l1[0] if l1 else None,
+                l1_color=l1[1] if l1 else None,
                 source=quote.source if quote else None,
                 as_of=quote.as_of if quote else None,
             )

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { CloudOff, PlugZap } from "lucide-react";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { AnimatedNumber } from "@/components/ui/animated-number";
@@ -401,15 +401,19 @@ export function Cell({
   strong,
   tone,
   className,
+  style,
 }: {
   children: ReactNode;
   left?: boolean;
   strong?: boolean;
   tone?: "up" | "down" | "muted";
   className?: string;
+  /** 데이터에서 온 색(밸류체인 L1 등)처럼 클래스로 못 쓰는 값만. */
+  style?: CSSProperties;
 }) {
   return (
     <td
+      style={style}
       className={cn(
         // 가이드 §7.2 — 표 본문 9p Regular #595959. 강조 행만 Bold Black.
         "whitespace-nowrap px-2.5 py-2.5 text-[12px] tabular-nums",

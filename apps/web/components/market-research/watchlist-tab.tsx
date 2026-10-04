@@ -22,6 +22,11 @@ import {
 // ⚠️52주 위치는 **야후에서 따로** 받는다(1시간 캐시). 토스 일봉에는 52주 범위가
 //   없어서, 가격과 묶어 두면 장중 내내 "—" 가 된다.
 // ⚠️시세가 없는 종목도 행은 남긴다("—"). 정렬해도 늘 맨 아래.
+//
+// ★2026-10-04 5D/20D/60D — **거래일** 변화율(서버 계산, 1시간 캐시). 마지막 **완결**
+//   일 종가 vs 5·20·60거래일 전 종가다. 당일 등락만 실시간이다. 이력이 모자라면 "—".
+// ★2026-10-04 행 색 = 밸류체인 분류 L1 기준색(왼쪽 띠 + 아주 옅은 배경 + 티커 옆 칩).
+//   분류에 없는 티커(ETF 등)는 색이 없다 — 추측해 칠하지 않는다.
 
 function pct(value: string | null, digits = 2): string {
   if (value == null) return "—";
@@ -53,6 +58,9 @@ const COLUMNS = [
   "현재가",
   "전일 종가",
   "당일 등락",
+  "5D",
+  "20D",
+  "60D",
   "52주 저점",
   "52주 고점",
   "52주 위치",
@@ -60,6 +68,9 @@ const COLUMNS = [
 ];
 const ALIGN: ("left" | "right")[] = [
   "left",
+  "right",
+  "right",
+  "right",
   "right",
   "right",
   "right",
@@ -86,10 +97,16 @@ function sortValue(item: WatchlistItem, column: number): string | number | null 
     case 3:
       return num(item.change_rate);
     case 4:
-      return num(item.fifty_two_week_low);
+      return num(item.change_5d);
     case 5:
-      return num(item.fifty_two_week_high);
+      return num(item.change_20d);
     case 6:
+      return num(item.change_60d);
+    case 7:
+      return num(item.fifty_two_week_low);
+    case 8:
+      return num(item.fifty_two_week_high);
+    case 9:
       return num(item.fifty_two_week_position);
     default:
       return null;
@@ -172,9 +189,20 @@ export function WatchlistTab() {
     [items],
   );
   const noQuote = items.filter((i) => i.price == null).length;
+  // 범례 — 지금 표에 있는 L1 만, 종목 수 많은 순.
+  const legend = useMemo(() => {
+    const seen = new Map<string, { color: string; n: number }>();
+    for (const i of items) {
+      if (!i.l1_name || !i.l1_color) continue;
+      const hit = seen.get(i.l1_name);
+      if (hit) hit.n += 1;
+      else seen.set(i.l1_name, { color: i.l1_color, n: 1 });
+    }
+    return [...seen.entries()].sort((a, b) => b[1].n - a[1].n);
+  }, [items]);
 
   const onSort = (column: number) => {
-    if (column === 7) return; // 삭제 칸
+    if (column === COLUMNS.length - 1) return; // 삭제 칸
     setSort((prev) =>
       prev.column === column
         ? { column, dir: prev.dir === "asc" ? "desc" : "asc" }
@@ -226,8 +254,9 @@ export function WatchlistTab() {
         </p>
       )}
 
-      {/* 예전 요약 타일 4개를 한 줄로 줄였다. */}
-      <p className="mb-2 text-[11px] font-medium text-ink-muted">
+      {/* 예전 요약 타일 4개를 한 줄로 줄였다. 오른쪽은 L1 색 범례. */}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+      <p className="text-[11px] font-medium text-ink-muted">
         {watchlist.isLoading ? (
           "불러오는 중…"
         ) : (
@@ -256,6 +285,23 @@ export function WatchlistTab() {
           </>
         )}
       </p>
+      {legend.length > 0 && (
+        <p
+          className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] font-semibold text-ink-muted"
+          title="행 색 = 산업 밸류체인 분류 L1. 분류에 없는 종목(ETF 등)은 색 없음"
+        >
+          {legend.map(([name, { color, n }]) => (
+            <span key={name} className="inline-flex items-center gap-1">
+              <span
+                className="h-2 w-2 shrink-0 rounded-sm"
+                style={{ backgroundColor: color }}
+              />
+              {name} {n}
+            </span>
+          ))}
+        </p>
+      )}
+      </div>
 
       <DataTable
         columns={COLUMNS}
@@ -271,9 +317,27 @@ export function WatchlistTab() {
           <tr
             key={i.id}
             className="border-b border-hairline transition-colors hover:bg-canvas-soft"
+            // L1 색을 아주 옅게(hex 알파 0x0D ≈ 5%). 글자 대비를 해치지 않는 선.
+            style={i.l1_color ? { backgroundColor: `${i.l1_color}0D` } : undefined}
           >
-            <Cell left strong className="py-1.5">
+            <Cell
+              left
+              strong
+              className="py-1.5"
+              // 왼쪽 3px 띠 — 테두리 대신 inset 그림자라 칸 폭이 변하지 않는다.
+              style={
+                i.l1_color
+                  ? { boxShadow: `inset 3px 0 0 ${i.l1_color}` }
+                  : undefined
+              }
+            >
               <span className="flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-sm"
+                  style={i.l1_color ? { backgroundColor: i.l1_color } : undefined}
+                  title={i.l1_name ?? "밸류체인 분류 없음"}
+                  aria-label={i.l1_name ?? undefined}
+                />
                 <span className="max-w-[180px] truncate">
                   {i.asset_name ?? i.ticker}
                 </span>
@@ -289,6 +353,11 @@ export function WatchlistTab() {
             <Cell tone={toneOfRate(i.change_rate)} className="py-1.5 font-bold">
               {pct(i.change_rate)}
             </Cell>
+            {[i.change_5d, i.change_20d, i.change_60d].map((v, k) => (
+              <Cell key={k} tone={toneOfRate(v)} className="py-1.5">
+                {pct(v)}
+              </Cell>
+            ))}
             <Cell className="py-1.5">
               {price(i.fifty_two_week_low, i.currency)}
             </Cell>
