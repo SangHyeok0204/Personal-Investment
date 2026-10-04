@@ -18,7 +18,7 @@ from sqlalchemy import text
 from handlers.earnings_calendar import verdict
 from prices.investing import InvestingBlocked, crawl_dates
 from source_health import record_error, record_ok
-from wallclock import run_in_child
+from wallclock import WallClockTimeout, run_in_child
 
 AHEAD_DAYS = 63
 INVESTING_AHEAD = 35    # Investing.com 이 목록을 올리는 거리(실측)
@@ -107,21 +107,30 @@ def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[
 
     def on_day(day, xs):
         got[day] = xs
-        _apply(engine, rows, got, today, state)
+        _apply(engine, rows, got, today, state, final=False)
+
+    def settle(kind: str, message: str) -> None:
+        # ★2026-10-05 정리 단계가 실패해도(DB 끊김 등) 원래 오류를 가리지 않는다 — 로그 대신 삼킨다.
+        for step in (lambda: _apply(engine, rows, got, today, state),
+                     lambda: _mark_failed(engine, rows, today, state["filled"]),
+                     lambda: record_error(engine, "investing", kind, message)):
+            try:
+                step()
+            except Exception:  # noqa: BLE001
+                pass
 
     try:
         final = crawl(days, on_day=on_day)
     except InvestingBlocked as exc:
-        _mark_failed(engine, rows, today, state["filled"])
-        record_error(engine, "investing", "blocked", str(exc))
+        settle("blocked", str(exc))
         raise
     except Exception as exc:
         # 실패여도 받은 날짜는 이미 저장됐다 — 작업은 FAILED 로 두되 몇 날짜를 건졌는지 남긴다
         msg = f"{exc} (저장된 날짜 {len(got)}/{len(days)})"
-        exc.args = (msg,)
-        _mark_failed(engine, rows, today, state["filled"])
-        record_error(engine, "investing", "timeout" if "timeout" in msg.lower() else "other", msg[-300:])
-        raise
+        settle("timeout" if "timeout" in msg.lower() else "other", msg[-300:])
+        # ★2026-10-05 exc.args 를 고쳐 쓰지 않고 새 예외로 감싼다. ⚠️벽시계 시간초과는 타입을 지킨다 —
+        #   worker main 이 `WallClockTimeout` 으로 `timeout_wallclock` 을 판정한다(메시지도 그걸로 시작).
+        raise (WallClockTimeout(msg) if isinstance(exc, WallClockTimeout) else RuntimeError(msg)) from exc
     for d, xs in (final or {}).items():      # on_day 를 안 부르는 크롤(테스트 · 옛 경로)도 받는다
         got.setdefault(d, xs)
     _apply(engine, rows, got, today, state)
@@ -129,18 +138,23 @@ def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[
             "revenue_actual": len(state["actuals"])}
 
 
-def _apply(engine, rows, got: dict, today: date, state: dict) -> None:
+def _apply(engine, rows, got: dict, today: date, state: dict, final: bool = True) -> None:
     """지금까지 받은 날짜(`got`)로 매칭해 UPDATE/UPSERT. 날짜가 늘 때마다 다시 불러도 된다(멱등).
 
-    `state["hit"]` — 발표별로 이미 쓴 행. 더 가까운 날이 나중에 오면 그 행으로 덮어쓰고, 같으면 건너뛴다.
+    `state["hit"]` — 발표별로 이미 쓴 행. 같으면 건너뛴다.
+    ★2026-10-05 크롤 도중(`final=False`)에는 **발표일 당일** 매칭만 쓴다 — 더 가까운 날이 없으니 확정이다.
+      하루라도 떨어진 매칭은 크롤이 끝날 때(성공·실패 모두 `final=True`) 가장 가까운 것으로 한 번 쓴다.
+      ⚠️예전엔 먼 날 값을 먼저 쓰고, 더 가까운 날이 '매출 컨센 없음'으로 오면 먼 날 값이 조용히 남았다
+      (가장 가까운 매칭과 다른 출처). 이제 가장 가까운 매칭에 컨센이 없으면 그 발표는 손대지 않는다(실행 전 값).
+      ⚠️대신 워커 프로세스째 죽으면 당일이 아닌 매칭은 저장되지 않는다(자식·드라이버가 죽는 건 except 경로가 쓴다).
     """
     for r in rows:
         want = (r.ticker, _ALIASES.get(r.ticker))
         # 같은 날 먼저, 없으면 가장 가까운 날(다가오는 발표의 예상일 차이)
         cands = sorted(((abs((d - r.report_date).days), x) for d, xs in got.items() for x in xs
                         if x.ticker.upper() in want and abs((d - r.report_date).days) <= 6), key=lambda t: t[0])
-        hit = cands[0][1] if cands else None
-        if hit is None or state["hit"].get(r.id) == hit:
+        dist, hit = cands[0] if cands else (None, None)
+        if hit is None or state["hit"].get(r.id) == hit or (not final and dist != 0):
             continue
         state["hit"][r.id] = hit
         rev_f, rev_a = money(hit.revenue_forecast), money(hit.revenue)

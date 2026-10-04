@@ -114,6 +114,11 @@ def parse_form4(xml_text: str) -> tuple[list[dict], list[dict]]:
             shares = _num(tx.findtext("transactionAmounts/transactionShares/value"))
             price = _num(tx.findtext("transactionAmounts/transactionPricePerShare/value"))
             refs = {f.get("id") for f in tx.findall(".//footnoteId") if f.get("id")}
+            # ★2026-10-05 ESPP 판정은 **거래 자체**(코드·수량/단가)에 붙은 각주만 본다. 보유 수량
+            #   (postTransactionAmounts)·보유 형태(ownershipNature) 각주의 "Includes N shares acquired
+            #   under ESPP" 는 잔고 설명이라, 그걸로 본인 판단 매수(P)를 계획매매로 덮으면 안 된다.
+            tx_refs = {f.get("id") for part in ("transactionCoding", "transactionAmounts")
+                       for f in tx.findall(f"{part}//footnoteId") if f.get("id")}
             title = (tx.findtext("securityTitle/value") or "").strip()
             desc = " | ".join([p for p in [title, m.get("label")] if p] +
                               [f"[{f}] {footnotes[f]}" for f in sorted(refs) if footnotes.get(f)]) or None
@@ -131,7 +136,7 @@ def parse_form4(xml_text: str) -> tuple[list[dict], list[dict]]:
                 "is_derivative": derivative,
                 "is_open_market": bool(m.get("is_open_market")),
                 "is_option_exercise": bool(m.get("is_option_exercise")),
-                "is_planned_trade": doc_planned or bool(refs & planned_ids) or (code == "P" and bool(refs & espp_ids)),
+                "is_planned_trade": doc_planned or bool(refs & planned_ids) or (code == "P" and bool(tx_refs & espp_ids)),
             })
     return rows, owners
 

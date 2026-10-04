@@ -89,6 +89,18 @@ def test_form4_espp_purchase_is_planned():
     assert not parse_form4(sell_xml)[0][1]["is_planned_trade"]
 
 
+def test_form4_espp_holdings_footnote_does_not_make_buy_planned():
+    """★2026-10-05 보유 수량 각주의 'ESPP 로 취득한 주식 포함'은 잔고 설명이다 — 본인 매수(P)는 그대로 비계획."""
+    xml = FORM4_JOINT.replace(
+        "<sharesOwnedFollowingTransaction><value>5000</value></sharesOwnedFollowingTransaction>",
+        '<sharesOwnedFollowingTransaction><value>5000</value><footnoteId id="F2"/></sharesOwnedFollowingTransaction>', 1,
+    ).replace("</footnotes>", '<footnote id="F2">Includes 120 shares acquired under the Employee Stock '
+              'Purchase Plan.</footnote></footnotes>')
+    buy = parse_form4(xml)[0][0]
+    assert buy["transaction_code"] == "P" and not buy["is_planned_trade"]
+    assert "[F2]" in buy["transaction_description"]  # 각주 설명은 그대로 남긴다
+
+
 def test_13dg_structured_cover():
     xml = """<edgarSubmission xmlns="http://www.sec.gov/edgar/schedule13D">
       <formData><coverPageHeader><issuerInfo><issuerCik>0001045810</issuerCik>

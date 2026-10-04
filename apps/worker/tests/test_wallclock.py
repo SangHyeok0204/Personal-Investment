@@ -114,3 +114,48 @@ def test_run_in_child_streams_progress_before_failure():
     with pytest.raises(RuntimeError, match="driver died"):
         wallclock.run_in_child(progress_then_die, 3, timeout=60, on_progress=seen.append)
     assert seen == [0, 1, 2]
+
+
+def progress_forever(marker, on_progress):
+    """자식 프로세스에서 — 별도 세션의 손자를 띄우고 진행 상황을 끝없이 흘려보낸다."""
+    subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(600)  # {marker}"], start_new_session=True)
+    i = 0
+    while True:
+        on_progress(i)
+        i += 1
+        time.sleep(0.05)
+
+
+def test_parent_on_progress_error_kills_child_and_propagates(monkeypatch):
+    """★2026-10-05 부모 쪽 on_progress(DB 저장 등)가 터지면 자식·손자를 죽이고 그 예외를 그대로 낸다."""
+    monkeypatch.setattr(wallclock, "KILL_GRACE_SECONDS", 2)
+    marker = f"wallclock-progress-err-{uuid.uuid4().hex[:8]}"
+
+    def on_progress(v):
+        if v >= 2:
+            raise ValueError("db write failed")
+
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(ValueError, match="db write failed"):
+            wallclock.run_in_child(progress_forever, marker, timeout=60, on_progress=on_progress)
+        assert time.monotonic() - t0 < 30
+        assert _pgrep(marker) == []
+    finally:
+        subprocess.run(["pkill", "-9", "-f", marker])
+
+
+def test_timeout_fires_even_while_progress_keeps_streaming(monkeypatch):
+    """★2026-10-05 진행 상황이 계속 와도(큐가 비지 않아도) 상한이 지나면 WallClockTimeout — 자손까지 죽인다."""
+    monkeypatch.setattr(wallclock, "KILL_GRACE_SECONDS", 2)
+    marker = f"wallclock-progress-to-{uuid.uuid4().hex[:8]}"
+    seen = []
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(wallclock.WallClockTimeout, match="^timeout_wallclock"):
+            wallclock.run_in_child(progress_forever, marker, timeout=LIMIT, on_progress=seen.append)
+        assert time.monotonic() - t0 < LIMIT + 15
+        assert len(seen) > 0
+        assert _pgrep(marker) == []
+    finally:
+        subprocess.run(["pkill", "-9", "-f", marker])
