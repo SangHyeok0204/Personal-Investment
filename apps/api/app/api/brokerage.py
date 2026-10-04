@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.core import credentials_store
+from app.core import credentials_store, daily_sync
 from app.models import (
     AccountBalance,
     AccountDailyPerformance,
@@ -253,6 +253,10 @@ def register_credentials(body: CredentialsIn) -> CredentialsStatusOut:
     )
 
 
+#: pg_advisory_xact_lock 키 — 동기화 시작을 한 줄로 세운다(임의의 고정값).
+_SYNC_LOCK_KEY = 720261005
+
+
 @router.post("/sync", response_model=SyncResultOut)
 def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
     """등록된 키로 전체 동기화를 한 번 돌린다(worker 핸들러 재사용)."""
@@ -265,6 +269,17 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
         raise AppError(400, "NOT_CONFIGURED", "먼저 API 키를 등록하세요.")
 
     connection_id = _ensure_connection(db)
+    # ★2026-10-05 동기화는 한 번에 하나만. 한 회차가 ~2분인데, 그동안 브라우저 이력 타이머·
+    #   16:30 따라잡기·수동 버튼이 겹쳐 두 번째 POST 를 보낼 수 있다 — 같은 원장을 두 번 쓰고
+    #   키움 TR 도 두 배로 부른다. 확인과 RUNNING 행 생성을 advisory lock 으로 묶는다
+    #   (lock 은 `_create_job` 의 commit 에서 풀린다).
+    #   ⚠️`RUNNING_STALE_AFTER`(15분)보다 오래된 RUNNING 은 죽은 것으로 보고 막지 않는다.
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SYNC_LOCK_KEY})
+    if daily_sync.sync_running(db):
+        db.rollback()
+        raise AppError(
+            409, "SYNC_IN_PROGRESS", "이미 동기화가 진행 중입니다. 끝난 뒤 다시 시도하세요."
+        )
     job_id = _create_job(db)
 
     from handlers import sync_kiwoom_portfolio as handler
@@ -342,18 +357,31 @@ def _ensure_connection(db: Session) -> uuid.UUID:
 
 
 def fail_orphaned_syncs(db: Session) -> int:
-    """API 가 막 떴을 때 남아 있는 RUNNING 동기화는 전부 죽은 것이다 — FAILED 로 닫는다.
+    """API 가 막 떴을 때 남아 있는 **오래된** RUNNING 동기화는 죽은 것이다 — FAILED 로 닫는다.
 
     동기화는 워커가 아니라 **이 프로세스 안**(스레드)에서 돈다. 그래서 `--reload` 재시작·종료가
     도중에 끊으면 행이 RUNNING 으로 영영 남고, 리퍼(워커 심장박동용)도 손대지 않는다
     (실측 2026-10-04 15:10 회차). 그대로 두면 수집 상태가 '진행 중'에 멈춘다.
+
+    ★2026-10-05 `RUNNING_STALE_AFTER`(15분)보다 오래된 행만 닫는다 — 다른 프로세스(테스트의
+      TestClient 도 lifespan 을 돈다)가 막 시작한 회차를 죽은 것으로 덮지 않게.
+      ⚠️API 프로세스는 하나라고 가정한다. 15분 안쪽의 끊긴 행은 여기서 못 닫지만, 그 시간이
+      지나면 `sync_running` 이 무시하고 다음 재시작이 닫는다.
+    ★2026-10-05 `result={"orphaned": true}` 로 표시한다 — 키움이 거절한 FAILED 와 달리
+      재시도 간격을 걸지 않아, 켜자마자 따라잡기가 다시 돈다(`daily_sync.last_bad_attempt_at`).
     """
     n = db.execute(
         text(
             "UPDATE jobs SET status = 'FAILED', finished_at = now(), updated_at = now(), "
-            "error_message = 'API 재시작으로 중단됨 — 다시 동기화하세요' "
-            "WHERE job_type = 'SYNC_KIWOOM_PORTFOLIO' AND status = 'RUNNING'"
-        )
+            "error_message = 'API 재시작으로 중단됨 — 다시 동기화하세요', "
+            "result = CAST(:r AS JSONB) "
+            "WHERE job_type = 'SYNC_KIWOOM_PORTFOLIO' AND status = 'RUNNING' "
+            "AND COALESCE(started_at, created_at) < now() - make_interval(secs => :s)"
+        ),
+        {
+            "r": json.dumps(daily_sync.ORPHANED_RESULT),
+            "s": daily_sync.RUNNING_STALE_AFTER.total_seconds(),
+        },
     ).rowcount
     db.commit()
     return n
@@ -544,9 +572,12 @@ _FRESHNESS_NOTES = [
     " 있다고 봅니다. 실제로 거래가 없었다면 동기화해도 바뀌는 것이 없습니다.",
     "⚠️증권사 배치 시간(KST 05~07시)에는 이력이 비어서 올 수 있습니다 — 그때는"
     " 동기화를 피하세요.",
-    "**영업일 16:30(KST)** 이후로 한 번도 안 돌았으면 서버가 스스로 받아 둡니다"
+    "**영업일 16:30(KST)** 이후로 제대로 받아 온 적이 없으면 서버가 스스로 받아 둡니다"
     " (국내장 마감 직후). 그 시각에 서버가 꺼져 있었으면 다음에 켤 때 따라잡습니다"
     " — 브라우저를 열어 두지 않아도 됩니다.",
+    "'제대로 받아 온' 회차는 **성공했고 일별성과가 0건이 아닌** 회차입니다. 진행 중·실패·"
+    "0건(증권사 빈 응답) 회차는 최신으로 세지 않습니다. 실패·0건이면 **2시간 뒤** 다시"
+    " 시도합니다(재시작으로 끊긴 회차는 바로). 동기화가 진행 중이면 새로 시작하지 않습니다.",
 ]
 
 _LEDGERS: list[tuple[str, str, bool]] = [
@@ -588,13 +619,8 @@ def get_freshness(db: Session = Depends(get_db)) -> FreshnessOut:
     last_at = job.finished_at or job.created_at if job else None
     # ★'최신' 판정은 **제대로 받아 온** 마지막 회차로 한다 — 진행 중·실패·일별성과 0건(증권사
     #   빈 응답) 회차까지 세면, 받은 게 없는데도 '최신'으로 뜬다(실측 2026-10-03 토 09:12 회차).
-    good_at = db.execute(
-        select(func.max(func.coalesce(Job.finished_at, Job.created_at))).where(
-            Job.job_type == "SYNC_KIWOOM_PORTFOLIO",
-            Job.status == "SUCCESS",
-            func.coalesce(Job.result["daily_performance"].as_integer(), 1) != 0,
-        )
-    ).scalar()
+    #   ★2026-10-05 그 정의는 16:30 따라잡기와 공유한다(`daily_sync.last_good_sync_at`).
+    good_at = daily_sync.last_good_sync_at(db)
     now = datetime.now(timezone.utc)
     last_close = _last_us_close(now)
     hours = (
@@ -635,6 +661,8 @@ def get_freshness(db: Session = Depends(get_db)) -> FreshnessOut:
         # ⚠️"몇 시간 지났나"로 판정하지 않는다. 주말에는 사흘이 지나도 받을 게
         #   없고, 장 마감 직후에는 한 시간만 지나도 받을 게 있다.
         stale=bool(good_at is None or good_at < last_close),
+        # ★2026-10-05 진행 중이면 브라우저가 두 번째 동기화를 보내지 않게 알린다.
+        syncing=daily_sync.sync_running(db, now),
         last_market_close_at=last_close,
         ledgers=counts,
         notes=_FRESHNESS_NOTES,

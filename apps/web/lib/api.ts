@@ -1309,6 +1309,8 @@ export interface Freshness {
   hours_since: string | null;
   /** 마지막 동기화 이후 미국 정규장이 닫힌 적이 있는가. */
   stale: boolean;
+  /** ★2026-10-05 동기화가 진행 중인가(15분 안에 시작). true 면 새로 시작하지 않는다. */
+  syncing: boolean;
   last_market_close_at: string | null;
   ledgers: LedgerFreshness[];
   notes: string[];

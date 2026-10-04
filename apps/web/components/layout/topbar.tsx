@@ -18,7 +18,7 @@ import {
   useAutoRefresh,
 } from "@/components/layout/auto-refresh-context";
 import Link from "next/link";
-import { ackOpsAlert, getAlerts, runBrokerageSync } from "@/lib/api";
+import { ackOpsAlert, getAlerts } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
@@ -87,12 +87,9 @@ export function Topbar({
   const { accountId, setAccountId, accounts, connected, isError } = useAccount();
   const { open: openConnect } = useConnectDialog();
   const auto = useAutoRefresh();
-  const queryClient = useQueryClient();
-  // 상단 바 동기화 — 계좌가 이미 있으면 바로 돌리고, 없으면 연동 팝업을 연다.
-  const sync = useMutation({
-    mutationFn: runBrokerageSync,
-    onSuccess: () => queryClient.invalidateQueries(),
-  });
+  // ★2026-10-05 잔고 동기화 실패 표시는 자동 갱신(auto.syncNow)이 실제로 이 버튼의 동작일 때만 —
+  //   미연동이거나 페이지가 onSync 를 넘겼으면 그 실패는 이 버튼과 무관하다.
+  const syncFailed = connected && !onSync && !!auto.lastError;
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
 
@@ -288,11 +285,11 @@ export function Topbar({
                 // 연동 팝업에서 돌린다 — 2분 걸려 버튼 한 번에 붙일 일이 아니다.
                 auto.syncNow();
               }}
-              disabled={auto.syncing || sync.isPending}
+              disabled={auto.syncing}
               title={
                 !connected
                   ? "계좌를 연동하세요"
-                  : auto.lastError
+                  : syncFailed
                     ? `잔고 동기화 실패: ${auto.lastError}`
                     : lastSynced
                     ? `마지막 동기화: ${new Date(lastSynced).toLocaleString("ko-KR")} — 눌러서 다시 동기화`
@@ -302,7 +299,7 @@ export function Topbar({
               //   (실측 2026-10-04: 키움 8050 IP 미등록으로 13:14 이후 멈춤).
               className={cn(
                 "flex items-center gap-1.5 text-[12px] font-bold transition-colors disabled:cursor-default disabled:text-slate-300",
-                auto.lastError && !auto.syncing
+                syncFailed && !auto.syncing
                   ? "text-rose-600 hover:text-rose-700"
                   : "text-slate-500 hover:text-slate-700",
               )}
@@ -310,12 +307,12 @@ export function Topbar({
               <RefreshCw
                 className={cn(
                   "h-4 w-4",
-                  (auto.syncing || sync.isPending) && "animate-spin",
+                  auto.syncing && "animate-spin",
                 )}
               />
-              {auto.syncing || sync.isPending
+              {auto.syncing
                 ? "동기화 중"
-                : auto.lastError
+                : syncFailed
                   ? "동기화 실패"
                   : auto.lastSyncAt
                   ? auto.lastSyncAt.toLocaleTimeString("ko-KR", {

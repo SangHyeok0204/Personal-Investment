@@ -249,7 +249,8 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
       historyNextAt.current = Date.now() + HISTORY_RETRY_MS;
       try {
         const fresh = await getFreshness();
-        if (fresh.stale) {
+        // ★2026-10-05 이미 돌고 있으면(16:30 따라잡기·수동) 두 번째를 보내지 않는다 — 서버도 409 로 막는다.
+        if (fresh.stale && !fresh.syncing) {
           await runHistorySync();
           void queryClient.invalidateQueries();
         }

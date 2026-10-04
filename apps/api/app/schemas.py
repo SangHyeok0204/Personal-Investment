@@ -2085,6 +2085,9 @@ class FreshnessOut(BaseModel):
     #: 마지막 동기화 이후 미국 정규장이 닫힌 적이 있는가. True 면 새 체결이
     #: 있을 수 있는데 안 받아 온 상태다.
     stale: bool
+    #: ★2026-10-05 15분 안에 시작한 동기화가 아직 돌고 있는가. True 면 브라우저는 새로
+    #: 시작하지 않는다(서버도 409 SYNC_IN_PROGRESS 로 막는다).
+    syncing: bool = False
     #: 뒤처짐 판정의 기준이 된 시각(마지막 정규장 마감).
     last_market_close_at: datetime | None
     ledgers: list[LedgerFreshnessOut]

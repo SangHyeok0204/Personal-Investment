@@ -203,37 +203,140 @@ def test_freshness_without_any_sync_is_stale(client):
     assert body["stale"] is True
 
 
-def test_freshness_ignores_empty_and_running_syncs(client, db):
-    """일별성과 0건(증권사 빈 응답)·진행 중 회차로는 '최신'이 되지 않는다(실측 2026-10-03 토 09:12)."""
+def _insert_sync_job(db, status, result=None, *, started_ago=None, finished=True):
+    """SYNC_KIWOOM_PORTFOLIO 행 하나. started_ago(timedelta) 만큼 전에 시작한 것으로 둔다."""
     import json as _json
-    from datetime import datetime, timezone
     import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import text
 
-    for status, result in (("SUCCESS", {"daily_performance": 0}), ("RUNNING", None)):
-        db.execute(
-            text(
-                "INSERT INTO jobs (id, job_type, status, result, created_at, finished_at) "
-                "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', :s, CAST(:r AS jsonb), now(), :f)"
-            ),
-            {"i": _uuid.uuid4(), "s": status, "r": _json.dumps(result) if result else None,
-             "f": datetime.now(timezone.utc) if status == "SUCCESS" else None},
-        )
+    now = datetime.now(timezone.utc)
+    started = now - (started_ago or timedelta(0))
+    job_id = _uuid.uuid4()
+    db.execute(
+        text(
+            "INSERT INTO jobs (id, job_type, status, result, created_at, started_at, finished_at) "
+            "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', :s, CAST(:r AS jsonb), :c, :c, :f)"
+        ),
+        {"i": job_id, "s": status, "r": _json.dumps(result) if result else None,
+         "c": started, "f": now if finished else None},
+    )
     db.commit()
+    return job_id
+
+
+def test_freshness_ignores_empty_and_running_syncs(client, db):
+    """일별성과 0건(증권사 빈 응답)·진행 중 회차로는 '최신'이 되지 않는다(실측 2026-10-03 토 09:12).
+
+    ★2026-10-05 진행 중 회차는 `syncing` 으로 알린다 — 브라우저가 두 번째 동기화를 보내지 않게.
+    """
+    _insert_sync_job(db, "SUCCESS", {"daily_performance": 0})
+    _insert_sync_job(db, "RUNNING", finished=False)
     body = client.get("/api/v1/brokerage/freshness").json()
     assert body["last_history_sync_at"] is not None
     assert body["stale"] is True
+    assert body["syncing"] is True
 
-    db.execute(
-        text(
-            "INSERT INTO jobs (id, job_type, status, result, created_at, finished_at) "
-            "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'SUCCESS', CAST(:r AS jsonb), now(), now())"
-        ),
-        {"i": _uuid.uuid4(), "r": _json.dumps({"daily_performance": 541})},
-    )
-    db.commit()
+    _insert_sync_job(db, "SUCCESS", {"daily_performance": 541})
     assert client.get("/api/v1/brokerage/freshness").json()["stale"] is False
+
+
+def test_freshness_ignores_dead_running_rows(client, db):
+    """15분 넘게 RUNNING 인 행은 죽은 것이다 — '진행 중'으로 알리지 않는다."""
+    from datetime import timedelta
+
+    _insert_sync_job(db, "RUNNING", started_ago=timedelta(minutes=20), finished=False)
+    assert client.get("/api/v1/brokerage/freshness").json()["syncing"] is False
+
+
+@pytest.fixture()
+def fake_sync(monkeypatch):
+    """키움을 부르지 않는 동기화 — 설정·핸들러를 가짜로 바꾼다."""
+    from handlers import sync_kiwoom_portfolio as handler
+
+    calls = []
+    monkeypatch.setattr(
+        credentials_store, "read_settings",
+        lambda: {"configured": True, "environment": "real"},
+    )
+    monkeypatch.setattr(credentials_store, "load_into_environ", lambda: True)
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return {"daily_performance": 541}
+
+    monkeypatch.setattr(handler, "run", run)
+    return calls
+
+
+def test_sync_refuses_while_another_sync_is_running(client, db, fake_sync):
+    """★2026-10-05 한 회차(~2분) 동안 두 번째 POST 는 409 로 막는다 — 핸들러를 부르지 않는다."""
+    _insert_sync_job(db, "RUNNING", finished=False)
+    response = client.post("/api/v1/brokerage/sync")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SYNC_IN_PROGRESS"
+    assert fake_sync == []
+
+
+def test_sync_ignores_dead_running_row(client, db, fake_sync):
+    """15분 넘은 RUNNING(끊긴 회차)은 새 동기화를 막지 않는다."""
+    from datetime import timedelta
+
+    _insert_sync_job(db, "RUNNING", started_ago=timedelta(minutes=20), finished=False)
+    response = client.post("/api/v1/brokerage/sync")
+    assert response.status_code == 200, response.text
+    assert len(fake_sync) == 1
+
+
+def test_daily_loop_skips_quietly_when_sync_in_progress(monkeypatch):
+    """★2026-10-05 16:30 따라잡기가 수동 동기화와 겹치면(409) 조용히 넘긴다 — 예외로 올리지 않는다."""
+    from contextlib import contextmanager
+
+    from app.api import brokerage
+    from app.core import daily_sync
+    from app.core.errors import AppError
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    def busy(db):
+        raise AppError(409, "SYNC_IN_PROGRESS", "이미 동기화가 진행 중입니다.")
+
+    monkeypatch.setattr(daily_sync.credentials_store, "read_settings", lambda: {"configured": True})
+    monkeypatch.setattr(daily_sync, "in_batch_window", lambda: False)
+    monkeypatch.setattr(daily_sync, "SessionLocal", fake_session)
+    monkeypatch.setattr(daily_sync, "last_good_sync_at", lambda db: None)
+    monkeypatch.setattr(daily_sync, "last_bad_attempt_at", lambda db: None)
+    monkeypatch.setattr(brokerage, "run_sync", busy)
+    assert daily_sync._run_once() is None
+
+
+def test_last_good_and_bad_attempts_share_one_definition(db):
+    """★2026-10-05 '제대로 받아 온' 회차는 한 곳에서 정한다 — 신선도와 16:30 따라잡기가 같이 쓴다.
+
+    성공+일별성과>0 만 good. FAILED·0건은 bad(재시도 간격). 재시작으로 끊긴 회차는 둘 다 아니다
+    — 켜자마자 다시 돈다.
+    """
+    from datetime import timedelta
+
+    from app.api.brokerage import fail_orphaned_syncs
+    from app.core.daily_sync import last_bad_attempt_at, last_good_sync_at
+
+    assert last_good_sync_at(db) is None and last_bad_attempt_at(db) is None
+
+    _insert_sync_job(db, "RUNNING", started_ago=timedelta(minutes=30), finished=False)
+    assert fail_orphaned_syncs(db) == 1
+    assert last_good_sync_at(db) is None
+    assert last_bad_attempt_at(db) is None  # 끊긴 회차는 재시도 간격을 걸지 않는다
+
+    _insert_sync_job(db, "SUCCESS", {"daily_performance": 0})
+    assert last_good_sync_at(db) is None
+    assert last_bad_attempt_at(db) is not None
+
+    _insert_sync_job(db, "SUCCESS", None)  # result 가 없던 옛 행은 받은 것으로 본다
+    assert last_good_sync_at(db) is not None
 
 
 def test_finished_job_keeps_its_result(db):
@@ -305,22 +408,25 @@ def test_finished_job_without_result_stores_null(db):
 
 
 def test_orphaned_running_sync_is_closed_on_startup(db):
-    """API 재시작으로 끊긴 동기화(RUNNING)는 시작할 때 FAILED 로 닫는다(실측 2026-10-04 15:10)."""
-    import uuid as _uuid
+    """API 재시작으로 끊긴 동기화(RUNNING)는 시작할 때 FAILED 로 닫는다(실측 2026-10-04 15:10).
+
+    ★2026-10-05 15분 안에 시작한 행은 건드리지 않는다(다른 프로세스가 막 시작했을 수 있다).
+    닫은 행은 `orphaned` 로 표시한다 — 키움 실패와 구분해 재시도 간격을 걸지 않는다.
+    """
+    from datetime import timedelta
 
     from sqlalchemy import text
 
     from app.api.brokerage import fail_orphaned_syncs
 
-    job_id = _uuid.uuid4()
-    db.execute(
-        text("INSERT INTO jobs (id, job_type, status, started_at) "
-             "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'RUNNING', now())"),
-        {"i": job_id},
-    )
-    db.commit()
+    old_id = _insert_sync_job(db, "RUNNING", started_ago=timedelta(minutes=16), finished=False)
+    fresh_id = _insert_sync_job(db, "RUNNING", started_ago=timedelta(minutes=1), finished=False)
     assert fail_orphaned_syncs(db) == 1
-    status, err = db.execute(
-        text("SELECT status, error_message FROM jobs WHERE id = :i"), {"i": job_id}
+    status, err, result = db.execute(
+        text("SELECT status, error_message, result FROM jobs WHERE id = :i"), {"i": old_id}
     ).one()
     assert status == "FAILED" and "재시작" in err
+    assert result == {"orphaned": True}
+    assert db.execute(
+        text("SELECT status FROM jobs WHERE id = :i"), {"i": fresh_id}
+    ).scalar() == "RUNNING"

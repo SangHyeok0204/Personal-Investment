@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -33,6 +34,8 @@ from app.core.etf_listing_sync import etf_listing_sync_loop
 from app.core.ops_alerts import ops_alert_loop
 from app.core.errors import register_exception_handlers
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,8 +43,12 @@ async def lifespan(app: FastAPI):
     from app.api.brokerage import fail_orphaned_syncs
     from app.db.session import SessionLocal
 
-    with SessionLocal() as db:
-        fail_orphaned_syncs(db)
+    # ★2026-10-05 DB 가 느리거나 꺼져 있어도 API 는 떠야 한다 — 정리는 다음 재시작에 미룬다.
+    try:
+        with SessionLocal() as db:
+            fail_orphaned_syncs(db)
+    except Exception:  # noqa: BLE001
+        logger.warning("시작 시 끊긴 동기화 정리 실패 — 건너뜀", exc_info=True)
 
     tasks = [
         # 이력 동기화: 영업일 16:30(KST) 이후로 안 돌았으면 따라잡는다.

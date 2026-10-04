@@ -13,6 +13,7 @@
 
 판정 근거는 새 상태 파일이 아니라 `jobs` 테이블의 마지막 SYNC_KIWOOM_PORTFOLIO
 시각이다 — 수동으로 돌렸으면 그것도 그대로 인정된다(중복 실행을 안 한다).
+★2026-10-05 '마지막'은 **제대로 받아 온** 회차다(`last_good_sync_at` — 수집 신선도와 같은 정의).
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, not_, select
 
 from app.core import credentials_store
 from app.db.session import SessionLocal
@@ -45,7 +46,9 @@ BATCH_WINDOW_END_HOUR = 7
 #:  그 회차를 '따라잡음'으로 세는 바람에 10-02 미국장 마감분이 월요일 16:30 까지 비었다).
 #:  usa21670 은 기간 전체를 주므로(평소 500행 넘게) 0건은 '받을 게 없음'이 아니라 빈 응답이다.
 #:  그런 회차는 이 시간이 지나면 없던 것으로 보고 다시 돈다 — 1분마다 두드리지 않도록 간격을 둔다.
-EMPTY_RETRY_AFTER = timedelta(hours=2)
+#: ★2026-10-05 키움이 FAILED 를 돌려준 회차도 같은 간격으로 다시 돈다(예전엔 다음 영업일 16:30
+#:  까지 기다렸다 — 일시 장애 한 번에 하루 치가 빠졌다).
+RETRY_AFTER = timedelta(hours=2)
 
 
 def last_scheduled_run(now: datetime | None = None) -> datetime:
@@ -69,32 +72,72 @@ def in_batch_window(now: datetime | None = None) -> bool:
     return BATCH_WINDOW_START_HOUR <= kst.hour < BATCH_WINDOW_END_HOUR
 
 
-def _last_sync_at(db) -> datetime | None:
-    job = db.execute(
-        select(Job)
-        .where(Job.job_type == "SYNC_KIWOOM_PORTFOLIO")
-        .order_by(Job.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if job is None:
-        return None
-    return effective_sync_at(job.finished_at or job.created_at, job.status, job.result)
+#: ★2026-10-05 '시작했는데 끝나지 않은' 동기화를 살아 있다고 볼 시간. 실측 한 회차는 ~2분이다.
+#:  이보다 오래된 RUNNING 은 죽은 것(재시작으로 끊김)으로 본다 — 새 동기화를 막지 않는다.
+RUNNING_STALE_AFTER = timedelta(minutes=15)
+
+#: ★2026-10-05 재시작으로 끊겨 닫힌 회차 표시(`jobs.result`). 진짜 실패와 구분한다 —
+#:  이 회차는 재시도 간격을 걸지 않는다(켜자마자 따라잡는다).
+ORPHANED_RESULT = {"orphaned": True}
+
+_SYNC = Job.job_type == "SYNC_KIWOOM_PORTFOLIO"
+_AT = func.coalesce(Job.finished_at, Job.created_at)
+#: ★2026-10-05 '제대로 받아 온' 회차의 단일 정의 — 수집 신선도(stale)와 16:30 따라잡기가
+#:  **같은 조건**을 쓴다. 성공 + 일별성과 0건이 아님(result 가 없던 옛 행은 받은 것으로 본다).
+#:  ⚠️예전엔 두 곳이 따로 판정했다 — 화면은 '뒤처짐'인데 루프는 '따라잡음'으로 세는 식으로 어긋났다.
+_GOOD = and_(
+    Job.status == "SUCCESS",
+    func.coalesce(Job.result["daily_performance"].as_integer(), 1) != 0,
+)
 
 
-def effective_sync_at(
-    at: datetime, status: str, result: dict | None, now: datetime | None = None
-) -> datetime | None:
-    """그 회차를 '따라잡음'으로 셀 시각. 일별성과가 0건으로 끝난 성공 회차는
-    `EMPTY_RETRY_AFTER` 가 지나면 None(안 돈 것) — 다음 확인에서 다시 돈다."""
-    came_back_empty = status == "SUCCESS" and (result or {}).get("daily_performance") == 0
-    if came_back_empty and at < (now or datetime.now(timezone.utc)) - EMPTY_RETRY_AFTER:
-        return None
-    return at
+def last_good_sync_at(db) -> datetime | None:
+    """제대로 받아 온 마지막 이력 동기화 시각. 진행 중·실패·0건·끊긴 회차는 세지 않는다."""
+    return db.execute(select(func.max(_AT)).where(_SYNC, _GOOD)).scalar()
 
 
-def is_due(last_sync_at: datetime | None, now: datetime | None = None) -> bool:
-    """마지막 동기화가 '가장 최근 영업일 16:30' 보다 이전이면 밀린 것이다."""
-    return last_sync_at is None or last_sync_at < last_scheduled_run(now)
+def last_bad_attempt_at(db) -> datetime | None:
+    """끝까지 돌았지만 못 받아 온 마지막 회차(키움 FAILED·일별성과 0건) 시각.
+
+    ⚠️재시작으로 끊긴 회차(`ORPHANED_RESULT`)는 뺀다 — 그건 키움이 거절한 게 아니라
+      우리가 끊은 것이라, 켜자마자 다시 도는 게 맞다.
+    """
+    orphaned = func.coalesce(Job.result["orphaned"].as_boolean(), False)
+    return db.execute(
+        select(func.max(_AT)).where(
+            _SYNC, Job.status.in_(("SUCCESS", "FAILED")), not_(_GOOD), not_(orphaned)
+        )
+    ).scalar()
+
+
+def sync_running(db, now: datetime | None = None) -> bool:
+    """`RUNNING_STALE_AFTER` 안에 시작한 RUNNING 동기화가 있는가."""
+    since = (now or datetime.now(timezone.utc)) - RUNNING_STALE_AFTER
+    return db.execute(
+        select(Job.id).where(
+            _SYNC, Job.status == "RUNNING", func.coalesce(Job.started_at, Job.created_at) >= since
+        ).limit(1)
+    ).first() is not None
+
+
+def is_due(
+    last_good_at: datetime | None,
+    now: datetime | None = None,
+    last_bad_at: datetime | None = None,
+) -> bool:
+    """제대로 받은 마지막 회차가 '가장 최근 영업일 16:30' 보다 이전이면 밀린 것이다.
+
+    ★2026-10-05 단, 그 16:30 이후 **못 받아 온 회차**(FAILED·0건)가 `RETRY_AFTER` 안에
+      있으면 기다린다 — 키움이 거절하는 동안 1분마다 두드리지 않는다.
+      16:30 이전의 실패는 이번 회차의 시도가 아니므로 기다리지 않는다.
+    """
+    now = now or datetime.now(timezone.utc)
+    mark = last_scheduled_run(now)
+    if last_good_at is not None and last_good_at >= mark:
+        return False
+    if last_bad_at is not None and last_bad_at >= mark and last_bad_at > now - RETRY_AFTER:
+        return False
+    return True
 
 
 def _run_once() -> str | None:
@@ -105,6 +148,7 @@ def _run_once() -> str | None:
       고쳐지는 날이 온다(brokerage.py 머리말의 판단과 같다).
     """
     from app.api import brokerage
+    from app.core.errors import AppError
 
     if not credentials_store.read_settings().get("configured"):
         return None
@@ -112,9 +156,16 @@ def _run_once() -> str | None:
         return None
 
     with SessionLocal() as db:
-        if not is_due(_last_sync_at(db)):
+        if not is_due(last_good_sync_at(db), last_bad_at=last_bad_attempt_at(db)):
             return None
-        result = brokerage.run_sync(db=db)
+        try:
+            result = brokerage.run_sync(db=db)
+        except AppError as exc:
+            # ★2026-10-05 수동 동기화가 이미 돌고 있으면(409) 조용히 넘긴다 — 그 회차가
+            #   끝나면 다음 확인에서 '따라잡음'으로 잡힌다.
+            if exc.code == "SYNC_IN_PROGRESS":
+                return None
+            raise
     return f"체결 {result.trades}건 / 실현손익 {result.realized_pnl}건"
 
 
@@ -127,7 +178,7 @@ async def daily_sync_loop() -> None:
             await asyncio.to_thread(_run_once)
         except Exception:  # noqa: BLE001 — 루프는 절대 죽지 않는다
             # 실패해도 jobs 에 FAILED 로 남는다. 다음 확인에서 다시 밀린 것으로
-            # 잡히지만, 성공/실패 모두 job 시각이 갱신되므로 1분마다 재시도하지는
-            # 않는다(다음 영업일 16:30 까지 기다린다).
+            # 잡히지만, ★2026-10-05 `RETRY_AFTER`(2시간) 안에는 재시도하지 않는다
+            # — 1분마다 키움을 두드리지 않는다(`is_due`).
             pass
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)

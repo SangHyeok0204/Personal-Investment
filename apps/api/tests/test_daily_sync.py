@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.core.daily_sync import (
-    effective_sync_at,
     in_batch_window,
     is_due,
     last_scheduled_run,
@@ -79,16 +78,22 @@ def test_batch_window_is_avoided():
     assert in_batch_window(kst(2026, 9, TUE, 16, 30)) is False
 
 
-def test_empty_history_run_stops_counting_after_retry_gap():
-    # 2026-10-03 토 09:12 — 일별성과 0건으로 '성공'. 2시간 뒤엔 안 돈 것으로 본다.
-    at = datetime(2026, 10, 3, 0, 12, tzinfo=timezone.utc)
-    empty = {"daily_performance": 0}
-    assert effective_sync_at(at, "SUCCESS", empty, now=datetime(2026, 10, 3, 1, 0, tzinfo=timezone.utc)) == at
-    assert effective_sync_at(at, "SUCCESS", empty, now=datetime(2026, 10, 3, 3, 0, tzinfo=timezone.utc)) is None
+def test_bad_attempt_after_the_mark_waits_for_retry_gap():
+    """★2026-10-05 16:30 이후 못 받아 온 회차(FAILED·0건)가 있으면 2시간은 기다린다.
+
+    예전엔 FAILED 회차가 '따라잡음'으로 세여 다음 영업일 16:30 까지 다시 돌지 않았다.
+    """
+    bad = kst(2026, 9, TUE, 16, 40)
+    good = kst(2026, 9, MON, 18, 0)
+    assert is_due(good, kst(2026, 9, TUE, 17, 0), last_bad_at=bad) is False
+    assert is_due(good, kst(2026, 9, TUE, 18, 41), last_bad_at=bad) is True
 
 
-def test_full_or_failed_runs_keep_their_time():
-    at = datetime(2026, 10, 2, 7, 31, tzinfo=timezone.utc)
-    later = datetime(2026, 10, 4, 0, 0, tzinfo=timezone.utc)
-    assert effective_sync_at(at, "SUCCESS", {"daily_performance": 541}, now=later) == at
-    assert effective_sync_at(at, "FAILED", None, now=later) == at
+def test_bad_attempt_before_the_mark_does_not_delay_the_run():
+    """16:30 전의 실패는 이번 회차의 시도가 아니다 — 16:30 이 지나면 바로 돈다."""
+    bad = kst(2026, 9, TUE, 16, 0)
+    assert is_due(kst(2026, 9, MON, 18, 0), kst(2026, 9, TUE, 16, 31), last_bad_at=bad) is True
+
+
+def test_good_sync_after_the_mark_wins_over_retry():
+    assert is_due(kst(2026, 9, TUE, 16, 50), kst(2026, 9, TUE, 20, 0), last_bad_at=kst(2026, 9, TUE, 16, 40)) is False
