@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.core.daily_sync import (
+    effective_sync_at,
     in_batch_window,
     is_due,
     last_scheduled_run,
@@ -76,3 +77,18 @@ def test_batch_window_is_avoided():
     assert in_batch_window(kst(2026, 9, TUE, 5, 0)) is True
     assert in_batch_window(kst(2026, 9, TUE, 7, 0)) is False
     assert in_batch_window(kst(2026, 9, TUE, 16, 30)) is False
+
+
+def test_empty_history_run_stops_counting_after_retry_gap():
+    # 2026-10-03 토 09:12 — 일별성과 0건으로 '성공'. 2시간 뒤엔 안 돈 것으로 본다.
+    at = datetime(2026, 10, 3, 0, 12, tzinfo=timezone.utc)
+    empty = {"daily_performance": 0}
+    assert effective_sync_at(at, "SUCCESS", empty, now=datetime(2026, 10, 3, 1, 0, tzinfo=timezone.utc)) == at
+    assert effective_sync_at(at, "SUCCESS", empty, now=datetime(2026, 10, 3, 3, 0, tzinfo=timezone.utc)) is None
+
+
+def test_full_or_failed_runs_keep_their_time():
+    at = datetime(2026, 10, 2, 7, 31, tzinfo=timezone.utc)
+    later = datetime(2026, 10, 4, 0, 0, tzinfo=timezone.utc)
+    assert effective_sync_at(at, "SUCCESS", {"daily_performance": 541}, now=later) == at
+    assert effective_sync_at(at, "FAILED", None, now=later) == at

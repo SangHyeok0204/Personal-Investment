@@ -203,6 +203,39 @@ def test_freshness_without_any_sync_is_stale(client):
     assert body["stale"] is True
 
 
+def test_freshness_ignores_empty_and_running_syncs(client, db):
+    """일별성과 0건(증권사 빈 응답)·진행 중 회차로는 '최신'이 되지 않는다(실측 2026-10-03 토 09:12)."""
+    import json as _json
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    for status, result in (("SUCCESS", {"daily_performance": 0}), ("RUNNING", None)):
+        db.execute(
+            text(
+                "INSERT INTO jobs (id, job_type, status, result, created_at, finished_at) "
+                "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', :s, CAST(:r AS jsonb), now(), :f)"
+            ),
+            {"i": _uuid.uuid4(), "s": status, "r": _json.dumps(result) if result else None,
+             "f": datetime.now(timezone.utc) if status == "SUCCESS" else None},
+        )
+    db.commit()
+    body = client.get("/api/v1/brokerage/freshness").json()
+    assert body["last_history_sync_at"] is not None
+    assert body["stale"] is True
+
+    db.execute(
+        text(
+            "INSERT INTO jobs (id, job_type, status, result, created_at, finished_at) "
+            "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'SUCCESS', CAST(:r AS jsonb), now(), now())"
+        ),
+        {"i": _uuid.uuid4(), "r": _json.dumps({"daily_performance": 541})},
+    )
+    db.commit()
+    assert client.get("/api/v1/brokerage/freshness").json()["stale"] is False
+
+
 def test_finished_job_keeps_its_result(db):
     """작업을 끝낼 때 **결과도 남긴다.**
 

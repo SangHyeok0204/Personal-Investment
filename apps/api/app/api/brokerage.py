@@ -568,6 +568,15 @@ def get_freshness(db: Session = Depends(get_db)) -> FreshnessOut:
     ).scalar_one_or_none()
 
     last_at = job.finished_at or job.created_at if job else None
+    # ★'최신' 판정은 **제대로 받아 온** 마지막 회차로 한다 — 진행 중·실패·일별성과 0건(증권사
+    #   빈 응답) 회차까지 세면, 받은 게 없는데도 '최신'으로 뜬다(실측 2026-10-03 토 09:12 회차).
+    good_at = db.execute(
+        select(func.max(func.coalesce(Job.finished_at, Job.created_at))).where(
+            Job.job_type == "SYNC_KIWOOM_PORTFOLIO",
+            Job.status == "SUCCESS",
+            func.coalesce(Job.result["daily_performance"].as_integer(), 1) != 0,
+        )
+    ).scalar()
     now = datetime.now(timezone.utc)
     last_close = _last_us_close(now)
     hours = (
@@ -607,7 +616,7 @@ def get_freshness(db: Session = Depends(get_db)) -> FreshnessOut:
         hours_since=hours,
         # ⚠️"몇 시간 지났나"로 판정하지 않는다. 주말에는 사흘이 지나도 받을 게
         #   없고, 장 마감 직후에는 한 시간만 지나도 받을 게 있다.
-        stale=bool(last_at is None or last_at < last_close),
+        stale=bool(good_at is None or good_at < last_close),
         last_market_close_at=last_close,
         ledgers=counts,
         notes=_FRESHNESS_NOTES,

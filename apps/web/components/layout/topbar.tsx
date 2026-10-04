@@ -292,11 +292,20 @@ export function Topbar({
               title={
                 !connected
                   ? "계좌를 연동하세요"
-                  : lastSynced
+                  : auto.lastError
+                    ? `잔고 동기화 실패: ${auto.lastError}`
+                    : lastSynced
                     ? `마지막 동기화: ${new Date(lastSynced).toLocaleString("ko-KR")} — 눌러서 다시 동기화`
                     : "눌러서 동기화"
               }
-              className="flex items-center gap-1.5 text-[12px] font-bold text-slate-500 transition-colors hover:text-slate-700 disabled:cursor-default disabled:text-slate-300"
+              // ⚠️실패를 숨기지 않는다 — 마지막 성공 시각만 띄우면 몇 시간째 멈춘 잔고가 '최신'처럼 보인다
+              //   (실측 2026-10-04: 키움 8050 IP 미등록으로 13:14 이후 멈춤).
+              className={cn(
+                "flex items-center gap-1.5 text-[12px] font-bold transition-colors disabled:cursor-default disabled:text-slate-300",
+                auto.lastError && !auto.syncing
+                  ? "text-rose-600 hover:text-rose-700"
+                  : "text-slate-500 hover:text-slate-700",
+              )}
             >
               <RefreshCw
                 className={cn(
@@ -306,7 +315,9 @@ export function Topbar({
               />
               {auto.syncing || sync.isPending
                 ? "동기화 중"
-                : auto.lastSyncAt
+                : auto.lastError
+                  ? "동기화 실패"
+                  : auto.lastSyncAt
                   ? auto.lastSyncAt.toLocaleTimeString("ko-KR", {
                       hour: "2-digit",
                       minute: "2-digit",

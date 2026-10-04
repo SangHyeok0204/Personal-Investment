@@ -69,6 +69,19 @@ const JOB_LABEL: Record<string, string> = {
   SYNC_KIWOOM_PORTFOLIO: "증권사 이력 동기화",
   CSV_IMPORT: "CSV 가져오기",
   TEST_JOB: "테스트 작업",
+  SEASONALITY_APPEND: "계절성 월말 종가",
+  SEC_13F: "13F 보유 공시",
+  SEC_13F_BACKFILL: "13F 과거분 채우기",
+  SEC_FORM4: "내부자 거래(Form 4)",
+  SEC_13DG: "5% 지분 공시(13D/G)",
+  CUSIP_RESOLVE: "CUSIP → 티커 매칭",
+  EARNINGS_CALENDAR: "실적 일정",
+  EARNINGS_REVENUE: "매출 컨센(Investing)",
+  EARNINGS_RESULT: "실적 발표·반응",
+  LLM_EXHIBIT: "실적 보도자료 정리(LLM)",
+  LLM_JUDGE: "관전포인트 결과(LLM)",
+  LLM_WATCHPOINTS: "관전포인트 생성(LLM)",
+  PLAUD_VIDEO: "영상 이슈 요약",
 };
 
 export default function DataOperationsPage() {
@@ -161,7 +174,9 @@ export default function DataOperationsPage() {
           <StatTile
             label="마지막 이력 동기화"
             value={
-              f?.last_history_sync_at
+              f?.last_history_sync_status === "RUNNING"
+                ? "진행 중"
+                : f?.last_history_sync_at
                 ? formatRelativeTime(f.last_history_sync_at)
                 : f
                   ? "없음"

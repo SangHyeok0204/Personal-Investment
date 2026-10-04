@@ -41,6 +41,12 @@ CHECK_INTERVAL_SECONDS = 60.0
 BATCH_WINDOW_START_HOUR = 5
 BATCH_WINDOW_END_HOUR = 7
 
+#: ⚠️배치 시간대 밖에서도 일별성과가 **0건**으로 오는 때가 있다(실측 2026-10-03 토 09:12 —
+#:  그 회차를 '따라잡음'으로 세는 바람에 10-02 미국장 마감분이 월요일 16:30 까지 비었다).
+#:  usa21670 은 기간 전체를 주므로(평소 500행 넘게) 0건은 '받을 게 없음'이 아니라 빈 응답이다.
+#:  그런 회차는 이 시간이 지나면 없던 것으로 보고 다시 돈다 — 1분마다 두드리지 않도록 간격을 둔다.
+EMPTY_RETRY_AFTER = timedelta(hours=2)
+
 
 def last_scheduled_run(now: datetime | None = None) -> datetime:
     """가장 최근에 지나간 '영업일 16:30 KST'.
@@ -72,7 +78,18 @@ def _last_sync_at(db) -> datetime | None:
     ).scalar_one_or_none()
     if job is None:
         return None
-    return job.finished_at or job.created_at
+    return effective_sync_at(job.finished_at or job.created_at, job.status, job.result)
+
+
+def effective_sync_at(
+    at: datetime, status: str, result: dict | None, now: datetime | None = None
+) -> datetime | None:
+    """그 회차를 '따라잡음'으로 셀 시각. 일별성과가 0건으로 끝난 성공 회차는
+    `EMPTY_RETRY_AFTER` 가 지나면 None(안 돈 것) — 다음 확인에서 다시 돈다."""
+    came_back_empty = status == "SUCCESS" and (result or {}).get("daily_performance") == 0
+    if came_back_empty and at < (now or datetime.now(timezone.utc)) - EMPTY_RETRY_AFTER:
+        return None
+    return at
 
 
 def is_due(last_sync_at: datetime | None, now: datetime | None = None) -> bool:
