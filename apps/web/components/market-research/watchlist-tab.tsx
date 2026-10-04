@@ -53,8 +53,10 @@ function toneOfRate(value: string | null): "up" | "down" | undefined {
   return n > 0 ? "up" : "down";
 }
 
+// ★2026-10-04 사용자 요청: 'L1 분류' 칸(산업 밸류체인 분류 L1) — 색 띠만으로는 이름이 안 보였다.
 const COLUMNS = [
   "종목",
+  "L1 분류",
   "현재가",
   "전일 종가",
   "당일 등락",
@@ -67,6 +69,7 @@ const COLUMNS = [
   "",
 ];
 const ALIGN: ("left" | "right")[] = [
+  "left",
   "left",
   "right",
   "right",
@@ -91,22 +94,25 @@ function sortValue(item: WatchlistItem, column: number): string | number | null 
     case 0:
       return item.asset_name ?? item.ticker;
     case 1:
-      return num(item.price);
+      // 분류 없는 종목(ETF 등)은 null → 늘 맨 아래.
+      return item.l1_name ?? null;
     case 2:
-      return num(item.previous_close);
+      return num(item.price);
     case 3:
-      return num(item.change_rate);
+      return num(item.previous_close);
     case 4:
-      return num(item.change_5d);
+      return num(item.change_rate);
     case 5:
-      return num(item.change_20d);
+      return num(item.change_5d);
     case 6:
-      return num(item.change_60d);
+      return num(item.change_20d);
     case 7:
-      return num(item.fifty_two_week_low);
+      return num(item.change_60d);
     case 8:
-      return num(item.fifty_two_week_high);
+      return num(item.fifty_two_week_low);
     case 9:
+      return num(item.fifty_two_week_high);
+    case 10:
       return num(item.fifty_two_week_position);
     default:
       return null;
@@ -121,7 +127,7 @@ export function WatchlistTab() {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   // 기본: 당일 등락 내림차순.
   const [sort, setSort] = useState<{ column: number; dir: "asc" | "desc" }>({
-    column: 3,
+    column: 4,
     dir: "desc",
   });
 
@@ -206,7 +212,7 @@ export function WatchlistTab() {
     setSort((prev) =>
       prev.column === column
         ? { column, dir: prev.dir === "asc" ? "desc" : "asc" }
-        : { column, dir: column === 0 ? "asc" : "desc" },
+        : { column, dir: column <= 1 ? "asc" : "desc" }, // 글자 칸(종목·L1)은 가나다순부터
     );
   };
 
@@ -338,13 +344,26 @@ export function WatchlistTab() {
                   title={i.l1_name ?? "밸류체인 분류 없음"}
                   aria-label={i.l1_name ?? undefined}
                 />
-                <span className="max-w-[180px] truncate">
+                <span className="max-w-[100px] truncate" title={i.asset_name ?? i.ticker}>
                   {i.asset_name ?? i.ticker}
                 </span>
                 <span className="shrink-0 text-[10px] font-bold text-ink-faint">
                   {i.ticker}
                 </span>
               </span>
+            </Cell>
+            <Cell left className="py-1.5">
+              {i.l1_name ? (
+                <span
+                  className="inline-block max-w-[84px] truncate rounded px-1 py-0.5 text-[10px] font-bold"
+                  style={i.l1_color ? { backgroundColor: `${i.l1_color}1F`, color: i.l1_color } : undefined}
+                  title={i.l1_name}
+                >
+                  {i.l1_name}
+                </span>
+              ) : (
+                <span className="text-[10px] font-semibold text-ink-faint">—</span>
+              )}
             </Cell>
             <Cell strong className="py-1.5">
               {price(i.price, i.currency)}
@@ -413,7 +432,7 @@ function RangeBar({ position }: { position: string | null }) {
   const ratio = Math.min(1, Math.max(0, Number(position)));
   return (
     <span className="flex items-center gap-1.5">
-      <span className="relative h-1.5 w-[54px] overflow-hidden rounded-full bg-canvas-soft">
+      <span className="relative h-1.5 w-[44px] overflow-hidden rounded-full bg-canvas-soft">
         <span
           className="absolute top-0 h-full w-[3px] rounded-full bg-ge-point"
           style={{ left: `calc(${ratio * 100}% - 1.5px)` }}
