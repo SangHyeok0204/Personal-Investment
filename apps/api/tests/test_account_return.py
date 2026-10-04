@@ -16,9 +16,9 @@
 """
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
-from decimal import Decimal
 
 from app.core import account_return as ar
 from app.core import pnl_breakdown as pb

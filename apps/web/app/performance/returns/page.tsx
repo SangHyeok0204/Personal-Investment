@@ -161,18 +161,25 @@ export default function ReturnsPage() {
               주가 손익 + 환율 등 = 원화 증감. 셋을 따로 읽지 말 것. */}
           {/* ★정본 — 시작일 이후 손익 ÷ 투입 원금(A0 + 순외부입금). */}
           <StatTile
-            label={`내 계좌 수익률${acct ? ` (${acct.start.slice(5)}~)` : ""}`}
+            // ★2026-10-05 이름은 벤치마크 화면과 같게, 기간(MM-DD ~ MM-DD)은 다른 성과 화면처럼 hint 로.
+            label="내 계좌 (환율 제외)"
             value={accountPct}
             // ★2026-10-04 "둘 다 표시": 위 값은 환율 제외(키움 손익). 원화 실질(환차 포함,
             //   총자산 − 원금)을 보조로 같이 적는다.
-            hint={[
-              acct?.krw_return_ratio != null ? `원화 실질 ${pctOf(acct.krw_return_ratio)}` : null,
+            //   ★2026-10-05 한 줄이면 잘린다(1280px 실측) — 손익 ÷ 원금 / 기간·원화 실질 두 줄로.
+            hint={
               acct?.pnl_since_start_krw != null && acct.invested_krw != null
-                ? `${Number(acct.pnl_since_start_krw) > 0 ? "+" : ""}${formatKrwCompactString(acct.pnl_since_start_krw)} ÷ ${formatKrwCompactString(acct.invested_krw)}`
-                : "시작일 이후 손익 ÷ 투입 원금",
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+                ? `${Number(acct.pnl_since_start_krw) > 0 ? "+" : ""}${formatKrwCompactString(acct.pnl_since_start_krw)} ÷ 원금 ${formatKrwCompactString(acct.invested_krw)}`
+                : "시작일 이후 손익 ÷ 투입 원금"
+            }
+            subHint={
+              [
+                acct?.return_date ? `${acct.start.slice(5)} ~ ${acct.return_date.slice(5)}` : null,
+                acct?.krw_return_ratio != null ? `원화 실질 ${pctOf(acct.krw_return_ratio)}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined
+            }
             accent="auto"
             loading={account.isLoading}
           />

@@ -89,6 +89,7 @@ export function StatTile({
   label,
   value,
   hint,
+  subHint,
   accent,
   loading,
   onClick,
@@ -97,6 +98,8 @@ export function StatTile({
   label: string;
   value?: string | null;
   hint?: string;
+  /** ★2026-10-05 설명 둘째 줄(선택). 한 줄에 다 넣으면 좁은 칸에서 잘린다(성과 화면 1280px 실측). */
+  subHint?: string;
   /** "auto" 면 값의 부호를 보고 상승/하락 색을 고른다. */
   accent?: "up" | "down" | "neutral" | "auto";
   loading?: boolean;
@@ -159,6 +162,9 @@ export function StatTile({
       </div>
       {hint && (
         <div className="mt-1 truncate text-[11px] font-medium text-ink-muted">{hint}</div>
+      )}
+      {subHint && (
+        <div className="truncate text-[11px] font-medium text-ink-muted">{subHint}</div>
       )}
       {/* 누를 수 있다는 걸 호버에서만 알린다 — 평소엔 숫자가 주인공이다.
           ★2026-09-25 사용자 지시: 오른쪽 위 구석으로. 아래에 두면 설명 줄(hint)과

@@ -134,18 +134,20 @@ export default function PerformanceAnalysisPage() {
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 md:grid-cols-3 xl:grid-cols-6">
           {/* ★정본 — 시작일 이후 손익 ÷ 투입 원금. */}
+          {/* ★2026-10-05 이름은 벤치마크 화면과 같게 — 위 값은 환율 제외(키움 손익). */}
           <StatTile
-            label="내 계좌 수익률"
+            label="내 계좌 (환율 제외)"
             value={acct?.return_ratio == null ? null : pct(acct.return_ratio)}
             // 보조: 원화 실질(환차 포함, 총자산 − 원금). 위 값은 환율 제외(키움 손익).
-            hint={[
-              acct?.krw_return_ratio != null ? `원화 실질 ${pct(acct.krw_return_ratio)}` : null,
+            //   ★2026-10-05 한 줄이면 6칸 너비(133px)에서 잘린다 — 기간과 원화 실질을 두 줄로.
+            hint={
               acct?.return_date
-                ? `~${acct.return_date.slice(5)}`
-                : "시작일 이후 손익 ÷ 투입 원금",
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+                ? `${acct.start.slice(5)} ~ ${acct.return_date.slice(5)}`
+                : "시작일 이후 손익 ÷ 투입 원금"
+            }
+            subHint={
+              acct?.krw_return_ratio != null ? `원화 실질 ${pct(acct.krw_return_ratio)}` : undefined
+            }
             accent="auto"
             loading={account.isLoading}
           />

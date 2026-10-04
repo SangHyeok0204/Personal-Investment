@@ -120,16 +120,23 @@ export default function ReportPage() {
         </div>
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
+          {/* ★2026-10-05 이름은 벤치마크 화면과 같게 — 위 값은 환율 제외(키움 손익). */}
           <StatTile
-            label="내 계좌 수익률"
+            label="내 계좌 (환율 제외)"
             value={
               acctPoint?.return_ratio == null ? null : formatPercentString(acctPoint.return_ratio)
             }
             // 보조: 원화 실질(환차 포함, 총자산 − 원금). 위 값은 환율 제외(키움 손익).
+            //   ★2026-10-05 한 줄이면 잘린다(1280px 실측) — 기간·TWR 과 원화 실질을 두 줄로.
             hint={
               acctPoint
-                ? `${acctPoint.krw_return_ratio != null ? `원화 실질 ${formatPercentString(acctPoint.krw_return_ratio)} · ` : ""}~${acctPoint.date.slice(5)} · 참고 TWR ${formatPercentString(data?.twr)}`
+                ? `${account.data ? `${account.data.start.slice(5)} ` : ""}~ ${acctPoint.date.slice(5)} · 참고 TWR ${formatPercentString(data?.twr)}`
                 : "시작일 이후 손익 ÷ 투입 원금"
+            }
+            subHint={
+              acctPoint?.krw_return_ratio != null
+                ? `원화 실질 ${formatPercentString(acctPoint.krw_return_ratio)}`
+                : undefined
             }
             actionHint="눌러서 벤치마크 대비 보기"
             onClick={() => setPanel("benchmarks")}

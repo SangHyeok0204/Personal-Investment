@@ -339,9 +339,12 @@ def _valuechain_labels(db: Session, tickers: list[str]) -> dict[str, str]:
         picked = sorted(matched or opts, key=lambda o: o[2])      # 안정 정렬: 테마 → 분류, 섹터 순서 유지
         out[t] = " / ".join(list(dict.fromkeys(label for _, label, _ in picked))[:2])
     # 분류에 없는 ETF 는 사용자가 지정한 L1 만 있다(`vc.ETF_L1_OVERRIDES`) — 시장 리서치 표와 같은 L1 을 보인다.
-    for t, (l1, _) in vc.ticker_l1_map().items():
-        if t in ticker_set and t not in out:
-            out[t] = f"{l1} (ETF 지정)"
+    # ★2026-10-05 지정 ETF 만 돈다. ⚠️ticker_l1_map 전체를 돌면 주 소속(primary)이 없는 일반 종목까지
+    #   '(ETF 지정)' 으로 붙었다.
+    l1_map = vc.ticker_l1_map()
+    for t in vc.ETF_L1_OVERRIDES:
+        if t in ticker_set and t not in out and t in l1_map:
+            out[t] = f"{l1_map[t][0]} (ETF 지정)"
     return out
 
 

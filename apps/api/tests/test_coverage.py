@@ -239,3 +239,19 @@ def test_stocks_coverage_valuechain_multi_sector(api, db, monkeypatch, tmp_path)
     assert rows["AMD"]["cells"][-1] == "tx-t › 상류"                # 분류 전용 → 1개
     assert rows["TEM"]["cells"][-1] == "th1 › 상류 / th2 › 상류"         # 최대 2개(테마 우선)
     assert rows["MSFT"]["cells"][-1] == "—"
+
+
+def test_stocks_coverage_valuechain_etf_override_only(api, db, monkeypatch, tmp_path):
+    """★2026-10-05 '(ETF 지정)' 은 `ETF_L1_OVERRIDES` 에 있는 ETF 에만 붙는다 — 주 소속 분류가 없는
+    일반 종목이 ticker_l1_map 에 있어도 지정 ETF 로 둔갑하지 않는다."""
+    monkeypatch.setattr(vc, "VALUECHAIN_DIR", tmp_path)           # 분류 없음 → 주 소속 라벨 0개
+    monkeypatch.setattr(vc, "ticker_l1_map", lambda: {"SOXL": ("디지털·컴퓨팅", "#4F5AA8"),
+                                                      "MSFT": ("디지털·컴퓨팅", "#4F5AA8")})
+    for t in ("SOXL", "MSFT"):
+        db.execute(text("INSERT INTO watchlist_items (id, ticker) VALUES (:i, :t)"), {"i": uuid.uuid4(), "t": t})
+    db.commit()
+
+    rows = {row["key"]: row for row in api.get("/api/v1/research/coverage/stocks").json()["table"]["rows"]}
+    assert "SOXL" in vc.ETF_L1_OVERRIDES
+    assert rows["SOXL"]["cells"][-1] == "디지털·컴퓨팅 (ETF 지정)"
+    assert rows["MSFT"]["cells"][-1] == "—"
