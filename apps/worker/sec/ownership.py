@@ -23,7 +23,12 @@ TRANSACTION_CODE_MAP: dict[str, dict] = {
     "F": {"buy_sell": "NEUTRAL", "label": "세금 원천징수"},
     "G": {"buy_sell": "NEUTRAL", "label": "증여"},
 }
+# ★직원주식매입(ESPP)도 계획매매다 — 회사 관리자가 정해진 조건으로 대신 사 준다(본인 판단 아님).
+#   ⚠️2026-10-04: TSMC 임직원 32명의 ESPP 매입(코드 P)이 '여러 임원 동시 매수 31명'으로 떴다
+#   (2026-03 부터 외국 발행사 임원도 Form 4 를 낸다).
+#   ⚠️**매수(P)에만** 적용한다 — 매도 각주의 "ESPP 로 취득한 주식"은 출처 설명일 뿐, 파는 건 본인 판단이다.
 _PLANNED_KEYWORDS = ("10b5-1", "10b5–1", "rule 10b5")
+_ESPP_KEYWORDS = ("employee stock purchase plan", "(espp)")
 
 
 def cik10(v) -> str | None:
@@ -96,6 +101,7 @@ def parse_form4(xml_text: str) -> tuple[list[dict], list[dict]]:
 
     footnotes = {fn.get("id", ""): (fn.text or "").strip() for fn in root.findall(".//footnotes/footnote")}
     planned_ids = {fid for fid, txt in footnotes.items() if any(k in txt.lower() for k in _PLANNED_KEYWORDS)}
+    espp_ids = {fid for fid, txt in footnotes.items() if any(k in txt.lower() for k in _ESPP_KEYWORDS)}
     aff = root.find(".//aff10b5One")
     doc_planned = aff is not None and (aff.text or "").strip() in ("1", "true")
 
@@ -125,7 +131,7 @@ def parse_form4(xml_text: str) -> tuple[list[dict], list[dict]]:
                 "is_derivative": derivative,
                 "is_open_market": bool(m.get("is_open_market")),
                 "is_option_exercise": bool(m.get("is_option_exercise")),
-                "is_planned_trade": doc_planned or bool(refs & planned_ids),
+                "is_planned_trade": doc_planned or bool(refs & planned_ids) or (code == "P" and bool(refs & espp_ids)),
             })
     return rows, owners
 

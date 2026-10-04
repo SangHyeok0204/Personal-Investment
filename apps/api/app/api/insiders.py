@@ -59,7 +59,7 @@ def exclusion_reason(r) -> str | None:
     if r.transaction_code not in ("P", "S"):
         return CODE_LABEL.get(r.transaction_code or "", f"코드 {r.transaction_code}")
     if r.is_planned_trade:
-        return "10b5-1 계획매매"
+        return "계획매매(10b5-1·ESPP)"
     return None
 
 
@@ -148,7 +148,7 @@ def overview(db: Session = Depends(get_db)):
     shown_targets = sorted(set(targets.values()))
     return {
         "window_days": WINDOW_DAYS,
-        "rule": "비파생 · 코드 P/S · 10b5-1 계획매매 제외 · 정정 대체분 제외",
+        "rule": "비파생 · 코드 P/S · 계획매매(10b5-1·ESPP) 제외 · 정정 대체분 제외",
         "targets": shown_targets,
         "no_data": [t for t in shown_targets if t not in data_from],   # ETF 등 Form 4 가 없는 종목
         "data_from": sorted(data_from.values(), key=lambda x: x["from"]),

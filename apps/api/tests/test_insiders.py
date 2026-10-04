@@ -19,7 +19,7 @@ def _r(**kw):
 def test_exclusion_rules():
     assert ins.exclusion_reason(_r()) is None
     assert ins.exclusion_reason(_r(transaction_code="S")) is None
-    assert ins.exclusion_reason(_r(transaction_code="S", is_planned_trade=True)) == "10b5-1 계획매매"
+    assert ins.exclusion_reason(_r(transaction_code="S", is_planned_trade=True)) == "계획매매(10b5-1·ESPP)"
     assert ins.exclusion_reason(_r(transaction_code="A")) == "보상 부여"
     assert ins.exclusion_reason(_r(transaction_code="M")) == "옵션 행사"
     assert ins.exclusion_reason(_r(is_derivative=True)) == "파생(옵션 등)"
@@ -81,6 +81,6 @@ def test_month_lists_excluded_with_reasons(client, db):
     mk = (TODAY - timedelta(days=5)).strftime("%Y-%m")
     d = client.get(f"/api/v1/research/insiders/month?month={mk}").json()
     reasons = {t["insider"]: t["excluded_reason"] for t in d["trades"]}
-    assert reasons.get("A3") in (None, "10b5-1 계획매매")
+    assert reasons.get("A3") in (None, "계획매매(10b5-1·ESPP)")
     assert reasons.get("A4") == "보상 부여" and reasons.get("A5") == "파생(옵션 등)" and reasons.get("A6") == "정정으로 대체"
     assert all(t["ticker"] == "NBIS" for t in d["trades"])

@@ -74,6 +74,21 @@ def test_form4_document_level_10b5_flag():
     assert all(r["is_planned_trade"] for r in rows)
 
 
+def test_form4_espp_purchase_is_planned():
+    """⚠️2026-10-04 TSMC: 회사 관리자가 ESPP 로 대신 산 코드 P 는 본인 판단 매수가 아니다 → 계획매매."""
+    xml = FORM4_JOINT.replace(
+        "<transactionCoding><transactionCode>P</transactionCode></transactionCoding>",
+        '<transactionCoding><transactionCode>P</transactionCode><footnoteId id="F2"/></transactionCoding>', 1,
+    ).replace("</footnotes>", '<footnote id="F2">Common Shares purchased by the administrator of the issuer\'s '
+              'Employee Stock Purchase Plan ("ESPP") on behalf of the filer.</footnote></footnotes>')
+    buy = parse_form4(xml)[0][0]
+    assert buy["transaction_code"] == "P" and buy["is_planned_trade"]
+    # 매도 각주의 'ESPP 로 취득' 은 출처 설명 — 매도는 본인 판단(계획매매 아님)
+    sell_xml = FORM4_JOINT.replace('<footnoteId id="F1"/>', '<footnoteId id="F2"/>', 1).replace(
+        "</footnotes>", '<footnote id="F2">Shares acquired under the Employee Stock Purchase Plan.</footnote></footnotes>')
+    assert not parse_form4(sell_xml)[0][1]["is_planned_trade"]
+
+
 def test_13dg_structured_cover():
     xml = """<edgarSubmission xmlns="http://www.sec.gov/edgar/schedule13D">
       <formData><coverPageHeader><issuerInfo><issuerCik>0001045810</issuerCik>
