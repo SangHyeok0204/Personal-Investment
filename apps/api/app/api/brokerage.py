@@ -341,6 +341,24 @@ def _ensure_connection(db: Session) -> uuid.UUID:
     return connection_id
 
 
+def fail_orphaned_syncs(db: Session) -> int:
+    """API 가 막 떴을 때 남아 있는 RUNNING 동기화는 전부 죽은 것이다 — FAILED 로 닫는다.
+
+    동기화는 워커가 아니라 **이 프로세스 안**(스레드)에서 돈다. 그래서 `--reload` 재시작·종료가
+    도중에 끊으면 행이 RUNNING 으로 영영 남고, 리퍼(워커 심장박동용)도 손대지 않는다
+    (실측 2026-10-04 15:10 회차). 그대로 두면 수집 상태가 '진행 중'에 멈춘다.
+    """
+    n = db.execute(
+        text(
+            "UPDATE jobs SET status = 'FAILED', finished_at = now(), updated_at = now(), "
+            "error_message = 'API 재시작으로 중단됨 — 다시 동기화하세요' "
+            "WHERE job_type = 'SYNC_KIWOOM_PORTFOLIO' AND status = 'RUNNING'"
+        )
+    ).rowcount
+    db.commit()
+    return n
+
+
 def _create_job(db: Session) -> uuid.UUID:
     job_id = uuid.uuid4()
     db.execute(

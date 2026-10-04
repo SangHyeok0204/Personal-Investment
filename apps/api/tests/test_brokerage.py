@@ -302,3 +302,25 @@ def test_finished_job_without_result_stores_null(db):
     ).one()
     assert row.error_message == "토큰 발급 실패"
     assert row.result is None
+
+
+def test_orphaned_running_sync_is_closed_on_startup(db):
+    """API 재시작으로 끊긴 동기화(RUNNING)는 시작할 때 FAILED 로 닫는다(실측 2026-10-04 15:10)."""
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    from app.api.brokerage import fail_orphaned_syncs
+
+    job_id = _uuid.uuid4()
+    db.execute(
+        text("INSERT INTO jobs (id, job_type, status, started_at) "
+             "VALUES (:i, 'SYNC_KIWOOM_PORTFOLIO', 'RUNNING', now())"),
+        {"i": job_id},
+    )
+    db.commit()
+    assert fail_orphaned_syncs(db) == 1
+    status, err = db.execute(
+        text("SELECT status, error_message FROM jobs WHERE id = :i"), {"i": job_id}
+    ).one()
+    assert status == "FAILED" and "재시작" in err

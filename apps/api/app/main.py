@@ -37,6 +37,13 @@ from app.core.errors import register_exception_handlers
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 이 프로세스 안에서 돌던 동기화가 재시작으로 끊겼으면 RUNNING 행을 닫는다.
+    from app.api.brokerage import fail_orphaned_syncs
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        fail_orphaned_syncs(db)
+
     tasks = [
         # 이력 동기화: 영업일 16:30(KST) 이후로 안 돌았으면 따라잡는다.
         # ⚠️브라우저가 아니라 **여기**가 국내 체결이 들어오는 유일한 자동 경로다.

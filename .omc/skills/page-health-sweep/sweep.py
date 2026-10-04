@@ -5,7 +5,11 @@ BAD = re.compile(r"\bNaN\b|\bundefined\b|Infinity|Invalid Date|\[object Object\]
 res = {}
 with sync_playwright() as p:
     b = p.chromium.launch(channel="chrome", headless=True)
-    pg = b.new_page(viewport={"width":1280,"height":900})
+    ctx = b.new_context(viewport={"width":1280,"height":900})
+    # ⚠️자동 갱신을 끈다 — 켜 두면 페이지를 새로 열 때마다 화면이 증권사 이력 동기화를 부른다
+    #   (2026-10-04 실측: 스윕 한 번에 키움 동기화 32회).
+    ctx.add_init_script("try{localStorage.setItem('pi:auto-refresh','0')}catch(e){}")
+    pg = ctx.new_page()
     for path in PAGES:
         errs, fails = [], []
         pg.on("console", lambda m: errs.append(m.text[:200]) if m.type=="error" else None)
@@ -21,6 +25,6 @@ with sync_playwright() as p:
         res[path] = {"console": errs[:6], "http": sorted(set(fails))[:6], "bad_text": bad, "overflow": ov,
                      "loading": len(re.findall(r"불러오는 중|Loading", txt))}
         pg.remove_listener("console", pg.listeners("console")[0]) if hasattr(pg,"listeners") else None
-        pg.close(); pg = b.new_page(viewport={"width":1280,"height":900})
+        pg.close(); pg = ctx.new_page()
     b.close()
 print(json.dumps(res, ensure_ascii=False, indent=1))

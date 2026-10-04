@@ -145,6 +145,9 @@ function marketLikelyOpen(now: Date): boolean {
 export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [enabled, setEnabledState] = useState(true);
+  // ⚠️저장된 설정을 읽기 **전에는** 아무 동기화도 시작하지 않는다. 안 그러면 첫 렌더의 기본값(켜짐)으로
+  //   이력 동기화가 한 번 나간다 — 꺼 둔 사용자도 페이지를 열 때마다 키움을 부른다(실측 2026-10-04).
+  const [prefLoaded, setPrefLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
@@ -173,6 +176,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     } catch {
       // 프라이빗 모드 등에서 접근이 막힐 수 있다 — 기본값으로 둔다.
     }
+    setPrefLoaded(true);
   }, []);
 
   const setEnabled = useCallback((value: boolean) => {
@@ -231,7 +235,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const historyNextAt = useRef(0);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!prefLoaded || !enabled) return;
     const tick = async () => {
       if (document.visibilityState !== "visible") return;
       if (historyInFlight.current) return;
@@ -258,11 +262,11 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     void tick();
     const id = window.setInterval(() => void tick(), HISTORY_CHECK_MS);
     return () => window.clearInterval(id);
-  }, [enabled, queryClient]);
+  }, [prefLoaded, enabled, queryClient]);
 
   // 증권사 잔고 동기화 타이머.
   useEffect(() => {
-    if (!enabled) return;
+    if (!prefLoaded || !enabled) return;
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       if (!marketLikelyOpen(new Date())) return;
@@ -272,7 +276,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     };
     const id = window.setInterval(tick, BROKER_SYNC_MS);
     return () => window.clearInterval(id);
-  }, [enabled, syncNow]);
+  }, [prefLoaded, enabled, syncNow]);
 
   const value = useMemo<AutoRefreshCtx>(
     () => ({
