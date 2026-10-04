@@ -102,8 +102,10 @@ export function Fan({
     [keys.length, width, cardW, cardH, minStep, maxStep],
   );
 
+  // 양 끝 카드가 기울면 모서리가 오른쪽으로 2px 남짓 삐져 가로 스크롤이 생긴다 — 가로만 자른다
+  // (clip 은 세로를 건드리지 않아 hover 로 들리는 카드는 그대로).
   return (
-    <div ref={ref} className="relative w-full" style={{ height: width ? height : cardH + PAD_TOP }}>
+    <div ref={ref} className="relative w-full overflow-x-clip" style={{ height: width ? height : cardH + PAD_TOP }}>
       {width > 0 &&
         keys.map((key, i) => {
           const s = slots[i];
