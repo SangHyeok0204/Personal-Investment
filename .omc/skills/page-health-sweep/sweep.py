@@ -24,7 +24,7 @@ with sync_playwright() as p:
         ov = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         res[path] = {"console": errs[:6], "http": sorted(set(fails))[:6], "bad_text": bad, "overflow": ov,
                      "loading": len(re.findall(r"불러오는 중|Loading", txt))}
-        pg.remove_listener("console", pg.listeners("console")[0]) if hasattr(pg,"listeners") else None
-        pg.close(); pg = ctx.new_page()
+        pg.close()
+        pg = ctx.new_page()
     b.close()
 print(json.dumps(res, ensure_ascii=False, indent=1))

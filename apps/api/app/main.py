@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -39,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ⚠️테스트(`with TestClient(app)`)도 이 lifespan 을 탄다. 그런데 아래 루프·정리는 테스트 DB 가 아니라
+    #   **실제 DB(SessionLocal)** 와 실제 증권사 키를 쓴다 — 커밋마다 도는 make check 가 진짜 동기화·작업 등록을
+    #   일으킬 수 있었다(2026-10-05 리뷰에서 발견). conftest 가 이 값을 켠다.
+    if os.environ.get("PI_DISABLE_BACKGROUND") == "1":
+        yield
+        return
     # 이 프로세스 안에서 돌던 동기화가 재시작으로 끊겼으면 RUNNING 행을 닫는다.
     from app.api.brokerage import fail_orphaned_syncs
     from app.db.session import SessionLocal

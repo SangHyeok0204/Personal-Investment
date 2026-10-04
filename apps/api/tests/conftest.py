@@ -1,3 +1,8 @@
+import os
+
+# ★app 을 import 하기 **전에** 켠다 — lifespan 의 백그라운드 루프(실제 DB·실제 증권사 키)를 테스트에서 끈다.
+os.environ["PI_DISABLE_BACKGROUND"] = "1"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
