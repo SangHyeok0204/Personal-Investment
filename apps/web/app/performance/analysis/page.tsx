@@ -17,7 +17,9 @@ import {
   StubCard,
 } from "@/components/stub";
 import {
+  getAccountReturn,
   getPerformanceAnalytics,
+  type AccountReturn,
   type Contribution,
   type PerformanceAnalytics,
   type RiskMetrics,
@@ -50,6 +52,11 @@ import { cn } from "@/lib/utils";
 //   위험지표 카드와 종목 기여도 표는 **칸**(최대낙폭 · 기여도 합계)으로 줄이고 누르면
 //   팝업으로 뜬다. 팝업 안에 있던 월별 수익률은 본문의 **월별 막대**로 꺼냈다 —
 //   막대를 누르면 그 달, 헤더 '전체 목록'은 옛 연×월 표다. 낙폭은 일별 추이라 선.
+//
+// ★2026-10-04 사용자 지정: 첫 칸과 왼쪽 기본 그래프는 **내 계좌 수익률**(/account-return —
+//   시작일 이후 손익 ÷ 투입 원금, 6/01~)이다. 옛 '전체 수익률'(연쇄 TWR)은 지웠고,
+//   1·3개월·1년 칸·월별 막대·낙폭·위험지표는 일별 연쇄 수익률이라 '참고: 시간가중(TWR)'
+//   으로 적어 둔다 — 두 정의를 한 칸에 섞지 않는다.
 
 /** 비율 문자열(0.0711) → "+7.11%". null 은 "—". */
 function pct(value: string | null | undefined, digits = 2): string {
@@ -94,6 +101,12 @@ export default function PerformanceAnalysisPage() {
     queryFn: () => getPerformanceAnalytics(accountId),
     ...live,
   });
+  const account = useQuery({
+    queryKey: ["account-return", accountId],
+    queryFn: () => getAccountReturn(accountId),
+    ...live,
+  });
+  const acct = account.data;
 
   const connected = !isError && (data?.contributions.length ?? 0) > 0;
   const primaryRisk = data?.risk[0];
@@ -112,7 +125,7 @@ export default function PerformanceAnalysisPage() {
     <>
       <Topbar
         title="성과 분석"
-        subtitle="기간수익률(원화 기준) · 위험지표 · 종목 기여도(주가 기준)"
+        subtitle="내 계좌 수익률 · 참고: 시간가중(TWR) 위험지표 · 종목 기여도(주가 기준)"
       />
       <PageContainer fit>
         {!connected && !isLoading && (
@@ -120,19 +133,30 @@ export default function PerformanceAnalysisPage() {
         )}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 md:grid-cols-3 xl:grid-cols-6">
+          {/* ★정본 — 시작일 이후 손익 ÷ 투입 원금. */}
+          <StatTile
+            label="내 계좌 수익률"
+            value={acct?.return_ratio == null ? null : pct(acct.return_ratio)}
+            hint={
+              acct?.return_date
+                ? `${acct.start.slice(5)}~${acct.return_date.slice(5)} · 손익 ÷ 원금`
+                : "시작일 이후 손익 ÷ 투입 원금"
+            }
+            accent="auto"
+            loading={account.isLoading}
+          />
+          {/* 참고 — 일별 연쇄 수익률(TWR). 위 정본과 정의가 다르다. */}
           {(data?.periods ?? [])
-            .filter((p) => ["1개월", "3개월", "1년", "전체"].includes(p.label))
+            .filter((p) => ["1개월", "3개월", "1년"].includes(p.label))
             .map((p) => (
               <StatTile
                 key={p.label}
-                label={`${p.label} 수익률`}
+                label={`${p.label} (참고 TWR)`}
                 value={p.return_ratio == null ? null : pct(p.return_ratio)}
                 hint={
-                  p.label === "전체"
-                    ? "원화 기준"
-                    : p.start_date
-                      ? `${p.start_date} ~ ${p.end_date} · ${p.observations}일`
-                      : undefined
+                  p.start_date
+                    ? `시간가중 · ${p.start_date.slice(5)}~${p.end_date?.slice(5)}`
+                    : "시간가중(TWR)"
                 }
                 accent="auto"
                 loading={isLoading}
@@ -140,7 +164,7 @@ export default function PerformanceAnalysisPage() {
             ))}
           {/* 옛 위험지표 카드의 대표값. 나머지 지표는 팝업에서. */}
           <StatTile
-            label="최대낙폭 (전체)"
+            label="최대낙폭 (참고 TWR)"
             value={worst?.max_drawdown == null ? null : pct(worst.max_drawdown)}
             hint={
               primaryRisk
@@ -175,10 +199,15 @@ export default function PerformanceAnalysisPage() {
             "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]",
           )}
         >
-          <DrawdownCard data={data} loading={isLoading} />
+          <MainChartCard
+            data={data}
+            loading={isLoading}
+            account={acct}
+            accountLoading={account.isLoading}
+          />
           <StubCard
             title="월별 수익률"
-            subtitle="원화 기준 · 막대를 누르면 그 달"
+            subtitle="참고: 시간가중(TWR) · 원화 기준 · 막대를 누르면 그 달"
             scrollBody
             action={
               <button
@@ -210,7 +239,9 @@ export default function PerformanceAnalysisPage() {
         onClose={() => setOpenRisk(false)}
         title="기간별 위험지표"
         subtitle={
-          data?.first_date ? `${data.first_date} ~ ${data.last_date}` : undefined
+          data?.first_date
+            ? `참고: 시간가중(TWR) 일별 수익률 · ${data.first_date} ~ ${data.last_date}`
+            : "참고: 시간가중(TWR) 일별 수익률"
         }
       >
         <div className="space-y-4">
@@ -223,7 +254,7 @@ export default function PerformanceAnalysisPage() {
         open={openMonthly}
         onClose={() => setOpenMonthly(false)}
         title="월별 수익률"
-        subtitle="일별 수익률을 그 달 안에서 곱해 누적한 값"
+        subtitle="참고: 시간가중(TWR) — 일별 수익률을 그 달 안에서 곱해 누적한 값"
       >
         <MonthlyGrid data={data} />
       </Modal>
@@ -247,7 +278,7 @@ export default function PerformanceAnalysisPage() {
         open={monthPicked != null}
         onClose={() => setPickedMonth(null)}
         title={monthPicked ? `${monthPicked.month} 수익률` : ""}
-        subtitle="원화 기준 · 일별 수익률을 그 달 안에서 곱해 누적"
+        subtitle="참고: 시간가중(TWR) · 원화 기준 · 일별 수익률을 그 달 안에서 곱해 누적"
         width={620}
       >
         {monthPicked && <MonthDetail month={monthPicked.month} ratio={monthPicked.return_ratio} data={data} />}
@@ -265,14 +296,109 @@ export default function PerformanceAnalysisPage() {
   );
 }
 
+// ── 왼쪽 그래프 — 내 계좌 수익률(기본) · 낙폭(참고 TWR) ──────────────────────
+
+function MainChartCard({
+  data,
+  loading,
+  account,
+  accountLoading,
+}: {
+  data?: PerformanceAnalytics;
+  loading: boolean;
+  account?: AccountReturn;
+  accountLoading: boolean;
+}) {
+  const [view, setView] = useState<"return" | "drawdown">("return");
+  const toggle = (
+    <div className="flex gap-1">
+      {(
+        [
+          ["return", "수익률"],
+          ["drawdown", "낙폭(참고 TWR)"],
+        ] as const
+      ).map(([id, text]) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => setView(id)}
+          aria-pressed={view === id}
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors",
+            view === id
+              ? "bg-white/90 text-ge-header"
+              : "text-white/60 hover:bg-white/15 hover:text-white",
+          )}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+  return view === "drawdown" ? (
+    <DrawdownCard data={data} loading={loading} action={toggle} />
+  ) : (
+    <AccountReturnCard data={account} loading={accountLoading} action={toggle} />
+  );
+}
+
+function AccountReturnCard({
+  data,
+  loading,
+  action,
+}: {
+  data?: AccountReturn;
+  loading: boolean;
+  action: React.ReactNode;
+}) {
+  const points = useMemo(
+    () =>
+      (data?.items ?? []).map((p) => ({
+        date: p.date,
+        value: p.return_ratio == null ? null : Number(p.return_ratio) * 100,
+      })),
+    [data],
+  );
+  return (
+    <StubCard
+      title="내 계좌 수익률 추이"
+      subtitle={data ? `${data.start} 부터 · 손익 ÷ 투입 원금` : undefined}
+      action={action}
+    >
+      {loading ? (
+        <Placeholder text="불러오는 중" />
+      ) : points.length === 0 ? (
+        <Placeholder text="수익률이 없습니다" />
+      ) : (
+        <div className="flex h-full flex-col">
+          <SeriesChart
+            points={points}
+            height={200}
+            includeZero
+            valueFormat={(v) => `${v.toFixed(0)}%`}
+            tooltipFormat={(p) =>
+              `${p.value == null ? "—" : `${p.value > 0 ? "+" : ""}${p.value.toFixed(2)}%`}`
+            }
+          />
+          <p className="mt-auto pt-2 text-[11px] leading-snug text-ink-muted">
+            입금은 원금만 올린다 — 손익은 그대로 · 모르는 날은 비워 둔다
+          </p>
+        </div>
+      )}
+    </StubCard>
+  );
+}
+
 // ── 낙폭 추이 ───────────────────────────────────────────────────────────────
 
 function DrawdownCard({
   data,
   loading,
+  action,
 }: {
   data?: PerformanceAnalytics;
   loading: boolean;
+  action?: React.ReactNode;
 }) {
   const points = useMemo(
     () =>
@@ -289,9 +415,10 @@ function DrawdownCard({
       title="낙폭(Drawdown) 추이"
       subtitle={
         worst?.max_drawdown
-          ? `최대 ${pct(worst.max_drawdown)} (${worst.max_drawdown_trough_date})`
-          : undefined
+          ? `참고: 시간가중(TWR) · 최대 ${pct(worst.max_drawdown)} (${worst.max_drawdown_trough_date})`
+          : "참고: 시간가중(TWR)"
       }
+      action={action}
     >
       {loading ? (
         <Placeholder text="불러오는 중" />

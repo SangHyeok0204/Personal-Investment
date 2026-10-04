@@ -18,7 +18,11 @@ import {
   StubCard,
   toneOf,
 } from "@/components/stub";
-import { getPerformance, type DailyPerformancePoint } from "@/lib/api";
+import {
+  getAccountReturn,
+  getPerformance,
+  type DailyPerformancePoint,
+} from "@/lib/api";
 import { formatKrwSigned, formatKrwString } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +53,11 @@ import { cn } from "@/lib/utils";
 // ★2026-09-25 사용자 지시(전체 메뉴 공통 패턴): 오른쪽 월별 **표**를 월별 주가손익
 //   **막대**로 바꿨다. 막대를 누르면 그 달의 일별 내역, 헤더 '전체 목록'은 옛 월별
 //   표다. 왼쪽 예탁자산·누적손익은 일별 추이라 선 그래프 그대로 둔다.
+//
+// ★2026-10-04 사용자 지정: 첫 칸과 기본 그래프는 **내 계좌 수익률**(/account-return —
+//   시작일 이후 손익 ÷ 투입 원금, 6/01~)이다. 입출금 날은 그래프 아래 세모로 표시한다.
+//   연쇄 수익률(TWR)은 '참고: 시간가중(TWR)'으로만 남긴다 — 두 정의를 섞지 않는다.
+//   ⚠️옛 '원금 대비 %'(원화 증감 ÷ (시작 + 순입금))는 세 번째 정의라 지웠다.
 
 const RANGES = [
   { id: 90, label: "3개월" },
@@ -61,7 +70,7 @@ export default function ReturnsPage() {
   const { accountId, connected } = useAccount();
   const [days, setDays] = useState(365);
   const [bridgeOpen, setBridgeOpen] = useState(false);
-  const [metric, setMetric] = useState<"assets" | "cumulative">("assets");
+  const [metric, setMetric] = useState<"return" | "assets" | "cumulative">("return");
   // 막대 → 그 달 일별 내역. 헤더 '전체 목록' → 월별 표.
   const [pickedMonth, setPickedMonth] = useState<string | null>(null);
   const [monthListOpen, setMonthListOpen] = useState(false);
@@ -72,15 +81,36 @@ export default function ReturnsPage() {
     staleTime: 60_000,
   });
 
+  const account = useQuery({
+    queryKey: ["account-return", accountId],
+    queryFn: () => getAccountReturn(accountId),
+    staleTime: 60_000,
+  });
+
   const data = perf.data;
   const items = data?.items ?? [];
-
-  // 원금(순입금) 대비 증감률. 분모가 0이면 계산하지 않는다.
-  const netDeposit = Number(data?.net_deposit_krw ?? 0);
-  const start = Number(data?.start_assets_krw ?? 0);
-  const base = start + netDeposit;
-  const gain = data?.gain_krw == null ? null : Number(data.gain_krw);
-  const gainRate = gain != null && base > 0 ? (gain / base) * 100 : null;
+  const acct = account.data;
+  const accountPct = pctOf(acct?.return_ratio);
+  // 수익률 그래프도 위 기간 칩을 따른다 — 값은 늘 6/01 부터 센 그대로다.
+  const returnPoints = useMemo(() => {
+    const from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    return (acct?.items ?? []).filter((p) => p.date >= from);
+  }, [acct, days]);
+  const flowMarkers = useMemo(
+    () =>
+      returnPoints.flatMap((p, index) =>
+        p.net_flow_krw == null
+          ? []
+          : [
+              {
+                index,
+                label: `${Number(p.net_flow_krw) > 0 ? "입금" : "출금"} ${formatKrwSigned(p.net_flow_krw)}`,
+                tone: (Number(p.net_flow_krw) > 0 ? "up" : "down") as "up" | "down",
+              },
+            ],
+      ),
+    [returnPoints],
+  );
 
   const bridge = data?.bridge ?? null;
   const twrPct =
@@ -122,22 +152,24 @@ export default function ReturnsPage() {
 
   return (
     <>
-      <Topbar title="수익률 추이" subtitle="예탁자산 · 누적손익" />
+      <Topbar title="수익률 추이" subtitle="내 계좌 수익률 · 예탁자산 · 누적손익" />
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="계좌 성과" />}
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           {/* ⚠️타일 넷은 **왼쪽에서 오른쪽으로 이어진다.**
               주가 손익 + 환율 등 = 원화 증감. 셋을 따로 읽지 말 것. */}
+          {/* ★정본 — 시작일 이후 손익 ÷ 투입 원금(A0 + 순외부입금). */}
           <StatTile
-            label="현재 예탁자산"
-            value={formatKrwString(data?.end_assets_krw)}
+            label={`내 계좌 수익률${acct ? ` (${acct.start.slice(5)}~)` : ""}`}
+            value={accountPct}
             hint={
-              data?.net_deposit_krw
-                ? `${data.last_date} · 구간 순입금 ${formatKrwString(data.net_deposit_krw)}`
-                : (data?.last_date ?? undefined)
+              acct?.pnl_since_start_krw != null && acct.invested_krw != null
+                ? `${formatKrwSigned(acct.pnl_since_start_krw)} ÷ 원금 ${formatKrwString(acct.invested_krw)}`
+                : "시작일 이후 손익 ÷ 투입 원금"
             }
-            loading={perf.isLoading}
+            accent="auto"
+            loading={account.isLoading}
           />
           <StatTile
             label="주가 손익"
@@ -145,7 +177,7 @@ export default function ReturnsPage() {
             hint={
               twrPct == null
                 ? "환율 제외 · 증권사 일별 손익 합"
-                : `환율 제외 · 연쇄 수익률 ${twrPct} (${bridge?.twr_days}일)`
+                : `환율 제외 · 참고: 시간가중(TWR) ${twrPct}`
             }
             actionHint="눌러서 월별 표 보기"
             onClick={() => {
@@ -167,11 +199,7 @@ export default function ReturnsPage() {
           <StatTile
             label="원화 증감 (합)"
             value={formatKrwSigned(data?.gain_krw)}
-            hint={
-              gainRate == null
-                ? "끝자산 − 시작자산 − 순입금"
-                : `${gainRate > 0 ? "+" : ""}${gainRate.toFixed(2)}% · 원금 대비`
-            }
+            hint="끝자산 − 시작자산 − 순입금"
             actionHint="눌러서 이어지는 법 보기"
             onClick={() => setBridgeOpen(true)}
             accent="auto"
@@ -186,6 +214,9 @@ export default function ReturnsPage() {
             </HeaderChip>
           ))}
           <span className="mx-1 h-4 w-px bg-hairline" />
+          <HeaderChip active={metric === "return"} onClick={() => setMetric("return")}>
+            수익률
+          </HeaderChip>
           <HeaderChip active={metric === "assets"} onClick={() => setMetric("assets")}>
             예탁자산
           </HeaderChip>
@@ -211,16 +242,45 @@ export default function ReturnsPage() {
           )}
         >
           <StubCard
-            title={metric === "assets" ? "예탁자산 추이" : "누적손익 추이"}
+            title={
+              metric === "return"
+                ? "내 계좌 수익률 추이"
+                : metric === "assets"
+                  ? "예탁자산 추이"
+                  : "누적손익 추이"
+            }
             subtitle={
-              metric === "assets"
-                ? "현금 + 주식 평가 (원화 환산)"
-                : "일별 주가손익 누적 (환율 제외)"
+              metric === "return"
+                ? "시작일 이후 손익 ÷ 투입 원금 · ▲입금 ▼출금"
+                : metric === "assets"
+                  ? "현금 + 주식 평가 (원화 환산)"
+                  : "일별 주가손익 누적 (환율 제외)"
             }
             className="min-h-0"
             scrollBody
           >
-            {items.length > 0 ? (
+            {metric === "return" ? (
+              returnPoints.length > 0 ? (
+                <SeriesChart
+                  height={300}
+                  includeZero
+                  markers={flowMarkers}
+                  valueFormat={(v) => `${v.toFixed(1)}%`}
+                  points={returnPoints.map((p) => ({
+                    date: p.date,
+                    value: p.return_ratio == null ? null : Number(p.return_ratio) * 100,
+                  }))}
+                  tooltipFormat={(p) => {
+                    const row = returnPoints.find((r) => r.date === p.date);
+                    return `${p.value == null ? "—" : `${p.value > 0 ? "+" : ""}${p.value.toFixed(2)}%`} · 손익 ${formatKrwSigned(row?.pnl_since_start_krw)} ÷ 원금 ${formatKrwString(row?.invested_krw)}`;
+                  }}
+                />
+              ) : (
+                <div className="flex h-[300px] items-center justify-center text-[12px] font-semibold text-ink-faint">
+                  {account.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
+                </div>
+              )
+            ) : items.length > 0 ? (
               <SeriesChart
                 height={300}
                 includeZero={metric === "cumulative"}
@@ -395,6 +455,13 @@ function MonthDays({
       </div>
     </div>
   );
+}
+
+/** 비율 문자열(0.0796) → "+7.96%". 모르면 null(타일이 '—' 로 그린다). */
+function pctOf(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const n = Number(value) * 100;
+  return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
 function BridgeRow({

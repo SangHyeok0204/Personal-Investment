@@ -475,6 +475,53 @@ export function getPnlBreakdown(
   );
 }
 
+// ── 내 계좌 수익률 (★2026-10-04 사용자 지정 — 성과 분석 화면들의 정본) ──────────
+//   수익률 = (총기간 손익 − 시작 시점 평가익) ÷ (시작 자산 A0 + 순외부입금 누적).
+//   모르는 값은 null(0 이 아니다). 맨 앞 점은 기준점(시작일 − 1일, 0).
+
+export interface AccountReturnPoint {
+  date: string;
+  pnl_since_start_krw: string | null;
+  invested_krw: string | null;
+  cum_net_flow_krw: string | null;
+  /** 그날 순외부입금(입금 − 출금). 흐름이 없으면 null — 차트 표식용. */
+  net_flow_krw: string | null;
+  return_ratio: string | null;
+}
+
+export interface AccountReturn {
+  start: string;
+  base_date: string;
+  as_of: string | null;
+  start_assets_krw: string | null;
+  unrealized_at_start_krw: string | null;
+  flows_until: string | null;
+  pnl_since_start_krw: string | null;
+  invested_krw: string | null;
+  cum_net_flow_krw: string | null;
+  return_ratio: string | null;
+  return_date: string | null;
+  items: AccountReturnPoint[];
+}
+
+export function getAccountReturn(accountId?: string | null): Promise<AccountReturn> {
+  return request<AccountReturn>(`/api/v1/portfolio/account-return${accountQuery(accountId)}`);
+}
+
+/** 기간 끝(end) 이하에서 수익률을 아는 마지막 점. 없으면 null. */
+export function accountReturnOn(
+  data: AccountReturn | undefined,
+  end: string | null | undefined,
+): AccountReturnPoint | null {
+  if (!data || !end) return null;
+  let found: AccountReturnPoint | null = null;
+  for (const p of data.items) {
+    if (p.date > end) break;
+    if (p.return_ratio != null) found = p;
+  }
+  return found;
+}
+
 // ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
 
 export interface PeriodReturn {
@@ -905,6 +952,39 @@ export interface Benchmark {
   /** 최대 비중 종목 — 왜 그 지수를 골랐는지의 근거. */
   top_ticker: string | null;
   top_weight: string | null;
+  /** ★2026-10-04: 투자 시작일 이후 비교(정본). 위 series·periods 는 참고: 시간가중(TWR). */
+  since_start: BenchmarkSinceStart | null;
+}
+
+/** 지수 하나 — USD(지수 자체)가 먼저, 원화 환산(환율 효과 포함)이 옆. 끝은 그 지수의 마지막 종가. */
+export interface BenchmarkIndexSinceStart {
+  name: string;
+  symbol: string;
+  base_date: string | null;
+  base_close: string | null;
+  end_date: string | null;
+  end_close: string | null;
+  return_usd: string | null;
+  return_krw: string | null;
+  fx_base: string | null;
+  fx_end: string | null;
+  fx_end_date: string | null;
+  fx_change: string | null;
+}
+
+export interface BenchmarkSinceStart {
+  start: string;
+  base_date: string;
+  account_return: string | null;
+  account_date: string | null;
+  indices: BenchmarkIndexSinceStart[];
+  /** 기준점(시작일 − 1일) = 100. */
+  series: {
+    date: string;
+    account: string | null;
+    benchmarks_usd: Record<string, string | null>;
+    benchmarks_krw: Record<string, string | null>;
+  }[];
 }
 
 export function getBenchmark(accountId?: string | null, days = 1095): Promise<Benchmark> {
@@ -1810,6 +1890,36 @@ export function getGuruOverview(): Promise<GuruOverview> {
 
 export function getGuruQuarter(period: string): Promise<GuruQuarterDetail> {
   return request(`/api/v1/research/guru/quarter?period=${encodeURIComponent(period)}`);
+}
+
+// ★2026-10-04 분기 총 투자금액(USD, 명단 거장 13F 보유 합) × 밸류체인 L1 몫. 미분류 포함 share 합 = 1.
+export interface GuruL1Segment {
+  l1: string;
+  /** L1 기준색(밸류체인 L1 카드와 같은 값). 미분류는 null. */
+  color: string | null;
+  usd: number;
+  share: number | null;
+  share_pct: number | null;
+}
+
+export interface GuruL1Quarter extends GuruQuarter {
+  n_filed: number;
+  total_usd: number;
+  segments: GuruL1Segment[];
+  unclassified_share_pct: number | null;
+  has_prev: boolean;
+}
+
+export interface GuruQuarterlyL1 {
+  disclaimer: string;
+  n_gurus: number;
+  unclassified: string;
+  legend: { l1: string; color: string }[];
+  quarters: GuruL1Quarter[];
+}
+
+export function getGuruQuarterlyL1(): Promise<GuruQuarterlyL1> {
+  return request("/api/v1/research/guru/quarterly-l1");
 }
 
 export function getGuruStock(ticker: string): Promise<GuruStockTrend> {

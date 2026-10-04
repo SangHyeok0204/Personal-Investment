@@ -41,6 +41,13 @@ import { cn } from "@/lib/utils";
 //   월말 값 ÷ 전월 말 값 − 1. 서버의 기간별 수익률과 같은 방식(두 날의 수준 비)이지만
 //   시계열이 소수 둘째 자리로 반올림돼 와서 기간별 표와 0.01%p 안팎 어긋날 수 있다.
 //   첫 달은 구간 시작일부터, 마지막 달은 마지막 관측일까지다.
+//
+// ★2026-10-04 사용자 지정: 칸과 누적 비교 그래프는 **투자 시작일 이후**(서버 since_start)다.
+//   · 내 계좌 = 내 계좌 수익률(정본, /account-return — 시작일 이후 손익 ÷ 투입 원금).
+//   · S&P 500 은 **USD 가 먼저**(지수 자체의 움직임), 원화 환산(환율 효과 포함)을 옆에,
+//     환율 변동도 같이 적는다. 끝은 **그 지수의 마지막 종가**이고 기준일을 적는다.
+//   · 월별 초과수익 막대·기간별 표는 연쇄 수익률이라 '참고: 시간가중(TWR)'으로 남긴다.
+//   ⚠️원화 −9% 대는 계산이 맞다 — 같은 구간 환율이 −11% 빠졌다(키움 환율도 같은 방향).
 
 /** 표 헤더용 짧은 이름. 이름마다 따로 정한다 — 길이로 자르면 서로 겹친다. */
 const SHORT_NAME: Record<string, string> = {
@@ -56,6 +63,10 @@ function pct(value: string | null | undefined, digits = 2): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
   return `${n > 0 ? "+" : ""}${(n * 100).toFixed(digits)}%`;
+}
+
+function pctOrNull(value: string | null | undefined): string | null {
+  return value == null ? null : pct(value);
 }
 
 function tone(value: string | null | undefined): "up" | "down" | undefined {
@@ -120,26 +131,6 @@ export default function BenchmarkPage() {
   const data = benchmark.data;
   const names = data?.benchmarks ?? [];
 
-  const chart = useMemo(() => {
-    if (!data || data.series.length === 0) return null;
-    const dates = data.series.map((p) => p.base_date);
-    const series: CompareSeries[] = [
-      {
-        name: "내 계좌",
-        emphasis: true,
-        values: data.series.map((p) => (p.portfolio == null ? null : Number(p.portfolio))),
-      },
-      ...names.map((name) => ({
-        name,
-        values: data.series.map((p) => {
-          const v = p.benchmarks[name];
-          return v == null ? null : Number(v);
-        }),
-      })),
-    ];
-    return { dates, series };
-  }, [data, names]);
-
   const vs = against ?? names[0] ?? null;
   const months = useMemo(
     () => (data && data.series.length > 1 ? monthlyFromSeries(data.series, names) : []),
@@ -159,47 +150,68 @@ export default function BenchmarkPage() {
   );
   const monthPicked = months.find((m) => m.month === pickedMonth) ?? null;
 
-  const full = data?.periods.find((p) => p.label === "전체");
-  const oneYear = data?.periods.find((p) => p.label === "1Y");
+  const ss = data?.since_start ?? null;
+  const main = ss?.indices[0] ?? null;
+  // 누적 비교 — 기준점(시작일 장 시작 전) = 100. 내 계좌 · 지수 USD · 지수 원화.
+  const sinceChart = useMemo(() => {
+    if (!ss || ss.series.length === 0) return null;
+    const num = (v: string | null | undefined) => (v == null ? null : Number(v));
+    const series: CompareSeries[] = [
+      { name: "내 계좌", emphasis: true, values: ss.series.map((p) => num(p.account)) },
+      ...ss.indices.flatMap((i) => [
+        { name: `${i.name} (USD)`, values: ss.series.map((p) => num(p.benchmarks_usd[i.name])) },
+        { name: `${i.name} (원화)`, values: ss.series.map((p) => num(p.benchmarks_krw[i.name])) },
+      ]),
+    ];
+    return { dates: ss.series.map((p) => p.date), series };
+  }, [ss]);
 
   return (
     <>
-      <Topbar title="벤치마크 비교" subtitle="S&P 500 대비 — 원화 환산" />
+      <Topbar title="벤치마크 비교" subtitle="S&P 500 대비 — USD · 원화 환산" />
       <PageContainer fit>
         {!connected && <NotConnectedBanner what="일별 계좌 수익률" />}
 
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-3">
+        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
-            label="내 계좌 (전체)"
-            value={full ? pct(full.portfolio) : null}
+            label="내 계좌 수익률"
+            value={ss ? pctOrNull(ss.account_return) : null}
             hint={
-              data?.first_date ? `${data.first_date} ~ ${data.last_date}` : "전체 기간"
+              ss?.account_date
+                ? `${ss.start} ~ ${ss.account_date} · 손익 ÷ 투입 원금`
+                : "시작일 이후 손익 ÷ 투입 원금"
             }
-            actionHint="눌러서 기간별 보기"
+            actionHint="눌러서 기간별 보기(참고 TWR)"
             onClick={() => setPeriodsOpen(true)}
             accent="auto"
             loading={benchmark.isLoading}
           />
-          {names.map((name) => (
-            <StatTile
-              key={name}
-              label={`${name} (전체)`}
-              value={full ? pct(full.benchmarks_krw[name]) : null}
-              hint={
-                full
-                  ? `내 계좌 대비 ${pct(full.excess[name])}`
-                  : "원화 환산"
-              }
-              actionHint="눌러서 기간별 보기"
-              onClick={() => setPeriodsOpen(true)}
-              accent="auto"
-              loading={benchmark.isLoading}
-            />
-          ))}
           <StatTile
-            label="1년 초과수익"
-            value={oneYear && names[0] ? pct(oneYear.excess[names[0]]) : null}
-            hint={names[0] ? `${names[0]} 대비` : "초과수익"}
+            label={`${main?.name ?? "S&P 500"} (USD)`}
+            value={main ? pctOrNull(main.return_usd) : null}
+            hint={
+              main?.end_date
+                ? `지수 자체 · ${main.base_date} → ${main.end_date} 종가`
+                : "지수 자체의 움직임"
+            }
+            accent="auto"
+            loading={benchmark.isLoading}
+          />
+          <StatTile
+            label={`${main?.name ?? "S&P 500"} 원화 환산`}
+            value={main ? pctOrNull(main.return_krw) : null}
+            hint={main?.end_date ? `환율 효과 포함 · ${main.end_date} 기준` : "환율 효과 포함"}
+            accent="auto"
+            loading={benchmark.isLoading}
+          />
+          <StatTile
+            label="환율 (USD/KRW)"
+            value={main ? pctOrNull(main.fx_change) : null}
+            hint={
+              main?.fx_base && main.fx_end
+                ? `${Number(main.fx_base).toFixed(2)} → ${Number(main.fx_end).toFixed(2)} (${main.fx_end_date})`
+                : "원화 환산의 차이"
+            }
             accent="auto"
             loading={benchmark.isLoading}
           />
@@ -215,25 +227,34 @@ export default function BenchmarkPage() {
         >
           <StubCard
             title="누적 비교"
-            subtitle={data?.first_date ? `${data.first_date} = 100` : "구간 시작 = 100"}
+            subtitle={
+              ss
+                ? `${ss.start} 장 시작 전 = 100 · 지수는 ${main?.end_date ?? "—"} 종가까지`
+                : "시작일 = 100"
+            }
           >
             {benchmark.isLoading ? (
               <CardEmpty text="불러오는 중…" />
-            ) : !chart ? (
+            ) : !sinceChart ? (
               <CardEmpty text="비교할 데이터가 없습니다" />
             ) : (
               <CompareChart
-                dates={chart.dates}
-                series={chart.series}
+                dates={sinceChart.dates}
+                series={sinceChart.series}
                 height={250}
                 valueFormat={(v) => v.toFixed(0)}
+                legendFormat={(v) => `${v >= 100 ? "+" : ""}${(v - 100).toFixed(2)}%`}
               />
             )}
           </StubCard>
 
           <StubCard
             title="월별 초과수익"
-            subtitle={vs ? `내 계좌 − ${shortName(vs)} · 막대를 누르면 그 달` : "막대를 누르면 그 달"}
+            subtitle={
+              vs
+                ? `참고: 시간가중(TWR) · 내 계좌 − ${shortName(vs)}(원화)`
+                : "참고: 시간가중(TWR)"
+            }
             scrollBody
             action={
               <div className="flex items-center gap-2">
@@ -280,7 +301,7 @@ export default function BenchmarkPage() {
               />
             )}
             <p className="mt-2 text-[11px] leading-snug text-ink-muted">
-              원화 환산 기준 · 위: 이긴 달 · 아래: 진 달
+              참고: 시간가중(TWR) · 원화 환산 기준 · 위: 이긴 달 · 아래: 진 달
             </p>
           </StubCard>
         </div>
@@ -293,7 +314,7 @@ export default function BenchmarkPage() {
         title={monthPicked ? `${monthPicked.month} 비교` : ""}
         subtitle={
           monthPicked
-            ? `${monthPicked.start_date} 종가 → ${monthPicked.end_date} · 원화 환산`
+            ? `${monthPicked.start_date} 종가 → ${monthPicked.end_date} · 원화 환산 · 참고: 시간가중(TWR)`
             : undefined
         }
         width={560}
@@ -306,7 +327,7 @@ export default function BenchmarkPage() {
         open={periodsOpen}
         onClose={() => setPeriodsOpen(false)}
         title="기간별"
-        subtitle="원화 환산 기준 · 행을 누르면 USD 기준·환율 효과"
+        subtitle="참고: 시간가중(TWR) · 원화 환산 기준 · 행을 누르면 USD 기준·환율 효과"
         width={620}
       >
         <DataTable
@@ -346,7 +367,7 @@ export default function BenchmarkPage() {
         title={`${picked?.label ?? ""} 비교`}
         subtitle={
           picked
-            ? `${picked.start_date} ~ ${picked.end_date} · ${picked.observations}일`
+            ? `${picked.start_date} ~ ${picked.end_date} · ${picked.observations}일 · 참고: 시간가중(TWR)`
             : undefined
         }
       >

@@ -396,6 +396,44 @@ class PnlBreakdownOut(BaseModel):
     events: list[PnlEventOut]
 
 
+class AccountReturnPointOut(BaseModel):
+    """내 계좌 수익률 한 점. 모르는 값은 None(0 으로 채우지 않는다)."""
+
+    date: date
+    pnl_since_start_krw: Decimal | None
+    invested_krw: Decimal | None
+    cum_net_flow_krw: Decimal | None
+    # 그날 순외부입금(입금 − 출금). 흐름이 없거나 모르면 None — 차트 표식용.
+    net_flow_krw: Decimal | None
+    return_ratio: Decimal | None
+
+
+class AccountReturnOut(BaseModel):
+    """내 계좌 수익률 — ★2026-10-04 사용자 지정, 성과 분석 화면들의 정본.
+
+    수익률 = 시작일 이후 손익 ÷ 투입 원금.
+      시작일 이후 손익 = 총기간 손익(/pnl-breakdown) − unrealized_at_start_krw
+      투입 원금      = start_assets_krw(A0) + 시작일부터의 순외부입금 누적
+    정의·결측 규칙은 `app.core.account_return` 머리말. 맨 앞 점은 기준점(시작일 − 1일, 0).
+    아래 지금 값(pnl_since_start_krw …)은 시계열 마지막 점(오늘, live)과 같다.
+    """
+
+    start: date
+    base_date: date
+    as_of: datetime | None
+    start_assets_krw: Decimal | None
+    unrealized_at_start_krw: Decimal | None
+    # 입출금을 알고 있는 마지막 날(마지막 일별 행). 그 뒤 흐름은 아직 분모에 없다.
+    flows_until: date | None
+    pnl_since_start_krw: Decimal | None
+    invested_krw: Decimal | None
+    cum_net_flow_krw: Decimal | None
+    return_ratio: Decimal | None
+    # 수익률을 아는 마지막 날(보통 오늘).
+    return_date: date | None
+    items: list[AccountReturnPointOut]
+
+
 # ── 성과분석 (ETF성과분석_양식_v2.html 대응) ────────────────────────────────
 
 class PeriodReturnOut(BaseModel):
@@ -979,6 +1017,45 @@ class BenchmarkPeriodOut(BaseModel):
     excess: dict[str, Decimal | None]
 
 
+class BenchmarkIndexSinceStartOut(BaseModel):
+    """지수 하나의 투자 시작일 이후 성과 — ★2026-10-04 사용자 지정: USD 를 먼저(지수
+    자체의 움직임), 원화 환산(환율 효과 포함)을 옆에. 끝은 **그 지수의 마지막 종가**다
+    (계좌 마지막 행에 묶지 않는다) — `end_date` 가 기준일이다."""
+
+    name: str
+    symbol: str
+    base_date: date | None
+    base_close: Decimal | None
+    end_date: date | None
+    end_close: Decimal | None
+    return_usd: Decimal | None
+    return_krw: Decimal | None
+    fx_base: Decimal | None
+    fx_end: Decimal | None
+    fx_end_date: date | None
+    fx_change: Decimal | None
+
+
+class BenchmarkSinceStartPointOut(BaseModel):
+    """차트 한 점 — 기준점(시작일 − 1일) = 100. 지수는 그날 이하 마지막 종가."""
+
+    date: date
+    account: Decimal | None
+    benchmarks_usd: dict[str, Decimal | None]
+    benchmarks_krw: dict[str, Decimal | None]
+
+
+class BenchmarkSinceStartOut(BaseModel):
+    """투자 시작일 이후 — 내 계좌 수익률(정본, `/account-return`) vs 지수 USD · 원화."""
+
+    start: date
+    base_date: date
+    account_return: Decimal | None
+    account_date: date | None
+    indices: list[BenchmarkIndexSinceStartOut]
+    series: list[BenchmarkSinceStartPointOut]
+
+
 class BenchmarkOut(BaseModel):
     """내 계좌 vs 기준 지수.
 
@@ -999,6 +1076,9 @@ class BenchmarkOut(BaseModel):
     #: 최대 비중 종목 — 왜 그 지수를 골랐는지의 근거다.
     top_ticker: str | None = None
     top_weight: Decimal | None = None
+    #: ★2026-10-04: 투자 시작일 이후 비교(정본). 위의 series·periods 는 시간가중(TWR)
+    #: 연쇄 수익률이라 **참고**다 — 두 정의를 섞지 않는다.
+    since_start: BenchmarkSinceStartOut | None = None
 
 
 # ── 실적 발표 일정 ───────────────────────────────────────────────────────────

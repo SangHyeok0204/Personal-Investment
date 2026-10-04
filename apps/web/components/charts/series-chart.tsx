@@ -29,6 +29,9 @@ const XAXIS_H = 20;
 
 export type SeriesPoint = { date: string; value: number | null };
 
+/** x 축 위 표식(★2026-10-04 — 입출금 날짜). `index` 는 `points` 의 순서. */
+export type SeriesMarker = { index: number; label: string; tone: "up" | "down" };
+
 /** 오른쪽 축에 따로 눈금을 두는 두 번째 계열. `values` 는 `points` 와 같은 순서다. */
 export type SecondarySeries = {
   label: string;
@@ -91,6 +94,7 @@ export function SeriesChart({
   includeZero = false,
   label,
   secondary,
+  markers,
 }: {
   points: SeriesPoint[];
   height?: number;
@@ -101,6 +105,8 @@ export function SeriesChart({
   label?: string;
   /** 오른쪽 축 계열. 있으면 두 축 모두 딱 떨어지는 눈금으로 맞춘다. */
   secondary?: SecondarySeries;
+  /** 아래쪽에 찍는 작은 세모 — 커서를 대면 툴팁에 라벨이 붙는다. */
+  markers?: SeriesMarker[];
 }) {
   const { ref, width } = useWidth();
   const [hover, setHover] = useState<number | null>(null);
@@ -153,27 +159,39 @@ export function SeriesChart({
     const y = (v: number) => padT + innerH - ((v - min) / (max - min)) * innerH;
 
     // 결측을 만나면 선을 끊는다(M 으로 다시 시작).
+    // ★2026-10-04: 끊긴 구간마다 면을 **그 구간 끝에서** 바닥으로 내려 닫는다 — 예전에는 마지막
+    //   점까지 대각선으로 이어 칠해져 없는 면이 생겼다. 앞뒤가 비어 있는 외딴 점은 점으로 찍는다.
     let path = "";
     let area = "";
     let open = false;
+    let lastValid = -1;
+    const isolated: number[] = [];
+    const bottom = (padT + innerH).toFixed(1);
     points.forEach((p, i) => {
       if (p.value == null) {
+        if (open) area += `L${x(lastValid).toFixed(1)},${bottom}`;
         open = false;
         return;
       }
+      const prev = points[i - 1]?.value;
+      const next = points[i + 1]?.value;
+      if (prev == null && next == null) isolated.push(i);
+      lastValid = i;
       const cmd = open ? "L" : "M";
       path += `${cmd}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
       if (!open) area += `${area ? "Z" : ""}M${x(i).toFixed(1)},${(padT + innerH).toFixed(1)}`;
       area += `L${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
       open = true;
     });
-    if (area) area += `L${x(points.length - 1).toFixed(1)},${(padT + innerH).toFixed(1)}Z`;
+    if (open) area += `L${x(lastValid).toFixed(1)},${bottom}`;
+    if (area) area += "Z";
 
-    return { min, max, x, y, path, area, ticks, innerH, y2, ticks2, path2 };
+    return { min, max, x, y, path, area, ticks, innerH, y2, ticks2, path2, isolated };
   }, [points, width, height, includeZero, secondary, padR, padT]);
 
   const hovered = hover != null ? points[hover] : null;
   const hovered2 = hover != null ? (secondary?.values[hover] ?? null) : null;
+  const hoveredMarker = hover != null ? markers?.find((m) => m.index === hover) : undefined;
 
   return (
     <div ref={ref} className="relative w-full" style={{ height }}>
@@ -254,9 +272,31 @@ export function SeriesChart({
 
           <path d={model.area} fill="url(#seriesFill)" />
           <path d={model.path} fill="none" stroke={LINE} strokeWidth="1.8" />
+          {model.isolated.map((i) => (
+            <circle key={i} cx={model.x(i)} cy={model.y(points[i].value!)} r="2.5" fill={LINE} />
+          ))}
           {model.path2 && (
             <path d={model.path2} fill="none" stroke={LINE2} strokeWidth="1.8" />
           )}
+
+          {/* 표식은 x 축 바로 위 — ▲ 입금(BLUE) · ▼ 출금(회색). */}
+          {markers?.map((m) => {
+            const cx = model.x(m.index);
+            const base = padT + model.innerH;
+            return (
+              <path
+                key={`${m.index}-${m.label}`}
+                d={
+                  m.tone === "up"
+                    ? `M${cx - 4},${base} L${cx + 4},${base} L${cx},${base - 7} Z`
+                    : `M${cx - 4},${base - 7} L${cx + 4},${base - 7} L${cx},${base} Z`
+                }
+                fill={m.tone === "up" ? LINE2 : CROSS}
+              >
+                <title>{m.label}</title>
+              </path>
+            );
+          })}
 
           {hovered?.value != null && hover != null && (
             <>
@@ -303,6 +343,9 @@ export function SeriesChart({
                 ? tooltipFormat(hovered)
                 : valueFormat(hovered.value)}
           </span>
+          {hoveredMarker && (
+            <span className="ml-2 text-[#6390BF]">{hoveredMarker.label}</span>
+          )}
           {secondary && (
             <span className="ml-2 tabular-nums text-[#6390BF]">
               {secondary.label}{" "}

@@ -40,6 +40,7 @@ from app.core import fee_reserve as fr
 from app.core import residual as rsd
 from app.core import return_bridge
 from app.core import pnl_breakdown as pb
+from app.core import account_return as ar
 
 # 시세 소스와 같은 자리에 산다 — apps/worker 를 경로에 올려 쓴다.
 _WORKER_DIR = Path(__file__).resolve().parents[3] / "worker"
@@ -66,12 +67,17 @@ from app.models import (
 )
 from app.schemas import (
     AccountListOut,
+    AccountReturnOut,
+    AccountReturnPointOut,
     CashByCurrencyOut,
     CashflowEventOut,
     CashflowMonthOut,
+    BenchmarkIndexSinceStartOut,
     BenchmarkOut,
     BenchmarkPeriodOut,
     BenchmarkPointOut,
+    BenchmarkSinceStartOut,
+    BenchmarkSinceStartPointOut,
     CashflowOut,
     CostByMonthOut,
     CostBySideOut,
@@ -1380,6 +1386,122 @@ def get_pnl_breakdown(
     )
 
 
+# ── 내 계좌 수익률 ───────────────────────────────────────────────────────────
+
+@router.get("/account-return", response_model=AccountReturnOut)
+def get_account_return(
+    account_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> AccountReturnOut:
+    """내 계좌 수익률 — 투자 시작일부터 일별. ★2026-10-04 사용자 지정, 성과 분석 화면들
+    (수익률 추이 · 벤치마크 · 성과 분석 · 기간 리포트)의 정본이다.
+
+    수익률(t) = (총기간 손익(t) − unrealized_at_start) ÷ (A0 + 순외부입금 누적(t)).
+      · 총기간 손익·unrealized_at_start 는 `/pnl-breakdown` 을 **그대로** 쓴다 — 손익을
+        따로 다시 세지 않는다. 오늘 점은 그쪽 live 점(실현 + 키움 실제 평가)이다.
+      · A0 = 시작일 앞 마지막 일별 행의 `deposit_assets_krw`(실측 05-31 29,176,951).
+      · 순외부입금 = `deposit_krw − withdrawal_krw`(시작일 포함). 주식 매도 대금은 흐름이
+        아니다. 실측(2026-10-04): 06-04 입금 7,840,153 에 그날 자산 증가 7,911,265 —
+        차이가 그날 손익과 맞는다.
+      실측(2026-10-04): 4,550,502 − 1,456,492 = 3,094,010 ÷ (29,176,951 + 9,715,029
+      = 38,891,980) = +7.96%.
+    정의·결측 규칙은 `app.core.account_return` 머리말.
+    """
+    start = inv.INVESTMENT_START
+    base_date = start - timedelta(days=1)
+    account_ids = _active_account_ids(db, account_id)
+    if not account_ids:
+        return AccountReturnOut(
+            start=start, base_date=base_date, as_of=None, start_assets_krw=None,
+            unrealized_at_start_krw=None, flows_until=None, pnl_since_start_krw=None,
+            invested_krw=None, cum_net_flow_krw=None, return_ratio=None,
+            return_date=None, items=[],
+        )
+
+    breakdown = get_pnl_breakdown(account_id=account_id, days=3650, db=db)
+    pnl_points = [
+        pb.Point(
+            date=i.date, realized_cum_krw=i.realized_cum_krw, unrealized_krw=i.unrealized_krw,
+            total_period_pnl_krw=i.total_period_pnl_krw, total_value_krw=i.total_value_krw,
+        )
+        for i in breakdown.items
+        if i.date >= start
+    ]
+
+    # A0 — 시작일 앞 마지막 일별 행의 총자산. ⚠️그 행의 자산 칸이 비어 있으면 모른다(None).
+    #   앞에 행이 하나도 없으면 그때 계좌에 돈이 없었다(의도한 0).
+    before = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.count(),
+            func.count(AccountDailyPerformance.deposit_assets_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date < start,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date.desc())
+        .limit(1)
+    ).first()
+    if before is None:
+        start_assets: Decimal | None = Decimal("0")
+    else:
+        _, assets, rows_n, valued_n = before
+        start_assets = assets if valued_n == rows_n else None
+
+    # 순외부입금 — 행이 있는 날만. 입금·출금 칸이 하나라도 비면 그날 흐름은 None(모른다).
+    net_flow_by_date: dict[date, Decimal | None] = {}
+    for day, dep, wd, rows_n, dep_n, wd_n in db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+            func.count(),
+            func.count(AccountDailyPerformance.deposit_krw),
+            func.count(AccountDailyPerformance.withdrawal_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date >= start,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+    ).all():
+        net_flow_by_date[day] = dep - wd if dep_n == rows_n and wd_n == rows_n else None
+
+    points = ar.build(
+        pnl_points, breakdown.unrealized_at_start_krw, start_assets, net_flow_by_date
+    )
+    last = points[-1] if points else None
+    known = [p for p in points if p.return_ratio is not None]
+    return AccountReturnOut(
+        start=start,
+        base_date=base_date,
+        as_of=breakdown.as_of,
+        start_assets_krw=start_assets,
+        unrealized_at_start_krw=breakdown.unrealized_at_start_krw,
+        flows_until=max(net_flow_by_date, default=None),
+        # 지금 값 = 시계열 마지막 점(오늘, live). 모르면 None 그대로.
+        pnl_since_start_krw=last.pnl_since_start_krw if last else None,
+        invested_krw=last.invested_krw if last else None,
+        cum_net_flow_krw=last.cum_net_flow_krw if last else None,
+        return_ratio=last.return_ratio if last else None,
+        return_date=known[-1].date if known else None,
+        items=[
+            AccountReturnPointOut(
+                date=p.date,
+                pnl_since_start_krw=p.pnl_since_start_krw,
+                invested_krw=p.invested_krw,
+                cum_net_flow_krw=p.cum_net_flow_krw,
+                net_flow_krw=p.net_flow_krw,
+                return_ratio=p.return_ratio,
+            )
+            for p in points
+        ],
+    )
+
+
 # ── 배당 ────────────────────────────────────────────────────────────────────
 
 @router.get("/dividends", response_model=DividendListOut)
@@ -2288,6 +2410,112 @@ _BENCH_PERIODS: list[tuple[str, int]] = [
 ]
 
 
+def _close_with_date(series, when: date | None = None) -> tuple[date | None, Decimal | None]:
+    """`when` 이하 마지막 종가와 그 날짜(when 이 None 이면 마지막 종가). 없으면 (None, None)."""
+    if series is None or not series.dates:
+        return None, None
+    found: tuple[date | None, Decimal | None] = (None, None)
+    for day, close in zip(series.dates, series.closes):
+        if when is not None and day > when:
+            break
+        found = (day, close)
+    return found
+
+
+def _benchmark_since_start(
+    account_id: uuid.UUID | None, db: Session, history: dict
+) -> BenchmarkSinceStartOut:
+    """투자 시작일 이후 — 내 계좌 수익률(정본) vs 지수 USD · 원화. ★2026-10-04 사용자 지정.
+
+    · 계좌는 `/account-return` 을 그대로 쓴다(끝 = 그쪽 마지막 점, 보통 오늘 live).
+    · 지수는 **USD 가 먼저** — 지수 자체의 움직임. 원화 환산은 그 옆에 '환율 효과 포함'.
+    · 지수의 끝은 **그 지수의 마지막 종가**다. ⚠️예전에는 계좌 마지막 일별 행(10/01)에
+      묶여 지수 최근 종가(10/02)가 빠졌다. 원화 환산의 끝 환율도 그 종가일 이하 마지막 값.
+    · 기준은 계좌와 같은 시점 — **시작일 장 시작 전**(base_date = 시작일 − 1일) 이하의 마지막
+      종가·환율이다. 계좌의 시작일 하루치 손익이 수익률에 들어가므로, 지수도 시작일 하루치
+      움직임을 넣어야 같은 구간이다(`기준일은 첫 수익률 직전 날` 규칙과 같다).
+      실측(2026-10-04): S&P 7,580.06(05-29) → 7,722.72(10-02) USD +1.88%, 환율 1,506.84 →
+      1,342.51(−10.9%) → 원화 −9.23%. (06-01 종가 기준이면 +1.62% / −9.4%.)
+    · 차트는 기준점 = 100. 지수는 그날 이하 마지막 종가(주말은 금요일 수준 그대로).
+    """
+    acct = get_account_return(account_id=account_id, db=db)
+    base = acct.base_date
+    fx = history.get(_FX_SYMBOL)
+
+    def ratio(a: Decimal | None, b: Decimal | None) -> Decimal | None:
+        if a is None or b is None or b == 0:
+            return None
+        return (a / b - Decimal("1")).quantize(_RATIO, rounding=ROUND_HALF_UP)
+
+    def index100(change: Decimal | None) -> Decimal | None:
+        return None if change is None else (Decimal("100") * (Decimal("1") + change)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    indices: list[BenchmarkIndexSinceStartOut] = []
+    for symbol, name in _BENCHMARKS:
+        series = history.get(symbol)
+        base_d, base_c = _close_with_date(series, base)
+        end_d, end_c = _close_with_date(series)
+        _, fx_b = _close_with_date(fx, base)
+        fx_end_d, fx_e = _close_with_date(fx, end_d) if end_d else (None, None)
+        indices.append(
+            BenchmarkIndexSinceStartOut(
+                name=name, symbol=symbol, base_date=base_d, base_close=base_c,
+                end_date=end_d, end_close=end_c,
+                return_usd=ratio(end_c, base_c),
+                return_krw=ratio(
+                    end_c * fx_e if end_c is not None and fx_e is not None else None,
+                    base_c * fx_b if base_c is not None and fx_b is not None else None,
+                ),
+                fx_base=fx_b, fx_end=fx_e, fx_end_date=fx_end_d,
+                fx_change=ratio(fx_e, fx_b),
+            )
+        )
+
+    account_by_date = {i.date: i.return_ratio for i in acct.items}
+    last_day = max(
+        [d for d in account_by_date] + [i.end_date for i in indices if i.end_date],
+        default=None,
+    )
+    series_out: list[BenchmarkSinceStartPointOut] = []
+    day = base
+    while last_day is not None and day <= last_day:
+        usd: dict[str, Decimal | None] = {}
+        krw: dict[str, Decimal | None] = {}
+        for (symbol, name), info in zip(_BENCHMARKS, indices):
+            usd[name] = krw[name] = None
+            if info.end_date is None or day > info.end_date:
+                continue
+            _, close = _close_with_date(history.get(symbol), day)
+            _, rate = _close_with_date(fx, day)
+            usd[name] = index100(ratio(close, info.base_close))
+            krw[name] = index100(
+                ratio(
+                    close * rate if close is not None and rate is not None else None,
+                    info.base_close * info.fx_base
+                    if info.base_close is not None and info.fx_base is not None else None,
+                )
+            )
+        series_out.append(
+            BenchmarkSinceStartPointOut(
+                date=day, account=index100(account_by_date.get(day)),
+                benchmarks_usd=usd, benchmarks_krw=krw,
+            )
+        )
+        day += timedelta(days=1)
+
+    known = [i for i in acct.items if i.return_ratio is not None]
+    return BenchmarkSinceStartOut(
+        start=acct.start,
+        base_date=base,
+        account_return=known[-1].return_ratio if known else None,
+        account_date=known[-1].date if known else None,
+        indices=indices,
+        series=series_out,
+    )
+
+
 @router.get("/benchmark", response_model=BenchmarkOut)
 def get_benchmark(
     account_id: uuid.UUID | None = Query(default=None),
@@ -2325,6 +2553,11 @@ def get_benchmark(
     account_ids = _active_account_ids(db, account_id)
     if not account_ids:
         return empty
+
+    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
+    # ★2026-10-04: 정본 비교(투자 시작일 이후). 아래 TWR 비교가 비어도 이것은 낸다.
+    since_start = _benchmark_since_start(account_id, db, history)
+    empty = empty.model_copy(update={"since_start": since_start})
 
     since = inv.since(days)
     rows = db.execute(
@@ -2364,7 +2597,6 @@ def get_benchmark(
     if prior:
         mine[prior[-1]] = pa.base_index(returns)
 
-    history = fetch_history([s for s, _ in _BENCHMARKS] + [_FX_SYMBOL], range_="2y")
     fx = history.get(_FX_SYMBOL)
 
     # 양쪽에 다 있는 날만 쓴다.
@@ -2469,11 +2701,12 @@ def get_benchmark(
         periods=periods_out,
         benchmarks=[name for _, name in _BENCHMARKS],
         currency_note=(
-            "지수는 원화로 환산해 비교합니다 — 내 계좌 수익률이 원화 기준이라 "
-            "달러 지수와 그대로 견주면 환율 변동이 실력처럼 보입니다."
+            "지수는 USD(지수 자체의 움직임)를 먼저, 원화 환산(환율 효과 포함)을 옆에 둡니다. "
+            "기간별 표·월별 막대는 참고: 시간가중(TWR) 연쇄 수익률입니다."
         ),
         first_date=usable[0],
         last_date=last,
+        since_start=since_start,
     )
 
 

@@ -15,7 +15,7 @@ import {
   StatTile,
   StubCard,
 } from "@/components/stub";
-import { getReport, type Report } from "@/lib/api";
+import { accountReturnOn, getAccountReturn, getReport, type Report } from "@/lib/api";
 import {
   formatKrwCompactString,
   formatKrwSigned,
@@ -44,6 +44,11 @@ import { cn } from "@/lib/utils";
 //   ⚠️**월별 막대는 두지 않는다.** 리포트는 기간 하나를 한 번에 받아 오므로 달마다
 //   숫자를 모으려면 달 수만큼 다시 불러야 한다 — 위의 기간 칩(월·분기·연도)이
 //   그 역할을 한다.
+//
+// ★2026-10-04 사용자 지정: 첫 칸은 **내 계좌 수익률**(/account-return — 시작일 이후 손익 ÷
+//   투입 원금)의 **기간 끝 값**이다. 이 정의는 시작일(6/01)부터 센 누적이라 '그 달만의
+//   수익률'이 아니다 — 칸에 6/01~기간 끝이라고 적는다. 기간 안의 연쇄 수익률(TWR)과 벤치마크
+//   대비는 '참고: 시간가중(TWR)'으로 남긴다. 기간 끝이 아직 진행 중(이번 달)이면 오늘 점이다.
 
 function tone(value: string | null | undefined): "up" | "down" | undefined {
   if (value == null) return undefined;
@@ -73,8 +78,20 @@ export default function ReportPage() {
     staleTime: 5 * 60_000,
   });
 
+  const account = useQuery({
+    queryKey: ["account-return", accountId],
+    queryFn: () => getAccountReturn(accountId),
+    staleTime: 60_000,
+  });
+
   const data = report.data;
   const p = data?.period ?? null;
+  // ⚠️리포트의 end_date 는 마지막 일별 행에서 잘린다. 진행 중인 마지막 기간이면 오늘(live)까지.
+  const isLatest = p != null && data?.periods[0]?.key === p.key;
+  const acctPoint = accountReturnOn(
+    account.data,
+    isLatest ? (account.data?.return_date ?? p?.end_date) : p?.end_date,
+  );
   const netCash =
     data == null ? null : String(Number(data.dividend_krw) - Number(data.cost_krw));
 
@@ -104,17 +121,19 @@ export default function ReportPage() {
 
         <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
           <StatTile
-            label="기간 수익률 (TWR)"
-            value={formatPercentString(data?.twr)}
+            label="내 계좌 수익률"
+            value={
+              acctPoint?.return_ratio == null ? null : formatPercentString(acctPoint.return_ratio)
+            }
             hint={
-              p
-                ? `${p.start_date} ~ ${p.end_date} · ${data?.trading_days ?? 0}거래일`
-                : "시간가중 수익률"
+              acctPoint
+                ? `${account.data?.start.slice(5)}~${acctPoint.date.slice(5)} 누적 · 참고 TWR(기간) ${formatPercentString(data?.twr)}`
+                : "시작일 이후 손익 ÷ 투입 원금"
             }
             actionHint="눌러서 벤치마크 대비 보기"
             onClick={() => setPanel("benchmarks")}
             accent="auto"
-            loading={report.isLoading}
+            loading={report.isLoading || account.isLoading}
           />
           <StatTile
             label="자산 변화"
@@ -228,7 +247,9 @@ export default function ReportPage() {
         onClose={() => setPanel(null)}
         title="벤치마크 대비"
         subtitle={
-          p ? `${p.label} · 기간 수익률 ${formatPercentString(data?.twr)} · 원화 환산` : undefined
+          p
+            ? `${p.label} · 참고: 시간가중(TWR) 기간 수익률 ${formatPercentString(data?.twr)} · 원화 환산`
+            : undefined
         }
         width={560}
       >
@@ -353,7 +374,7 @@ function Benchmarks({ data }: { data: Report }) {
           이 기간은 비교할 지수 데이터가 없습니다.
         </p>
       ) : (
-        <DataTable columns={["지수", "지수 수익률", "초과"]} align={["left", "right", "right"]}>
+        <DataTable columns={["지수", "지수 수익률", "초과 (참고 TWR)"]} align={["left", "right", "right"]}>
           {data.benchmarks.map((b) => (
             <tr key={b.name} className="border-b border-hairline">
               <Cell left strong>

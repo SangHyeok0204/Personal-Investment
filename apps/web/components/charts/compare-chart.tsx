@@ -215,7 +215,12 @@ export function CompareChart({
 
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
             {series.map((s, i) => {
-              const value = hover == null ? s.values[s.values.length - 1] : s.values[hover];
+              // ★2026-10-04: 커서가 없으면 **마지막으로 값이 있는 점** — 지수는 계좌보다
+              //   하루 이틀 먼저 끝나서 끝 칸이 null 이면 범례가 '—' 로 비었다.
+              const value =
+                hover == null
+                  ? ([...s.values].reverse().find((v) => v != null) ?? null)
+                  : s.values[hover];
               return (
                 <span key={s.name} className="flex items-center gap-1.5">
                   <span
