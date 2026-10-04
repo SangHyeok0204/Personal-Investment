@@ -100,3 +100,17 @@ def test_run_in_child_returns_value_and_reraises():
     assert wallclock.run_in_child(sorted, [3, 1, 2], timeout=60) == [1, 2, 3]
     with pytest.raises(ValueError):
         wallclock.run_in_child(int, "x", timeout=60)
+
+
+def progress_then_die(n, on_progress):
+    for i in range(n):
+        on_progress(i)
+    raise RuntimeError("driver died")
+
+
+def test_run_in_child_streams_progress_before_failure():
+    """★2026-10-04 — 자식이 죽어도 그 전에 흘려보낸 중간 결과는 부모가 이미 받았다."""
+    seen = []
+    with pytest.raises(RuntimeError, match="driver died"):
+        wallclock.run_in_child(progress_then_die, 3, timeout=60, on_progress=seen.append)
+    assert seen == [0, 1, 2]

@@ -55,8 +55,10 @@ def remaining(default: float = DEFAULT_LIMIT_SECONDS) -> float:
     return default if deadline is None else max(1.0, deadline - time.monotonic())
 
 
-def _child(q, fn, args, kwargs):
+def _child(q, fn, args, kwargs, progress=False):
     os.setsid()          # 자식이 새 프로세스 그룹의 우두머리 — 손자(드라이버 등)가 그룹을 물려받는다
+    if progress:         # 중간 결과를 같은 큐로 흘려보낸다 — 부모가 받는 즉시 처리(자식이 죽어도 남는다)
+        kwargs = {**kwargs, "on_progress": lambda v: q.put(("progress", v))}
     try:
         q.put(("ok", fn(*args, **kwargs)))
     except BaseException as exc:     # noqa: BLE001 — 부모에게 그대로 넘긴다
@@ -111,33 +113,48 @@ def kill_tree(proc) -> None:
     proc.join(KILL_GRACE_SECONDS)
 
 
-def run_in_child(fn, *args, timeout: float | None = None, **kwargs):
+def run_in_child(fn, *args, timeout: float | None = None, on_progress=None, **kwargs):
     """`fn(*args, **kwargs)` 를 자식 프로세스에서. 시간이 넘으면 자손까지 죽이고 `WallClockTimeout`.
 
     `timeout` 이 없으면 지금 작업의 남은 벽시계 시간. `fn` 과 결과·예외는 pickle 가능해야 한다(spawn).
+    `on_progress` 를 주면 자식의 `fn` 은 `on_progress=` 인자(값 하나를 받는 함수)를 받는다. 자식이 그걸 부르면
+    값이 큐로 넘어와 **부모 쪽**에서 `on_progress(값)` 이 돈다 — 자식이 나중에 죽거나 시간초과로 잘려도
+    이미 넘어온 중간 결과는 부모가 처리한 뒤다. 부모 쪽 `on_progress` 가 예외를 내면 자식도 죽이고 그 예외를 낸다.
+    ★2026-10-04 EARNINGS_REVENUE: 크롤 전체가 끝나야 DB 에 쓰던 탓에 드라이버가 죽자 모은 날짜가 다 날아갔다.
     """
     timeout = remaining() if timeout is None else timeout
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
-    proc = ctx.Process(target=_child, args=(q, fn, args, kwargs), daemon=True)
+    proc = ctx.Process(target=_child, args=(q, fn, args, kwargs, on_progress is not None), daemon=True)
     proc.start()
     end = time.monotonic() + timeout
     try:
         while True:
             try:
                 status, value = q.get(timeout=min(1.0, max(0.05, end - time.monotonic())))
-                break
             except queue.Empty:
                 if not proc.is_alive():
                     try:
                         status, value = q.get(timeout=1)
-                        break
                     except queue.Empty:
                         raise RuntimeError(f"자식 프로세스가 결과 없이 끝남(exit {proc.exitcode})") from None
-                if time.monotonic() >= end:
+                elif time.monotonic() >= end:
                     kill_tree(proc)
                     raise WallClockTimeout(
                         f"timeout_wallclock: {getattr(fn, '__name__', fn)} {int(timeout)}초 초과 — 자식 프로세스 강제 종료") from None
+                else:
+                    continue
+            if status != "progress":
+                break
+            try:
+                on_progress(value)
+            except BaseException:
+                kill_tree(proc)
+                raise
+            if time.monotonic() >= end and proc.is_alive():
+                kill_tree(proc)
+                raise WallClockTimeout(
+                    f"timeout_wallclock: {getattr(fn, '__name__', fn)} {int(timeout)}초 초과 — 자식 프로세스 강제 종료")
     finally:
         q.close()
     proc.join(KILL_GRACE_SECONDS)

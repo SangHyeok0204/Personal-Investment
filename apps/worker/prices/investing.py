@@ -83,8 +83,13 @@ def rows_from_cells(cells: list[str], path_count: int, day: date) -> InvestingRo
                         parse_value(cells[5]), parse_value(cells[6]) if len(cells) > 6 else "", timing)
 
 
-def crawl_dates(days: list[date], *, launch_timeout_ms: int = 90000) -> dict[date, list[InvestingRow]]:
-    """날짜마다 그날 발표 목록. Cloudflare 에 막히면 `InvestingBlocked`."""
+def crawl_dates(days: list[date], *, on_day=None, launch_timeout_ms: int = 90000) -> dict[date, list[InvestingRow]]:
+    """날짜마다 그날 발표 목록. Cloudflare 에 막히면 `InvestingBlocked`.
+
+    `on_day(day, rows)` — 하루 끝날 때마다 바로 부른다(호출 쪽이 그날 몫을 즉시 저장하게).
+    ⚠️2026-10-04: 드라이버가 `write EINVAL` 로 죽고 3시간 상한까지 굳어 모은 날짜가 전부 날아갔다.
+      크롬은 **한 회차에 한 번만** 띄운다(사용자 요구 — Cloudflare 때문에 시도 수를 줄인다). 쪼개 띄우거나 재시도를 늘리지 말 것.
+    """
     from playwright.sync_api import sync_playwright
 
     out: dict[date, list[InvestingRow]] = {}
@@ -115,6 +120,8 @@ def crawl_dates(days: list[date], *, launch_timeout_ms: int = 90000) -> dict[dat
             _cookie(page)
             for day in days:
                 out[day] = _one_day(page, day)
+                if on_day is not None:
+                    on_day(day, out[day])
                 time.sleep(1 + random.random())          # 서버 부하 방지(원본)
         finally:
             browser.close()

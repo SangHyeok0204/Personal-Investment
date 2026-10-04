@@ -5,6 +5,8 @@
 - 성공: `revenue_forecast` · status 'ok' · source 'investing'. 지난 날짜면 매출 실적 · 매출 서프라이즈 · 판정 다시.
 - **막히면**(Cloudflare · 시간초과): 대상 중 매출 컨센이 없는 다가오는 발표에 status 'failed' → 화면 "수집 실패".
   EPS(Nasdaq)는 그대로 보인다. 원천 상태 `investing`(차단은 'blocked').
+- ★날짜마다 받는 즉시 저장한다 — 중간에 죽어도(드라이버 · 시간초과) 받은 날은 남고, 작업은 FAILED
+  "(저장된 날짜 N/M)", '수집 실패' 는 못 채운 다가오는 발표에만.
 """
 from __future__ import annotations
 
@@ -71,16 +73,27 @@ def targets_and_dates(conn, today: date) -> tuple[list, list[date]]:
     return rows, (sorted(ahead) + past)[:MAX_DATES + 10]
 
 
-def crawl_isolated(days: list[date]) -> dict:
+def _crawl_streaming(days: list[date], on_progress=None) -> dict:
+    """자식 프로세스 쪽 — 하루 끝날 때마다 (날짜, 행들) 을 부모에게 흘려보낸다(spawn 이라 모듈 수준 함수)."""
+    return crawl_dates(days, on_day=(lambda d, xs: on_progress((d, xs))) if on_progress else None)
+
+
+def crawl_isolated(days: list[date], on_day=None) -> dict:
     """(L4) Playwright 크롤을 자식 프로세스에서 — 작업의 남은 벽시계 시간이 지나면 크롬까지 강제 종료.
 
     ⚠️2026-10-02: 이 크롤이 18시간 굳었다. 동기 Playwright 는 파이프에 막히면 신호로도 못 깨운다.
+    ★`on_day(day, rows)` 는 **부모 프로세스**에서 하루씩 돈다(큐로 받아서) — 자식이 죽어도 이미 받은 날은 저장된 뒤.
     """
-    return run_in_child(crawl_dates, days)
+    return run_in_child(_crawl_streaming, days, on_progress=(lambda v: on_day(*v)) if on_day else None)
 
 
 def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[date] | None = None) -> dict:
-    """`only` — 수동 실행에서 날짜를 좁힌다(예: 화면 잠금 실측을 짧게)."""
+    """`only` — 수동 실행에서 날짜를 좁힌다(예: 화면 잠금 실측을 짧게).
+
+    ★하루 끝날 때마다 바로 DB 에 쓴다(`on_day` → `_apply`). ⚠️2026-10-04: 크롤 전체가 끝나야 쓰던 때, 드라이버가
+      `write EINVAL` 로 죽고 3시간 상한까지 굳어 모은 날짜가 전부 날아갔다. 크롬은 그대로 **한 회차에 한 번**
+      (사용자 요구 — Cloudflare 때문에 시도 수를 줄인다): 쪼개 띄우거나 재시도를 더하지 않고, 받은 만큼만 남긴다.
+    """
     today = today or date.today()
     with engine.begin() as c:
         rows, days = targets_and_dates(c, today)
@@ -89,32 +102,54 @@ def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[
         rows = [r for r in rows if any(abs((d - r.report_date).days) <= 6 for d in days)]
     if not days:
         return {"dates": 0}
+    got: dict = {}
+    state = {"hit": {}, "filled": set(), "actuals": set()}
+
+    def on_day(day, xs):
+        got[day] = xs
+        _apply(engine, rows, got, today, state)
+
     try:
-        got = crawl(days)
+        final = crawl(days, on_day=on_day)
     except InvestingBlocked as exc:
-        _mark_failed(engine, rows, today)
+        _mark_failed(engine, rows, today, state["filled"])
         record_error(engine, "investing", "blocked", str(exc))
         raise
     except Exception as exc:
-        _mark_failed(engine, rows, today)
-        record_error(engine, "investing", "timeout" if "timeout" in str(exc).lower() else "other", str(exc)[:300])
+        # 실패여도 받은 날짜는 이미 저장됐다 — 작업은 FAILED 로 두되 몇 날짜를 건졌는지 남긴다
+        msg = f"{exc} (저장된 날짜 {len(got)}/{len(days)})"
+        exc.args = (msg,)
+        _mark_failed(engine, rows, today, state["filled"])
+        record_error(engine, "investing", "timeout" if "timeout" in msg.lower() else "other", msg[-300:])
         raise
-    filled = actuals = 0
+    for d, xs in (final or {}).items():      # on_day 를 안 부르는 크롤(테스트 · 옛 경로)도 받는다
+        got.setdefault(d, xs)
+    _apply(engine, rows, got, today, state)
+    return {"dates": len(days), "rows_seen": sum(len(v) for v in got.values()), "revenue_forecast": len(state["filled"]),
+            "revenue_actual": len(state["actuals"])}
+
+
+def _apply(engine, rows, got: dict, today: date, state: dict) -> None:
+    """지금까지 받은 날짜(`got`)로 매칭해 UPDATE/UPSERT. 날짜가 늘 때마다 다시 불러도 된다(멱등).
+
+    `state["hit"]` — 발표별로 이미 쓴 행. 더 가까운 날이 나중에 오면 그 행으로 덮어쓰고, 같으면 건너뛴다.
+    """
     for r in rows:
         want = (r.ticker, _ALIASES.get(r.ticker))
         # 같은 날 먼저, 없으면 가장 가까운 날(다가오는 발표의 예상일 차이)
         cands = sorted(((abs((d - r.report_date).days), x) for d, xs in got.items() for x in xs
                         if x.ticker.upper() in want and abs((d - r.report_date).days) <= 6), key=lambda t: t[0])
         hit = cands[0][1] if cands else None
-        if hit is None:
+        if hit is None or state["hit"].get(r.id) == hit:
             continue
+        state["hit"][r.id] = hit
         rev_f, rev_a = money(hit.revenue_forecast), money(hit.revenue)
         with engine.begin() as c:
             if rev_f is not None:
                 c.execute(text("UPDATE earnings_events SET revenue_forecast = :f, revenue_forecast_status = 'ok', "
                                "revenue_forecast_source = 'investing', updated_at = now() WHERE id = :id"),
                           {"f": rev_f, "id": r.id})
-                filled += 1
+                state["filled"].add(r.id)
             if r.report_date < today and rev_a is not None and rev_f:
                 rev_s = round((rev_a - rev_f) / abs(rev_f) * 100, 2)
                 c.execute(text(
@@ -125,13 +160,12 @@ def collect(engine, today: date | None = None, crawl=crawl_isolated, only: list[
                     "verdict = EXCLUDED.verdict, "
                     "detail = COALESCE(earnings_results.detail, '{}'::jsonb) || '{\"revenue_from\": \"investing\"}'"),
                     {"id": r.id, "a": rev_a, "s": rev_s, "v": verdict(r.eps_surprise_pct, rev_s)})
-                actuals += 1
-    return {"dates": len(days), "rows_seen": sum(len(v) for v in got.values()), "revenue_forecast": filled,
-            "revenue_actual": actuals}
+                state["actuals"].add(r.id)
 
 
-def _mark_failed(engine, rows, today: date) -> None:
-    ids = [r.id for r in rows if r.report_date >= today]
+def _mark_failed(engine, rows, today: date, filled=()) -> None:
+    """다가오는 발표 중 매출 컨센을 못 받은 것만 '수집 실패'(이번 회차에 채운 것 · 이미 값 있는 것은 그대로)."""
+    ids = [r.id for r in rows if r.report_date >= today and r.id not in filled]
     if ids:
         with engine.begin() as c:
             c.execute(text("UPDATE earnings_events SET revenue_forecast_status = 'failed' "

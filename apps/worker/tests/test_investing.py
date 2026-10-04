@@ -49,7 +49,7 @@ def _row(d, t, rev, rev_f):
 def test_collect_fills_forecast_and_actual_nearest_day(rdb):
     today = date(2026, 9, 27)
 
-    def crawl(days):
+    def crawl(days, on_day=None):
         assert date(2026, 10, 27) in days and date(2026, 8, 26) in days
         return {date(2026, 10, 28): [_row(date(2026, 10, 28), "BE", "", "0.9B")],      # 예상일 다음 날에 올라옴
                 date(2026, 8, 26): [_row(date(2026, 8, 26), "NVDA", "96.2B", "91.9B")]}
@@ -67,7 +67,7 @@ def test_collect_fills_forecast_and_actual_nearest_day(rdb):
 
 
 def test_blocked_marks_upcoming_failed(rdb):
-    def crawl(days):
+    def crawl(days, on_day=None):
         raise InvestingBlocked("Cloudflare 통과 실패 — 제목 'Just a moment...'")
 
     with pytest.raises(InvestingBlocked):
@@ -76,3 +76,27 @@ def test_blocked_marks_upcoming_failed(rdb):
         st = dict(c.execute(text("SELECT ticker, revenue_forecast_status FROM earnings_events")).all())
         src = c.execute(text("SELECT last_error_kind FROM source_status WHERE source = 'investing'")).scalar()
     assert st == {"BE": "failed", "NVDA": None} and src == "blocked"     # 다가오는 발표만 "수집 실패"
+
+
+def test_partial_crawl_keeps_saved_days_and_fails_only_unfilled(rdb):
+    """⚠️2026-10-04 — 드라이버가 죽으면 모은 날짜가 다 날아갔다. 이제 받은 날은 그때그때 저장된다."""
+    today = date(2026, 9, 27)
+    with rdb.begin() as c:
+        c.execute(text("INSERT INTO watchlist_items (id, ticker) VALUES (:i, 'GLW')"), {"i": uuid.uuid4()})
+        c.execute(text("INSERT INTO earnings_events (ticker, quarter, report_date, eps_forecast, source) "
+                       "VALUES ('GLW', '2026Q3', '2026-10-28', 0.5, 'nasdaq')"))
+
+    def crawl(days, on_day=None):
+        on_day(date(2026, 10, 29), [_row(date(2026, 10, 29), "BE", "", "0.8B")])    # 먼 날 먼저
+        on_day(date(2026, 10, 27), [_row(date(2026, 10, 27), "BE", "", "0.9B")])    # 같은 날이 덮어쓴다
+        raise RuntimeError("write EINVAL")
+
+    with pytest.raises(RuntimeError) as ei:
+        er.collect(rdb, today, crawl=crawl)
+    assert "write EINVAL" in str(ei.value) and "저장된 날짜 2/" in str(ei.value)
+    with rdb.begin() as c:
+        st = {t: (f and float(f), s) for t, f, s in c.execute(text(
+            "SELECT ticker, revenue_forecast, revenue_forecast_status FROM earnings_events")).all()}
+        err = c.execute(text("SELECT last_error_message FROM source_status WHERE source = 'investing'")).scalar()
+    assert st == {"BE": (9e8, "ok"), "GLW": (None, "failed"), "NVDA": (None, None)}
+    assert "저장된 날짜 2/" in err
