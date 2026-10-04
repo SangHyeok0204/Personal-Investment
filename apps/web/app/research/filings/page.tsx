@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
@@ -69,7 +68,6 @@ function whenLabel(iso: string): string {
 }
 
 export default function FilingsPage() {
-  const router = useRouter();
   const { accountId, connected } = useAccount();
   const [category, setCategory] = useState<string | null>(null);
   // 막대·요약 칸·종목 행 → 그 범위의 공시 목록. null 이면 닫힘.
@@ -179,9 +177,6 @@ export default function FilingsPage() {
                 ? `최근 ${data.insider_window_days}일 · 그중 30일 내 ${data.insider_recent_total}건`
                 : "3 · 4 · 5 · 144"
             }
-            // ★계획 A6 — 판단이 담긴 거래만 센 순매수는 `내부자 거래` 화면에 있다.
-            actionHint="눌러서 내부자 거래 화면"
-            onClick={() => router.push("/research/insiders")}
             loading={filings.isLoading}
           />
         </div>

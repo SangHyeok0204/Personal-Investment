@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpen, FileText, Landmark, NotebookPen, UserCheck } from "lucide-react";
+import { BookOpen, FileText, Landmark, NotebookPen } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 
@@ -31,13 +31,6 @@ const LINKS = [
     desc: "반도체·AI 개념 정리",
     icon: NotebookPen,
     href: "/research/notes",
-  },
-  {
-    id: "insiders",
-    label: "내부자 거래",
-    desc: "보유·관심종목 Form 4 순매수 · 13D",
-    icon: UserCheck,
-    href: "/research/insiders",
   },
   {
     id: "us-earnings",

@@ -1954,64 +1954,6 @@ export function getGuruStock(ticker: string): Promise<GuruStockTrend> {
   return request(`/api/v1/research/guru/stock?ticker=${encodeURIComponent(ticker)}`);
 }
 
-// ── 내부자 거래 (계획 A6) ──────────────────────────────────────────────────────
-// ★순매수 = 비파생 · 코드 P/S · 10b5-1 계획매매 제외 · 정정 대체분 제외. 나머지는 월 상세에 회색으로.
-
-export interface InsiderMonth {
-  month: string;
-  n_trades: number;
-  net_value: number | null; // 거래 없는 달은 null(막대 없음 — 0 과 다르다)
-  by_ticker: { ticker: string; net_value: number }[];
-}
-
-export interface InsiderOverview {
-  window_days: number;
-  rule: string;
-  targets: string[];
-  no_data: string[];
-  data_from: { ticker: string; from: string; to: string }[];
-  net_value_window: number;
-  buy_count_window: number;
-  sell_count_window: number;
-  multi_insider_buys: { ticker: string; n_insiders: number }[];
-  recent_13d: { filing_date: string; watch_name: string; issuer_name: string | null; headline: string; source_url: string }[];
-  monthly: InsiderMonth[];
-  future_dated: number;
-}
-
-export interface InsiderTrade {
-  ticker: string;
-  date: string;
-  code: string | null;
-  code_label: string | null;
-  insider: string | null;
-  role: string | null;
-  shares: number | null;
-  price: number | null;
-  value: number | null;
-  signed_value: number | null;
-  planned: boolean;
-  counted: boolean;
-  excluded_reason: string | null;
-  accession: string;
-}
-
-export interface InsiderMonthDetail {
-  month: string;
-  net_value: number | null;
-  n_counted: number;
-  n_excluded: number;
-  trades: InsiderTrade[];
-}
-
-export function getInsiderOverview(): Promise<InsiderOverview> {
-  return request("/api/v1/research/insiders/overview");
-}
-
-export function getInsiderMonth(month: string): Promise<InsiderMonthDetail> {
-  return request(`/api/v1/research/insiders/month?month=${encodeURIComponent(month)}`);
-}
-
 // ── 거장 명단 관리 (계획 A7) ─────────────────────────────────────────────────
 
 export interface GuruRosterItem {

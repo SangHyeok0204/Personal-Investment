@@ -19,7 +19,6 @@ from app.api import (
     watchlist,
     seasonality,
     guru,
-    insiders,
     earnings_monitor,
     valuechain,
     coverage,
@@ -102,7 +101,6 @@ app.include_router(portfolio.router)
 app.include_router(brokerage.router)
 app.include_router(seasonality.router)
 app.include_router(guru.router)
-app.include_router(insiders.router)
 app.include_router(earnings_monitor.router)
 app.include_router(valuechain.router)
 app.include_router(coverage.router)
