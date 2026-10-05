@@ -188,7 +188,8 @@ class KiwoomAdapter(BrokerAdapter):
             rows.extend(self._fetch_us_trades(start, end))
         if "KR" in self._markets:
             rows.extend(self._fetch_kr_trades(start, end))
-        rows.sort(key=lambda r: (r.trade_date, r.market, r.trade_no))
+        # 거래번호는 결제일 안의 순서라 결제일로 묶어 정렬한다(alembic 0028).
+        rows.sort(key=lambda r: (r.settlement_date, r.market, r.trade_no))
         return rows
 
     def _fetch_us_trades(self, start: date, end: date) -> list[TradeRow]:
@@ -220,7 +221,7 @@ class KiwoomAdapter(BrokerAdapter):
                     if row is None:
                         continue
                     # 창이 겹칠 때 같은 체결이 두 번 들어오지 않게 한다.
-                    key = (row.trade_date, row.trade_no)
+                    key = (row.settlement_date, row.trade_no)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -260,7 +261,7 @@ class KiwoomAdapter(BrokerAdapter):
                     row = _to_domestic_trade_row(raw)
                     if row is None:
                         continue
-                    key = (row.trade_date, row.trade_no)
+                    key = (row.settlement_date, row.trade_no)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -806,11 +807,17 @@ def _to_trade_row(raw: dict) -> TradeRow | None:
     side = _SIDE_BY_REMARK.get((raw.get("rmrk_nm") or "").strip())
     if side is None:
         return None
-    trade_date = _parse_yyyymmdd(raw.get("deal_dt"))
-    if trade_date is None:
+    # ⚠️2026-10-05 deal_dt 는 **체결일이 아니라 결제(현금 원장)일**이다. 실측: 실현손익
+    #   매도일 SOXL 10-01 · AMD 09-24 인데 이 날짜는 10-05 · 09-28(T+1~T+2 영업일).
+    #   명세에 체결일 필드가 없다. 일단 결제일을 두고, 적재 뒤 주문 원장과 짝지어
+    #   체결일로 고친다(history.resolve_us_trade_dates). 못 짝지으면 'settlement' 로 남는다.
+    settlement_date = _parse_yyyymmdd(raw.get("deal_dt"))
+    if settlement_date is None:
         return None
     return TradeRow(
-        trade_date=trade_date,
+        trade_date=settlement_date,
+        settlement_date=settlement_date,
+        trade_date_source="settlement",
         # 0 패딩을 벗기지 않는다 — 증권사가 준 형태 그대로가 자연키의 일부다.
         trade_no=(raw.get("deal_no") or "").strip(),
         market="US",
@@ -861,14 +868,23 @@ def _to_domestic_trade_row(raw: dict) -> TradeRow | None:
     side = _domestic_side(raw.get("rmrk_nm"))
     if side is None:
         return None
-    trade_date = _parse_yyyymmdd(raw.get("trde_dt"))
-    if trade_date is None:
+    # ★2026-10-05 kt00015 는 해외와 같은 **현금 원장**이다 — trde_dt(거래일자)는 원장
+    #   날짜이고 거래번호도 이 날짜 기준이라 자연키로 둔다. 체결일은 명세에 따로
+    #   있다(cntr_dt '체결일'). ⚠️국내 실데이터가 아직 없어 둘이 다른지 실측은 못 했다.
+    #   cntr_dt 가 비면 결제일을 그대로 두고 'settlement' 로 표시한다(추측하지 않는다).
+    settlement_date = _parse_yyyymmdd(raw.get("trde_dt"))
+    if settlement_date is None:
         return None
+    # ⚠️빈 날짜를 "00000000" 으로 주는 필드가 있다 — date(0, 0, 0) 은 예외라 먼저 거른다.
+    cntr_dt = (raw.get("cntr_dt") or "").strip()
+    executed = _parse_yyyymmdd(cntr_dt) if cntr_dt.strip("0") else None
     ticker = normalize_ticker(raw.get("stk_cd"))
     if not ticker:
         return None
     return TradeRow(
-        trade_date=trade_date,
+        trade_date=executed or settlement_date,
+        settlement_date=settlement_date,
+        trade_date_source="broker" if executed else "settlement",
         # 0 패딩을 벗기지 않는다 — 증권사가 준 형태 그대로가 자연키의 일부다.
         trade_no=(raw.get("trde_no") or "").strip(),
         market="KR",

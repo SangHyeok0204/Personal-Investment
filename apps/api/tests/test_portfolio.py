@@ -494,6 +494,8 @@ def _add_trade(db, account_id, **kw):
         commission_local=Decimal("0.75"), tax_local=Decimal("0.00"),
     )
     defaults.update(kw)
+    # 결제일은 자연키라 비울 수 없다(alembic 0028). 시험에서는 체결일과 같게 둔다.
+    defaults.setdefault("settlement_date", defaults["trade_date"])
     trade = Trade(**defaults)
     db.add(trade)
     db.commit()

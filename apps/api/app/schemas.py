@@ -271,6 +271,10 @@ class TradeOut(BaseModel):
     exchange: str | None
     channel: str | None
     processed_at: str | None
+    # ★2026-10-05 trade_date 는 체결일, 이건 증권사 원장의 결제일(alembic 0028).
+    settlement_date: date | None = None
+    # order(주문과 짝지음) · broker · settlement(체결일을 몰라 결제일을 그대로 둠)
+    trade_date_source: str | None = None
 
 
 class TradeStatsOut(BaseModel):

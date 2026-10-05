@@ -800,7 +800,8 @@ def list_trades(
         .join(Account, Account.id == Trade.account_id)
         .outerjoin(Asset, Asset.id == Trade.asset_id)
         .where(*conditions)
-        .order_by(Trade.trade_date.desc(), Trade.trade_no.desc())
+        # 거래번호는 결제일 안의 순서다(alembic 0028) — 같은 체결일이면 결제일로 먼저 가른다.
+        .order_by(Trade.trade_date.desc(), Trade.settlement_date.desc(), Trade.trade_no.desc())
         .limit(limit)
     ).all()
 
@@ -872,6 +873,8 @@ def list_trades(
                 exchange=trade.exchange,
                 channel=trade.channel,
                 processed_at=trade.processed_at,
+                settlement_date=trade.settlement_date,
+                trade_date_source=trade.trade_date_source,
             )
             for trade, account_name, sector in rows
         ],
@@ -1133,6 +1136,7 @@ def list_realized_pnl(
             settlement_amount_local=t.settlement_amount_local,
             commission_local=t.commission_local, tax_local=t.tax_local,
             exchange=t.exchange, channel=t.channel, processed_at=t.processed_at,
+            settlement_date=t.settlement_date, trade_date_source=t.trade_date_source,
         )
         for t in trade_rows
     ]
@@ -1934,7 +1938,8 @@ def get_inclusion(
         .where(Trade.account_id.in_(account_ids), Trade.trade_date >= since)
         # ★체결 순서를 그대로 넘긴다. trade_no 가 같은 날 안의 순서를 정한다 —
         #   순서를 바꾸면 이동평균 원가가 어긋난다.
-        .order_by(Trade.trade_date, Trade.trade_no)
+        # ★2026-10-05 trade_no 는 **결제일** 안의 순서라(alembic 0028) 결제일을 사이에 둔다.
+        .order_by(Trade.trade_date, Trade.settlement_date, Trade.trade_no)
     ).scalars().all()
     if not rows:
         return empty

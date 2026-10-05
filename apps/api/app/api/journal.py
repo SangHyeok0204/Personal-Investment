@@ -54,6 +54,9 @@ VALID_KINDS = ("ENTRY", "EXIT", "REVIEW", "IDEA")
 #     당일~다음날 주문이 나가면 결제는 2~6일째가 되므로 7 은 하루 여유다.
 #   ⚠️예전 측정(0일 2 · 2일 55 · 4일 25)은 틀렸다 — 자세한 경위는
 #     `app/core/plan_outcome.py` 머리말 참고.
+# ★2026-10-05 alembic 0028 부터 `trade_date` 는 **체결일**이다(주문 원장과 짝지어 복원,
+#   원래 날짜는 settlement_date). 창은 그대로 둔다 — 못 짝지은 행(trade_date_source=
+#   'settlement')은 여전히 결제일이고, 넓은 창은 체결일 행에도 틀리지 않는다.
 _TRADE_WINDOW_BEFORE = 1
 _TRADE_WINDOW_AFTER = 7
 

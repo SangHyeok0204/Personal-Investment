@@ -126,6 +126,13 @@ class TradeRow:
     exchange: str | None = None
     channel: str | None = None
     processed_at: str | None = None
+    #: ★2026-10-05 증권사 원장 날짜 그대로(해외 deal_dt · 국내 trde_dt) — **결제일**이다.
+    #:  거래번호가 이 날짜 기준으로 리셋되므로 자연키는 이쪽이다(alembic 0028).
+    #:  None 이면 trade_date 와 같다고 본다.
+    settlement_date: date | None = None
+    #: trade_date 의 출처 — order(주문과 짝지음) · broker(증권사가 체결일을 줌)
+    #:  · settlement(체결일을 몰라 결제일을 그대로 둠). 해외는 적재 뒤에 주문으로 고친다.
+    trade_date_source: str | None = None
 
 
 @dataclass(frozen=True)

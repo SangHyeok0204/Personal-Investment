@@ -243,6 +243,7 @@ HISTORY_DDL = """
 CREATE TABLE IF NOT EXISTS trades (
     id UUID PRIMARY KEY, account_id UUID NOT NULL, asset_id UUID,
     ticker VARCHAR NOT NULL, asset_name VARCHAR, trade_date DATE NOT NULL,
+    settlement_date DATE NOT NULL, trade_date_source VARCHAR,
     trade_no VARCHAR NOT NULL, market VARCHAR NOT NULL, side VARCHAR NOT NULL,
     quantity NUMERIC(20,6) NOT NULL, price NUMERIC(20,6),
     currency VARCHAR NOT NULL, amount_local NUMERIC(20,4),
@@ -251,9 +252,16 @@ CREATE TABLE IF NOT EXISTS trades (
     channel VARCHAR, processed_at VARCHAR, source_job_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_trades_account_market_date_no
-        UNIQUE (account_id, market, trade_date, trade_no)
+    CONSTRAINT uq_trades_account_market_settle_no
+        UNIQUE (account_id, market, settlement_date, trade_no)
 );
+-- 0028 — 재사용되는 시험 DB 에 옛 표가 남아 있으면 멱등하게 맞춘다.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS settlement_date DATE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS trade_date_source VARCHAR;
+ALTER TABLE trades DROP CONSTRAINT IF EXISTS uq_trades_account_market_date_no;
+ALTER TABLE trades DROP CONSTRAINT IF EXISTS uq_trades_account_date_no;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_account_market_settle_no
+    ON trades (account_id, market, settlement_date, trade_no);
 
 CREATE TABLE IF NOT EXISTS account_daily_performance (
     id UUID PRIMARY KEY, account_id UUID NOT NULL, base_date DATE NOT NULL,

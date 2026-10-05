@@ -461,6 +461,9 @@ class Trade(Base):
     ⚠️`trade_no` 는 증권사 안에서 **일자별로 리셋**된다. 게다가 국내와 해외가
       번호를 따로 매겨 같은 날 `000000001` 이 둘 생긴다 — 유일키는
       계좌+**시장**+일자+번호다(alembic 0018).
+    ★2026-10-05 그 '일자'는 **결제일(settlement_date)** 이다(alembic 0028). 증권사가 번호를
+      결제일 기준으로 매긴다. `trade_date` 는 체결일 — 해외는 주문 원장과 짝지어 복원하고,
+      못 짝지으면 결제일 그대로 두고 `trade_date_source='settlement'` 로 표시한다.
     ⚠️해외 거래는 원화 금액이 0 으로 오므로 amount_krw 는 NULL 일 수 있다 —
       0 으로 채우면 "거래금액 0원"이라는 틀린 사실이 화면에 뜬다.
     """
@@ -478,6 +481,10 @@ class Trade(Base):
     ticker: Mapped[str] = mapped_column(String, nullable=False)
     asset_name: Mapped[str | None] = mapped_column(String, nullable=True)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 증권사 원장 날짜 그대로(자연키). 현금이 실제로 움직인 날.
+    settlement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # order / broker / settlement — trade_date 를 어디서 얻었나.
+    trade_date_source: Mapped[str | None] = mapped_column(String, nullable=True)
     trade_no: Mapped[str] = mapped_column(String, nullable=False)
     market: Mapped[str] = mapped_column(String, nullable=False)  # KR / US
     side: Mapped[str] = mapped_column(String, nullable=False)  # BUY / SELL
@@ -501,7 +508,10 @@ class Trade(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("account_id", "trade_date", "trade_no", name="uq_trades_account_date_no"),
+        UniqueConstraint(
+            "account_id", "market", "settlement_date", "trade_no",
+            name="uq_trades_account_market_settle_no",
+        ),
         Index("ix_trades_account_date", "account_id", "trade_date"),
         Index("ix_trades_ticker", "ticker"),
     )

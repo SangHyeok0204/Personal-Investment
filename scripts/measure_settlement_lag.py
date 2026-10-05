@@ -1,6 +1,8 @@
 """체결 원장의 날짜가 주문일보다 며칠 뒤인지 잰다 — 매매일지 창의 근거.
 
-★왜 필요한가: `trades.trade_date` 는 **체결일이 아니라 결제일(T+2)** 이다.
+★왜 필요한가: 체결 원장의 날짜는 **체결일이 아니라 결제일(T+2)** 이다.
+  ★2026-10-05 alembic 0028 부터 그 날짜는 `trades.settlement_date` 에 있다
+  (`trade_date` 는 복원한 체결일이라 이걸 재면 지연이 0 으로 나온다).
   매매일지가 "적어 둔 계획이 실제로 체결됐나"를 보려면 창을 얼마나 열어 둘지
   정해야 하는데, 그 숫자를 눈대중으로 두면 계획이 "체결 0주"로 조용히 적힌다.
   실제로 그렇게 적힌 적이 있다.
@@ -45,9 +47,9 @@ def main() -> int:
             order by order_date, order_no
         """)).all()
         trades = conn.execute(text("""
-            select trade_date, ticker, side, quantity
+            select settlement_date, ticker, side, quantity
             from trades
-            order by trade_date, trade_no
+            order by settlement_date, trade_no
         """)).all()
 
     # 체결에 **고유 번호**를 붙인다. trade_no 는 날짜마다 다시 매겨져 고유하지 않다.

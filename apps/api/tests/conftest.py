@@ -57,6 +57,9 @@ def engine():
         conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS queue VARCHAR NOT NULL DEFAULT 'default'"))
         conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ"))
         conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0"))
+        # 0028 — 체결 결제일·체결일 출처(워커 테스트와 같은 DB 라 멱등하게).
+        conn.execute(text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS settlement_date DATE"))
+        conn.execute(text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS trade_date_source VARCHAR"))
     yield test_engine
     test_engine.dispose()
 

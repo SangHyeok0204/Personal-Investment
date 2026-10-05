@@ -590,6 +590,15 @@ def run(engine, job_id, payload, storage_dir, log_job):
                             history_counts["orders"] += history_repo.upsert_orders(
                                 conn, account_id, orders, job_id
                             )
+                        # ★2026-10-05 체결 원장 날짜는 결제일이다 — 주문 원장과 짝지어
+                        #   체결일로 고친다. DB 의 주문을 쓰므로 주문 조회가 실패해도 돈다.
+                        resolved = history_repo.resolve_us_trade_dates(conn, account_id)
+                        # ⚠️못 짝지은 체결을 조용히 넘기지 않는다 — 날짜가 결제일이다.
+                        if resolved["settlement"]:
+                            history_notes.append(
+                                f"해외 체결 {resolved['settlement']}건은 주문 내역과 짝을 못 지어 "
+                                "체결일 대신 결제일로 표시됩니다."
+                            )
 
                     # 배당은 종목별 조회라(usa21730 이 stk_cd 필수) 대상을 먼저 정한다.
                     # 이미 판 종목도 그 해에 배당을 받았을 수 있으므로 체결까지 본다.

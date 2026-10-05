@@ -5,29 +5,40 @@
 동기화를 두 번 돌렸다고 체결이 두 배로 보이면 안 된다.
 
 자연키는 실측으로 정한 것들이다(api_guide.md §2 참고):
-  trades                     (account_id, trade_date, trade_no)  ← trade_no 는 일자별 리셋
+  trades                     (account_id, market, settlement_date, trade_no)
+                               ← trade_no 는 **결제일** 기준 일자별 리셋(alembic 0018·0028)
   account_daily_performance  (account_id, base_date)
   realized_pnl               (account_id, sell_date, ticker)     ← 증권사가 매도일×종목 집계
   orders                     (account_id, order_date, order_no)  ← 주문 상태는 사후에 바뀐다
 """
 import uuid
+from collections import defaultdict
 
 from sqlalchemy import text
 
 _TRADE_UPSERT = text(
     """
     INSERT INTO trades (
-        id, account_id, asset_id, ticker, asset_name, trade_date, trade_no, market, side,
+        id, account_id, asset_id, ticker, asset_name, trade_date, settlement_date,
+        trade_date_source, trade_no, market, side,
         quantity, price, currency, amount_local, settlement_amount_local,
         commission_local, tax_local, amount_krw, exchange, channel, processed_at,
         source_job_id
     ) VALUES (
-        :id, :account_id, :asset_id, :ticker, :asset_name, :trade_date, :trade_no, :market, :side,
+        :id, :account_id, :asset_id, :ticker, :asset_name, :trade_date, :settlement_date,
+        :trade_date_source, :trade_no, :market, :side,
         :quantity, :price, :currency, :amount_local, :settlement_amount_local,
         :commission_local, :tax_local, :amount_krw, :exchange, :channel, :processed_at,
         :source_job_id
     )
-    ON CONFLICT (account_id, market, trade_date, trade_no) DO UPDATE SET
+    ON CONFLICT (account_id, market, settlement_date, trade_no) DO UPDATE SET
+        -- ★2026-10-05 주문과 짝지어 복원한 체결일은 재동기화가 결제일로 되돌리지 않는다.
+        --   (짝짓기는 적재 뒤 resolve_us_trade_dates 가 매번 다시 한다.)
+        trade_date = CASE WHEN trades.trade_date_source = 'order'
+                          THEN trades.trade_date ELSE EXCLUDED.trade_date END,
+        trade_date_source = CASE WHEN trades.trade_date_source = 'order'
+                                 THEN trades.trade_date_source
+                                 ELSE EXCLUDED.trade_date_source END,
         asset_id = EXCLUDED.asset_id,
         ticker = EXCLUDED.ticker,
         asset_name = EXCLUDED.asset_name,
@@ -178,6 +189,9 @@ def upsert_trades(conn, account_id, trades, source_job_id=None):
                 "ticker": trade.ticker,
                 "asset_name": trade.name,
                 "trade_date": trade.trade_date,
+                # 자연키라 비울 수 없다 — 안 준 행(옛 호출자)은 체결일과 같다고 본다.
+                "settlement_date": trade.settlement_date or trade.trade_date,
+                "trade_date_source": trade.trade_date_source,
                 "trade_no": trade.trade_no,
                 "market": trade.market,
                 "side": trade.side,
@@ -196,6 +210,108 @@ def upsert_trades(conn, account_id, trades, source_job_id=None):
             },
         )
     return len(trades)
+
+
+#: 결제일이 주문일보다 이만큼 넘게 늦으면 짝으로 보지 않는다. 실측(2026-10-05,
+#: 92건) 최대 4일(주말 낀 T+2) — 연휴 여유를 두고 10일.
+_SETTLEMENT_LAG_MAX_DAYS = 10
+
+
+def match_execution_dates(trades, orders) -> dict:
+    """해외 체결 → 체결일(= 주문일). {trade.id: order_date} 로 돌려준다.
+
+    ★왜: ust21100 의 deal_dt 는 결제일이다(alembic 0028). 주문 원장(ust21180)에는
+      주문일이 있고 체결가·체결수량이 체결 원장과 그대로 같다(실측 92건).
+
+    짝 조건 — 같은 종목·방향, 주문일 ≤ 결제일(10일 안), 체결가가 둘 다 있으면 같아야 한다.
+      1) 체결수량 == 체결 수량인 주문 하나. 결제일에서 **가장 가까운 앞** 주문을 고른다.
+      2) 없으면 같은 주문일의 주문들 합이 수량과 같을 때(증권사가 같은 날 같은 종목
+         주문을 한 줄로 합쳐 결제한다 — 실측 EETH 2주+32주 → 34주 한 줄).
+    ⚠️**일대일**로 쓴다. 쓴 주문을 다시 쓰면 같은 (종목, 수량)이 여러 번인 계좌에서
+      (SCHD 10주 매수 6번) 엉뚱한 날짜가 붙는다. 결제일 순으로 짝짓는다.
+    ⚠️못 찾은 체결은 결과에 없다 — 호출자가 결제일 그대로 두고 'settlement' 로 표시한다.
+      앞 영업일로 미루는 식의 추측은 하지 않는다.
+    """
+    pool = [o for o in orders if (o.filled_quantity or 0) > 0]
+    used: set[int] = set()
+    resolved: dict = {}
+
+    def fits(t, o) -> bool:
+        if o.ticker != t.ticker or o.side != t.side:
+            return False
+        lag = (t.settlement_date - o.order_date).days
+        if not 0 <= lag <= _SETTLEMENT_LAG_MAX_DAYS:
+            return False
+        return t.price is None or o.filled_price is None or o.filled_price == t.price
+
+    ordered = sorted(trades, key=lambda t: (t.settlement_date, t.trade_no))
+    for t in ordered:
+        candidates = [
+            i for i, o in enumerate(pool)
+            if i not in used and fits(t, o) and o.filled_quantity == t.quantity
+        ]
+        if candidates:
+            # 가장 늦은 주문일(= 결제일에 가장 가까운 앞), 같으면 주문번호 순.
+            best = min(candidates, key=lambda i: (-pool[i].order_date.toordinal(),
+                                                  pool[i].order_no))
+            used.add(best)
+            resolved[t.id] = pool[best].order_date
+
+    for t in ordered:
+        if t.id in resolved:
+            continue
+        by_date: dict = defaultdict(list)
+        for i, o in enumerate(pool):
+            if i not in used and fits(t, o):
+                by_date[o.order_date].append(i)
+        for order_date in sorted(by_date, reverse=True):
+            group = by_date[order_date]
+            if sum(pool[i].filled_quantity for i in group) == t.quantity:
+                used.update(group)
+                resolved[t.id] = order_date
+                break
+    return resolved
+
+
+_US_TRADES_FOR_MATCH = text(
+    "SELECT id, settlement_date, trade_no, ticker, side, quantity, price, "
+    "       trade_date, trade_date_source "
+    "FROM trades WHERE account_id = :acc AND market = 'US'"
+)
+_FILLED_ORDERS = text(
+    "SELECT order_date, order_no, ticker, side, filled_quantity, filled_price "
+    "FROM orders WHERE account_id = :acc AND coalesce(filled_quantity, 0) > 0"
+)
+_SET_TRADE_DATE = text(
+    "UPDATE trades SET trade_date = :trade_date, trade_date_source = :source, "
+    "  updated_at = now() WHERE id = :id"
+)
+
+
+def resolve_us_trade_dates(conn, account_id) -> dict[str, int]:
+    """해외 체결의 체결일을 주문 원장으로 복원한다(alembic 0028). 계좌 전체를 매번 다시 짝짓는다.
+
+    ★DB 에 쌓인 주문 원장을 쓴다 — 이번 동기화에서 주문 조회가 실패했거나 조회 창(3개월)
+      밖의 옛 체결도 같은 결과가 나온다. 같은 데이터면 같은 답이라 몇 번 돌려도 같다.
+    ⚠️자연키는 결제일이라 여기서 trade_date 를 바꿔도 행이 늘지 않는다.
+    돌려주는 값: {"order": 짝지은 수, "settlement": 못 짝지어 결제일로 둔 수, "changed": 바뀐 행}.
+    """
+    trades = conn.execute(_US_TRADES_FOR_MATCH, {"acc": account_id}).all()
+    orders = conn.execute(_FILLED_ORDERS, {"acc": account_id}).all()
+    resolved = match_execution_dates(trades, orders)
+    counts = {"order": 0, "settlement": 0, "changed": 0}
+    for t in trades:
+        if t.id in resolved:
+            trade_date, source = resolved[t.id], "order"
+        else:
+            trade_date, source = t.settlement_date, "settlement"
+        counts[source] += 1
+        if (t.trade_date, t.trade_date_source) != (trade_date, source):
+            conn.execute(
+                _SET_TRADE_DATE, {"trade_date": trade_date, "source": source, "id": t.id}
+            )
+            counts["changed"] += 1
+    return counts
 
 
 def upsert_daily_performance(conn, account_id, rows, source_job_id=None):
