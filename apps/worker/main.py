@@ -12,7 +12,7 @@ from db import get_engine, wait_for_db
 from handlers import HANDLERS
 from joblog import log_job
 from llm.cli import LlmError, daily_cap, stop_reason
-from source_health import record_error, record_ok
+from source_health import mark_ok_if_tracked, record_error, record_ok
 import wallclock
 
 logger = logging.getLogger("worker")
@@ -236,6 +236,7 @@ def process_job(engine, job, storage_dir):
 
     finish_job_success(engine, job_id, result)
     log_job(engine, job_id, "INFO", "done", "Job completed successfully")
+    mark_ok_if_tracked(engine, f"job:{job_type}")      # 지난 상한 초과 경고를 성공으로 닫는다
 
 
 def run_one_cycle(engine, storage_dir, queues=DEFAULT_QUEUES):

@@ -70,3 +70,14 @@ def record_error(
                 "message": (message or "")[:500],
             },
         )
+
+
+def mark_ok_if_tracked(engine, source: str) -> None:
+    """이미 행이 있는 원천만 '성공'으로 갱신한다 — 행을 새로 만들지 않는다.
+
+    ★2026-10-06: `job:{종류}` 행은 벽시계 상한에 걸릴 때만 생긴다. 다음 회차가 성공해도 아무도 지우지 않아
+      수집 상태에 'timeout_wallclock' 경고가 계속 남았다(EARNINGS_REVENUE 10-06 07:21 성공 뒤에도).
+    """
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE source_status SET last_ok_at = now(), updated_at = now() WHERE source = :s"),
+                     {"s": source})

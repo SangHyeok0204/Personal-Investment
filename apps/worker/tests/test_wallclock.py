@@ -77,6 +77,24 @@ def test_blocking_thread_handler_fails_and_next_job_runs(db, tmp_path, monkeypat
     assert _row(db, nxt)[0] == "SUCCESS"
 
 
+def test_later_success_clears_wallclock_warning(db, tmp_path, monkeypatch, tiny_limits):
+    """★2026-10-06 상한 초과 뒤 같은 종류가 성공하면 `job:{종류}` 경고가 닫힌다(last_ok_at > last_error_at)."""
+    release = threading.Event()
+    monkeypatch.setitem(main.HANDLERS, "HANG_THREAD", lambda *a: release.wait(120))
+    _job(db, "HANG_THREAD")
+    assert main.run_one_cycle(db, str(tmp_path)) is True
+    release.set()
+    monkeypatch.setitem(main.HANDLERS, "HANG_THREAD", lambda *a: {"ok": True})
+    _job(db, "HANG_THREAD")
+    assert main.run_one_cycle(db, str(tmp_path)) is True
+    with db.begin() as c:
+        ok, err = c.execute(text("SELECT last_ok_at, last_error_at FROM source_status "
+                                 "WHERE source = 'job:HANG_THREAD'")).one()
+        untouched = c.execute(text("SELECT count(*) FROM source_status WHERE source = 'job:TEST_JOB'")).scalar()
+    assert ok is not None and ok > err
+    assert untouched == 0                     # 경고가 없던 종류는 행을 새로 만들지 않는다
+
+
 def test_blocking_child_is_killed_with_grandchild(db, tmp_path, monkeypatch, tiny_limits):
     marker = f"wallclock-orphan-{uuid.uuid4().hex[:8]}"
     monkeypatch.setitem(main.HANDLERS, "HANG_CHILD",
