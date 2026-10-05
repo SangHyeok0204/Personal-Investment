@@ -13,4 +13,6 @@ description: 대시보드 전 페이지·API 건강 점검 — HTTP, 콘솔 오�
 5. 원천: `/api/v1/jobs/sources`(state≠ok), `/api/v1/jobs?status=FAILED`, `/api/v1/brokerage/freshness`.
 6. 정합(같은 숫자가 여러 화면에): summary.total_assets = Σholdings.market_value + cash,
    pnl-breakdown.total = realized + unrealized, account-return.pnl = total − unrealized_at_start.
-7. 결과는 `.omc/research/health-audit.md` 장부에 회차별로 남긴다. push 금지, exhibit.py 수정 금지.
+7. 서버 자원: `ps -o rss,%cpu,etime -p $(lsof -ti tcp:3000|head -1)` — next dev RSS > 4GB 또는 홈 응답 > 3초면
+   재시작 제안(사용자 승인 후 `cd apps/web && nohup npm run dev > /tmp/pi-web-dev.log 2>&1 &`). 2026-10-05 8일 가동 6.7GB·홈 10초 사례.
+8. 결과는 `.omc/research/health-audit.md` 장부에 회차별로 남긴다. push 금지, exhibit.py 수정 금지.

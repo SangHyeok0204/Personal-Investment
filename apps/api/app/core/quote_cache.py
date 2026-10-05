@@ -175,9 +175,44 @@ def _build_source() -> CompositePriceSource:
     if toss_in_cooldown():
         return CompositePriceSource([yahoo])
 
-    toss = TossPriceSource(client_id, client_secret)
+    toss = _shared_toss(client_id, client_secret)
     order = [toss, yahoo] if us_regular_session_open() else [yahoo, toss]
     return CompositePriceSource(order)
+
+
+class _SharedToss:
+    """프로세스에 하나뿐인 토스 소스를 감싼다 — 사슬의 `close()` 가 공유 클라이언트를 닫지 않게,
+    동시 요청이 토큰을 두 번 받지 않게(잠금)."""
+
+    name = "toss"
+
+    def __init__(self, inner: TossPriceSource):
+        self._inner = inner
+        self._lock = threading.Lock()
+
+    def quotes(self, symbols):
+        with self._lock:
+            return self._inner.quotes(symbols)
+
+    def close(self):
+        pass
+
+
+_toss_shared: tuple[tuple[str, str], _SharedToss] | None = None
+
+
+def _shared_toss(client_id: str, client_secret: str) -> _SharedToss:
+    """★2026-10-05: 예전에는 캐시가 빌 때마다(≈5초) `TossPriceSource` 를 새로 만들어 **토큰도 매번 새로**
+    받았다. 토스는 클라이언트당 유효 토큰이 1개라, 같은 키를 쓰는 다른 수집기를 계속 끊는다.
+    → 키가 같으면 인스턴스(와 토큰)를 재사용한다. 키를 바꾸면 새로 만든다."""
+    global _toss_shared
+    key = (client_id, client_secret)
+    with _lock:
+        if _toss_shared is None or _toss_shared[0] != key:
+            if _toss_shared is not None:
+                _toss_shared[1]._inner.close()
+            _toss_shared = (key, _SharedToss(TossPriceSource(client_id, client_secret)))
+        return _toss_shared[1]
 
 
 def toss_in_cooldown() -> bool:
@@ -422,8 +457,9 @@ def us_session_dates(now: datetime | None = None) -> list[date] | None:
 
 def clear_cache() -> None:
     """테스트용. 프로덕션 경로에서는 부르지 않는다."""
-    global _toss_skip_until
+    global _toss_skip_until, _toss_shared
     with _lock:
+        _toss_shared = None
         _cache.clear()
         _range_cache.clear()
         _history_cache.clear()

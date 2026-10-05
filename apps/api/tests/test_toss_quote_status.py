@@ -135,3 +135,24 @@ def test_price_sources_shows_blocked_toss(fakes, client) -> None:
     assert by["toss"]["rank"] is None                          # 지금 안 쓴다
     assert by["yahoo"]["rank"] == 1
     assert "IP" in by["toss"]["message"]
+
+
+def test_toss_source_and_token_are_reused_across_polls(fakes) -> None:
+    """★2026-10-05 캐시가 빌 때마다 토스 인스턴스(=토큰)를 새로 만들던 것 — 키가 같으면 재사용."""
+    calls, mode, clock = fakes
+    mode["blocked"] = False
+    made = []
+    orig = qc.TossPriceSource
+
+    def counting(*a, **k):
+        made.append(1)
+        return orig(*a, **k)
+
+    qc.TossPriceSource = counting
+    try:
+        qc.get_quotes(["AAA"])
+        _advance(clock, qc.TTL_SECONDS + 1)
+        qc.get_quotes(["AAA"])
+    finally:
+        qc.TossPriceSource = orig
+    assert len(made) == 1 and len(calls) == 2
