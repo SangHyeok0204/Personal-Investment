@@ -295,7 +295,9 @@ def run_sync(db: Session = Depends(get_db)) -> SyncResultOut:
         )
     except Exception as exc:  # noqa: BLE001 - 사용자에게 원인을 그대로 보여준다
         _finish_job(db, job_id, "FAILED", str(exc))
+        _record_kiwoom(db, exc)
         raise AppError(502, "SYNC_FAILED", str(exc), {"logs": logs[-5:]}) from exc
+    _record_kiwoom(db, None)
 
     # ⚠️이력 동기화는 실패해도 예외를 던지지 않는다(잔고는 지키려고). 그대로 두면
     #   화면에 '성공'만 뜨고 체결·배당이 0 건인 이유를 알 수 없다 — 실측으로 겪었다.
@@ -385,6 +387,28 @@ def fail_orphaned_syncs(db: Session) -> int:
     ).rowcount
     db.commit()
     return n
+
+
+def _record_kiwoom(db: Session, failure: BaseException | None) -> None:
+    """원천 상태 `kiwoom` — 수집 상태 화면의 '원천 경고'에 증권사 실패도 뜨게 한다.
+
+    ★2026-10-05: 맥이 네트워크를 옮기면 공인 IP 가 바뀌어 키움이 8050(IP 미등록)으로 막는데,
+      잡 목록에만 남고 원천 경고에는 안 떠 몇 시간 동안 아무도 몰랐다. 8050 은 'config'(설정 필요).
+    ⚠️기록 실패가 동기화 결과를 바꾸면 안 된다 — 삼킨다.
+    ⚠️모듈 전역 `engine` 이 아니라 요청 세션의 연결을 쓴다 — 테스트가 실제 DB 에 쓰지 않게.
+    """
+    bind = db.get_bind()
+    try:
+        from source_health import record_error, record_ok
+
+        if failure is None:
+            record_ok(bind, "kiwoom")
+            return
+        msg = str(failure)
+        kind = "config" if "8050" in msg else "timeout" if "timeout" in msg.lower() else "other"
+        record_error(bind, "kiwoom", kind, msg)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _create_job(db: Session) -> uuid.UUID:
@@ -509,8 +533,10 @@ def run_quick_sync(db: Session = Depends(get_db)) -> QuickSyncResultOut:
                     # 새로 산 종목이 미분류로 남지 않게 기본 섹터를 붙인다.
                     sectors_repo.apply_sector_seed(conn)
     except Exception as exc:  # noqa: BLE001 - 원인을 그대로 보여준다
+        _record_kiwoom(db, exc)
         raise AppError(502, "SYNC_FAILED", str(exc)) from exc
 
+    _record_kiwoom(db, None)
     return QuickSyncResultOut(
         ok=True,
         positions=total_positions,

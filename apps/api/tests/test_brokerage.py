@@ -430,3 +430,23 @@ def test_orphaned_running_sync_is_closed_on_startup(db):
     assert db.execute(
         text("SELECT status FROM jobs WHERE id = :i"), {"i": fresh_id}
     ).scalar() == "RUNNING"
+
+
+def test_sync_failure_shows_up_as_kiwoom_source_error(client, db, fake_sync, monkeypatch):
+    """★2026-10-05 8050(IP 미등록)이 잡 목록에만 남고 원천 경고에 안 떴다 → `kiwoom` 원천 'config'."""
+    from sqlalchemy import text
+
+    from handlers import sync_kiwoom_portfolio as handler
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("인증에 실패했습니다[8050:IP가 등록되지 않았습니다.]")
+
+    monkeypatch.setattr(handler, "run", boom)
+    assert client.post("/api/v1/brokerage/sync").status_code == 502
+    kind = db.execute(text("SELECT last_error_kind FROM source_status WHERE source = 'kiwoom'")).scalar()
+    assert kind == "config"
+
+    monkeypatch.setattr(handler, "run", lambda *a, **k: {"daily_performance": 541})
+    assert client.post("/api/v1/brokerage/sync").status_code == 200
+    ok = db.execute(text("SELECT last_ok_at FROM source_status WHERE source = 'kiwoom'")).scalar()
+    assert ok is not None
