@@ -31,7 +31,7 @@ if str(_WORKER_DIR) not in sys.path:
 from app.core import credentials_store  # noqa: E402
 from app.core.market_history import Series, fetch_history  # noqa: E402
 from prices import CompositePriceSource, Quote, YahooPriceSource  # noqa: E402
-from prices.toss import TossPriceSource  # noqa: E402
+from prices.toss import TossAuthError, TossIpNotAllowed, TossPriceSource  # noqa: E402
 
 TTL_SECONDS = 4.0
 
@@ -55,6 +55,16 @@ _history_cache: dict[str, tuple[float, Series | None]] = {}
 TRADING_DAY_PERIODS: tuple[int, ...] = (5, 20, 60)
 # 60거래일 + 기준 1개 = 61개가 필요하다. 3mo 는 휴장이 끼면 모자랄 수 있어 6mo 로 받는다.
 _HISTORY_RANGE = "6mo"
+
+# ★2026-10-05: 맥의 공인 IP 가 바뀌어 토스가 토큰 발급을 403(IP 미허용)으로 거부했는데,
+#   5초마다(종목 수만큼!) 토큰을 다시 두드리면서 화면은 '토스 사용 중'이라 했다 — 실제
+#   시세는 전부 야후였다. 토큰 단계 실패 뒤엔 이 시간 동안 토스를 사슬에서 빼고(야후가
+#   대신 준다), 지나면 다시 한 번 시도한다.
+TOSS_COOLDOWN_SECONDS = 600.0
+# 토스 상태 — 화면(/brokerage/price-sources)이 읽는다. state: None(아직 모름)|ok|ip_blocked|error.
+# ⚠️토큰을 새로 받아 확인하지 않는다 — 시세 경로가 실제로 겪은 결과만 적는다.
+_toss_status: dict = {"state": None, "message": None, "at": None}
+_toss_skip_until = 0.0  # time.monotonic() 기준
 
 
 def us_regular_session_open(now: datetime | None = None) -> bool:
@@ -160,10 +170,65 @@ def _build_source() -> CompositePriceSource:
     client_secret = credentials_store.read_env_value("TOSS_CLIENT_SECRET")
     if not (client_id and client_secret):
         return CompositePriceSource([yahoo])
+    # ★토큰 단계에서 막힌 직후면 토스를 끼우지 않는다 — 막힌 동안 5초마다 토큰 엔드포인트를
+    #   두드리지 않는다. 쿨다운이 지나면 다시 끼워 한 번 시도한다.
+    if toss_in_cooldown():
+        return CompositePriceSource([yahoo])
 
     toss = TossPriceSource(client_id, client_secret)
     order = [toss, yahoo] if us_regular_session_open() else [yahoo, toss]
     return CompositePriceSource(order)
+
+
+def toss_in_cooldown() -> bool:
+    return time.monotonic() < _toss_skip_until
+
+
+def toss_status() -> dict:
+    """토스 시세 경로의 마지막 상태(복사본) + 쿨다운 중인지."""
+    with _lock:
+        out = dict(_toss_status)
+    out["cooldown"] = toss_in_cooldown()
+    return out
+
+
+def _note_toss(source: CompositePriceSource, bind) -> None:
+    """이번 호출에서 토스가 어떻게 됐는지 적는다. **상태가 바뀔 때만** source_status 에 쓴다.
+
+    ⚠️5초마다 같은 오류를 쓰지 않는다 — 수집 상태 화면엔 '바뀐 순간'만 있으면 된다.
+    ⚠️기록 실패가 시세 응답을 바꾸면 안 된다 — 삼킨다. `bind` 가 없으면 메모리 상태만 바꾼다.
+    """
+    global _toss_skip_until
+    if "toss" not in source.attempted:
+        return  # 앞 소스(야후)가 다 채워 토스는 불리지 않았다 — 아는 게 없다.
+    exc = source.last_errors.get("toss")
+    if exc is None:
+        state, message = "ok", None
+    elif isinstance(exc, TossIpNotAllowed):
+        state, message = "ip_blocked", str(exc)
+    else:
+        state, message = "error", f"{type(exc).__name__}: {exc}"[:500]
+    with _lock:
+        if isinstance(exc, TossAuthError):
+            _toss_skip_until = time.monotonic() + TOSS_COOLDOWN_SECONDS
+        changed = _toss_status["state"] != state
+        if changed or state != "ok":
+            _toss_status.update(
+                state=state, message=message,
+                at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+    if not changed or bind is None:
+        return
+    try:
+        from source_health import record_error, record_ok
+
+        if state == "ok":
+            record_ok(bind, "toss")
+        else:
+            # IP 미허용은 'config'(설정 필요) — 키움 8050 과 같은 분류.
+            record_error(bind, "toss", "config" if state == "ip_blocked" else "other", message or "")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _fill_52w(quotes: dict[str, Quote]) -> dict[str, Quote]:
@@ -213,7 +278,7 @@ def _fill_52w(quotes: dict[str, Quote]) -> dict[str, Quote]:
 
 
 def get_quotes(
-    symbols: list[str], with_range: bool = False
+    symbols: list[str], with_range: bool = False, bind=None
 ) -> tuple[dict[str, Quote], int]:
     """심볼별 시세와 **상류에서 새로 받아온 개수**.
 
@@ -221,6 +286,9 @@ def get_quotes(
 
     `with_range` 면 52주 고저까지 채운다. 5초마다 도는 보유종목 경로는 그게
     필요 없어서 기본으로 끈다 — 필요 없는 상류 호출을 만들지 않는다.
+
+    `bind` — 토스 상태가 바뀌면 source_status 에 적을 연결(요청 세션의 `db.get_bind()`).
+    ⚠️모듈 전역 engine 을 쓰지 않는다 — 테스트(get_db 오버라이드)가 실제 DB 에 쓰지 않게.
     """
     wanted = [s for s in dict.fromkeys(symbols) if s]
     if not wanted:
@@ -244,6 +312,7 @@ def get_quotes(
     source = _build_source()
     try:
         fetched = source.quotes(stale)
+        _note_toss(source, bind)
     finally:
         source.close()
 
@@ -353,7 +422,10 @@ def us_session_dates(now: datetime | None = None) -> list[date] | None:
 
 def clear_cache() -> None:
     """테스트용. 프로덕션 경로에서는 부르지 않는다."""
+    global _toss_skip_until
     with _lock:
         _cache.clear()
         _range_cache.clear()
         _history_cache.clear()
+        _toss_status.update(state=None, message=None, at=None)
+        _toss_skip_until = 0.0

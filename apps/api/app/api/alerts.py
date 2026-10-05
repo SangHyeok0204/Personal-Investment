@@ -83,7 +83,7 @@ def _build_context(db: Session, rules: list[AlertRule]) -> _Context:
     # 시세 — 종목 전부를 **한 번에** 받는다.
     quotes: dict = {}
     if tickers:
-        quotes, _ = quote_cache.get_quotes(tickers, with_range=True)
+        quotes, _ = quote_cache.get_quotes(tickers, with_range=True, bind=db.get_bind())
 
     positions: dict[str, tuple] = {}
     names: dict[str, str | None] = {}

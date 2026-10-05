@@ -5,7 +5,7 @@ import { AlertTriangle, Landmark, LineChart } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-header";
 import { Topbar } from "@/components/layout/topbar";
 import { PlannedList, StubCard } from "@/components/stub";
-import { getPortfolioConnections, getPriceSources, type PortfolioConnection } from "@/lib/api";
+import { getPortfolioConnections, getPriceSources, type PortfolioConnection, type PriceSourceStatus } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useConnectDialog } from "@/components/brokerage/connect-context";
 import { cn } from "@/lib/utils";
@@ -56,11 +56,26 @@ function PriceSourceChip({
   status,
   loading,
 }: {
-  status: { configured: boolean; rank: number | null } | undefined;
+  status: PriceSourceStatus | undefined;
   loading: boolean;
 }) {
   if (loading) return <span className="shrink-0 text-[11px] font-bold text-ink-faint">확인 중…</span>;
   if (!status) return <span className="shrink-0 text-[11px] font-bold text-ink-faint">—</span>;
+  // ★2026-10-05: IP 가 바뀌어 토스 토큰이 막혀도 '연동됨 · 지금 사용'이 떴다(실제 시세는 전부 야후).
+  //   시세 경로가 겪은 실패를 먼저 보여 준다.
+  if (status.configured && (status.state === "ip_blocked" || status.state === "error")) {
+    const blocked = status.state === "ip_blocked";
+    return (
+      <span className="flex shrink-0 flex-col items-end gap-0.5 text-right">
+        <span className="rounded-full bg-status-failed/10 px-2.5 py-1 text-[11px] font-extrabold text-status-failed">
+          {blocked ? "IP 미허용 · 야후로 대체 중" : "오류 · 야후로 대체 중"}
+        </span>
+        <span className="max-w-[16rem] text-[10.5px] font-medium text-ink-muted" title={status.message ?? undefined}>
+          {blocked ? "토스 WTS 설정→Open API 에서 현재 공인 IP 를 허용목록에 등록" : (status.message ?? "")}
+        </span>
+      </span>
+    );
+  }
   const label = !status.configured
     ? "미등록"
     : status.rank === 1

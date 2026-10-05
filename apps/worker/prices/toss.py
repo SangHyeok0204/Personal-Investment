@@ -41,7 +41,15 @@ class TossError(RuntimeError):
     pass
 
 
-class TossIpNotAllowed(TossError):
+class TossAuthError(TossError):
+    """토큰 발급 단계 실패 — 종목 하나의 문제가 아니라 **호출 전체**가 안 된다.
+
+    ★2026-10-05: 종목별 실패와 섞어 삼키면 16종목이면 토큰 엔드포인트를 16번 두드리고
+      결과는 조용히 빈 dict 가 된다. 그래서 따로 나눠 한 번만 올린다(`quotes`).
+    """
+
+
+class TossIpNotAllowed(TossAuthError):
     """토큰 발급이 IP 허용목록에 막힘 — 자격증명 문제가 아니다."""
 
 
@@ -93,7 +101,7 @@ class TossPriceSource(PriceSource):
             )
         if r.status_code != 200:
             # ⚠️본문 전체를 싣지 않는다 — 시크릿이 에코될 여지를 남기지 않는다.
-            raise TossError(f"token: {r.status_code} {r.text[:200]}")
+            raise TossAuthError(f"token: {r.status_code} {r.text[:200]}")
         d = r.json()
         self._token = d["access_token"]
         self._token_exp = time.time() + int(d["expires_in"])
@@ -187,8 +195,13 @@ class TossPriceSource(PriceSource):
                     "/api/v1/candles",
                     {"symbol": symbol, "interval": "1d", "count": 2},
                 )
+            except TossAuthError:
+                # ★2026-10-05: 토큰 단계 실패(IP 미허용 등)는 종목 탓이 아니다 — 한 번만 올린다.
+                #   ⚠️여기서 삼키면 종목마다 토큰 발급을 다시 시도하고(16종목=16회), 호출부는
+                #   빈 결과만 보고 조용히 야후로 넘어가 아무도 차단을 모른다.
+                raise
             except Exception:
-                # 한 종목이 실패해도 나머지는 살린다.
+                # 한 종목이 실패해도 나머지는 살린다(예: 그 티커만 404).
                 continue
             candles = (res or {}).get("candles") or []
             if not candles:

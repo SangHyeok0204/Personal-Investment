@@ -69,7 +69,7 @@ def _build(items: list[WatchlistItem], db: Session) -> WatchlistListOut:
         ).all()
     }
     quotes, fetched = quote_cache.get_quotes(
-        [i.ticker for i in items], with_range=True
+        [i.ticker for i in items], with_range=True, bind=db.get_bind()
     )
     # ★5D/20D/60D 는 마지막 **완결** 일 종가 기준(진행 중인 오늘 봉 제외), 1시간 캐시.
     trading = quote_cache.get_trading_changes([i.ticker for i in items])

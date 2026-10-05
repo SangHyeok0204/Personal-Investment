@@ -2144,7 +2144,7 @@ def get_live_quotes(
             total_fee_reserve_krw=None, missing=[], fetched=0, as_of=None,
         )
 
-    quotes, fetched = quote_cache.get_quotes([a.ticker for _, a in rows])
+    quotes, fetched = quote_cache.get_quotes([a.ticker for _, a in rows], bind=db.get_bind())
 
     items: list[LiveQuoteOut] = []
     missing: list[str] = []

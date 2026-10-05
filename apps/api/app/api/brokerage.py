@@ -177,12 +177,20 @@ def get_price_sources() -> dict:
                    and credentials_store.read_env_value("TOSS_CLIENT_SECRET"))
     us_open = quote_cache.us_regular_session_open()
     kiwoom_ok = bool(credentials_store.read_settings().get("configured"))
-    toss_rank = (1 if us_open else 2) if toss_ok else None
+    # ★2026-10-05: 키가 있다고 '지금 사용'이라 하면 안 된다 — IP 미허용으로 토큰이 막힌 동안
+    #   실제 시세는 전부 야후였다. 시세 경로가 마지막으로 겪은 상태를 같이 싣고, 쿨다운으로
+    #   사슬에서 빠져 있으면 순위도 None(지금 안 쓴다)으로 둔다.
+    toss = quote_cache.toss_status()
+    toss_live = toss_ok and not toss["cooldown"]
+    toss_rank = (1 if us_open else 2) if toss_live else None
     return {
         "us_regular_session_open": us_open,
         "sources": [
-            {"id": "toss", "configured": toss_ok, "rank": toss_rank},
-            {"id": "yahoo", "configured": True, "rank": 2 if (toss_ok and us_open) else 1},
+            {"id": "toss", "configured": toss_ok, "rank": toss_rank,
+             "state": toss["state"] if toss_ok else None,
+             "message": toss["message"] if toss_ok else None,
+             "at": toss["at"] if toss_ok else None},
+            {"id": "yahoo", "configured": True, "rank": 2 if (toss_live and us_open) else 1},
             {"id": "kiwoom-quote", "configured": kiwoom_ok, "rank": None},
         ],
     }

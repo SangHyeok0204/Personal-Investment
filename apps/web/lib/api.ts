@@ -267,6 +267,10 @@ export interface PriceSourceStatus {
   id: "toss" | "yahoo" | "kiwoom-quote";
   configured: boolean;
   rank: number | null;
+  // ★2026-10-05 토스만: 시세 경로가 마지막으로 겪은 상태(null = 아직 안 불림). 토큰을 새로 받아 확인하지 않는다.
+  state?: "ok" | "ip_blocked" | "error" | null;
+  message?: string | null;
+  at?: string | null;
 }
 
 export interface PriceSources {

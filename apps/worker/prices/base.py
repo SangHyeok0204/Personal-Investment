@@ -100,6 +100,12 @@ class CompositePriceSource(PriceSource):
 
     def __init__(self, sources: list[PriceSource]):
         self._sources = sources
+        # ★2026-10-05: 소스가 통째로 실패한 이유를 남긴다(소스 이름 → 마지막 예외).
+        #   폴백 자체는 맞지만 **조용히** 넘어가면 화면이 '토스 사용 중'이라 말하는 동안
+        #   실제 시세는 전부 야후에서 온다. 호출부(quote_cache)가 이걸 보고 상태를 띄운다.
+        self.last_errors: dict[str, BaseException] = {}
+        # 이번 호출에서 실제로 불린 소스(앞 소스가 다 채우면 뒤 소스는 안 불린다).
+        self.attempted: list[str] = []
 
     def close(self):
         for s in self._sources:
@@ -111,11 +117,14 @@ class CompositePriceSource(PriceSource):
         for source in self._sources:
             if not remaining:
                 break
+            self.attempted.append(source.name)
             try:
                 got = source.quotes(remaining)
-            except Exception:
-                # 소스 하나가 통째로 실패해도 다음 소스로 넘어간다.
+            except Exception as exc:  # noqa: BLE001
+                # 소스 하나가 통째로 실패해도 다음 소스로 넘어간다 — 단 이유는 남긴다.
+                self.last_errors[source.name] = exc
                 continue
+            self.last_errors.pop(source.name, None)
             out.update(got)
             remaining = [s for s in remaining if s not in out]
         return out

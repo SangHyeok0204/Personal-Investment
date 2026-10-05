@@ -104,3 +104,75 @@ def test_us_markets_are_declared() -> None:
     """실측: AAPL → market=NASDAQ, currency=USD. 이식 당시 KRX 만 적혀 있었다."""
     assert "NASDAQ" in TossPriceSource.markets
     assert "KOSPI" in TossPriceSource.markets
+
+
+# ── 토큰 단계 실패는 종목별로 삼키지 않는다(2026-10-05) ─────────────────────────
+#
+# ★2026-10-05 23:40 KST 실측: 맥의 공인 IP 가 바뀌어 토큰 발급이 403(IP 미허용).
+#   종목별 `except Exception: continue` 가 그걸 삼켜 16종목이면 토큰을 16번 두드리고
+#   빈 dict 를 돌려줬다 — 호출부는 조용히 야후로 넘어갔다.
+
+import pytest  # noqa: E402
+
+from prices import CompositePriceSource, PriceSource, Quote  # noqa: E402
+from prices.toss import TossAuthError, TossIpNotAllowed  # noqa: E402
+
+
+def _blocked_source(token_calls: list, status: int = 403, body: str = '{"error":"access_denied","error_description":"IP address not allowed"}'):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth2/token"):
+            token_calls.append(1)
+            return httpx.Response(status, text=body)
+        return httpx.Response(200, json={"result": {"candles": [bar("1")]}})
+
+    return TossPriceSource(
+        "id", "secret",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        min_interval=0.0, sleep=lambda _: None,
+    )
+
+
+def test_ip_block_raises_once_for_the_whole_call() -> None:
+    token_calls: list = []
+    src = _blocked_source(token_calls)
+    with pytest.raises(TossIpNotAllowed):
+        src.quotes([f"S{i}" for i in range(16)])
+    assert len(token_calls) == 1  # 16종목이어도 토큰 시도는 한 번
+
+
+def test_other_token_failure_also_fails_fast() -> None:
+    token_calls: list = []
+    src = _blocked_source(token_calls, status=400, body='{"error":"invalid_client"}')
+    with pytest.raises(TossAuthError):
+        src.quotes(["AAA", "BBB", "CCC"])
+    assert len(token_calls) == 1
+
+
+def test_symbol_level_error_is_still_tolerated() -> None:
+    """한 티커의 404 는 그 종목만 빠진다 — 나머지는 산다."""
+    src = source({"AAA": [bar("100")]})  # BBB 는 404
+    got = src.quotes(["BBB", "AAA"])
+    assert set(got) == {"AAA"}
+
+
+class _Raising(PriceSource):
+    name = "toss"
+
+    def quotes(self, symbols):
+        raise TossIpNotAllowed("blocked")
+
+
+class _Fixed(PriceSource):
+    name = "yahoo"
+
+    def quotes(self, symbols):
+        return {s: Quote(symbol=s, price=Decimal("1"), source="yahoo") for s in symbols}
+
+
+def test_composite_remembers_why_a_source_failed() -> None:
+    chain = CompositePriceSource([_Raising(), _Fixed()])
+    got = chain.quotes(["AAA"])
+    assert got["AAA"].source == "yahoo"                       # 폴백은 그대로
+    assert isinstance(chain.last_errors["toss"], TossIpNotAllowed)  # 이유는 남는다
+    assert chain.attempted == ["toss", "yahoo"]
+    assert "yahoo" not in chain.last_errors
