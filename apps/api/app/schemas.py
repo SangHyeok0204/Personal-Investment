@@ -329,7 +329,11 @@ class PerformanceSeriesOut(BaseModel):
     first_date: date | None
     last_date: date | None
     # 기간 시작·끝의 예탁자산. 기간 손익은 여기에 순입금을 빼야 의미가 생긴다.
+    # ★2026-10-05 시작 = 구간 **앞** 마지막 일별 행의 종가(전체 구간이면 05-31 = A0,
+    #   /account-return 과 같은 출발점). 그 행 날짜가 start_base_date 다.
+    #   ⚠️앞 행이 없으면 옛 규칙대로 첫 행이 기준선이다(start_base_date = first_date).
     start_assets_krw: Decimal | None
+    start_base_date: date | None = None
     end_assets_krw: Decimal | None
     net_deposit_krw: Decimal | None
     # (끝 - 시작 - 순입금). 입출금 영향을 뺀 순수 증감이다. **원화 기준**이라

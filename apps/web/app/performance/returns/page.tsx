@@ -58,6 +58,17 @@ import { cn } from "@/lib/utils";
 //   시작일 이후 손익 ÷ 투입 원금, 6/01~)이다. 입출금 날은 그래프 아래 세모로 표시한다.
 //   연쇄 수익률(TWR)은 '참고: 시간가중(TWR)'으로만 남긴다 — 두 정의를 섞지 않는다.
 //   ⚠️옛 '원금 대비 %'(원화 증감 ÷ (시작 + 순입금))는 세 번째 정의라 지웠다.
+//
+// ★2026-10-05 사용자 지정("5/31 기준으로 통일"): 주가 손익 · 환율 등 · 원화 증감도 첫 칸과
+//   **같은 출발점**(05-31 종가 = /account-return 의 A0)에서 센다. 06-01 의 손익도 넣는다.
+//   예전엔 06-01 마감을 기준선으로 삼아 그날을 뺐고, 그래서 원화 증감(−69,636)이 첫 칸의
+//   원화 실질(−447,590)과 어긋났다. 이제 원화 증감 ÷ 원금 = 첫 칸의 '원화 실질 %' 다.
+//   ⚠️그래서 타일·월별 막대는 **기간 칩을 따르지 않는다**(늘 시작일부터) — 칩은 왼쪽 선
+//   그래프만 자른다. 칩을 따르게 두면 3개월에서 원화 증감이 첫 칸과 다시 어긋난다.
+//   ⚠️끝점은 마지막 일별 행이다. 첫 칸은 미국 휴장이면 그 행 그대로(같은 값), 행 뒤에
+//   미국 장이 열렸으면 live 라 행이 올 때까지 그만큼 다를 수 있다.
+//   ⚠️주가 손익(키움 일별 손익 합)은 첫 칸 분자(실현 + 평가 − 시작 평가익)와 같은 값이
+//   아니다 — 월별 막대·누적손익과 맞추려고 키움 일별 손익 합을 쓴다. 차이는 잔차로 간다.
 
 const RANGES = [
   { id: 90, label: "3개월" },
@@ -75,9 +86,11 @@ export default function ReturnsPage() {
   const [pickedMonth, setPickedMonth] = useState<string | null>(null);
   const [monthListOpen, setMonthListOpen] = useState(false);
 
+  // ★2026-10-05 늘 시작일부터 받는다(서버가 INVESTMENT_START 아래로 내려가지 않는다).
+  //   기간 칩은 아래에서 선 그래프만 자른다.
   const perf = useQuery({
-    queryKey: ["performance", accountId, days],
-    queryFn: () => getPerformance(accountId, days),
+    queryKey: ["performance", accountId, "since-start"],
+    queryFn: () => getPerformance(accountId, 3650),
     staleTime: 60_000,
   });
 
@@ -88,14 +101,20 @@ export default function ReturnsPage() {
   });
 
   const data = perf.data;
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
   const acct = account.data;
   const accountPct = pctOf(acct?.return_ratio);
+  const from = useMemo(
+    () => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10),
+    [days],
+  );
   // 수익률 그래프도 위 기간 칩을 따른다 — 값은 늘 6/01 부터 센 그대로다.
-  const returnPoints = useMemo(() => {
-    const from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
-    return (acct?.items ?? []).filter((p) => p.date >= from);
-  }, [acct, days]);
+  const returnPoints = useMemo(
+    () => (acct?.items ?? []).filter((p) => p.date >= from),
+    [acct, from],
+  );
+  // 예탁자산 선 그래프도 칩을 따른다(값은 그대로, 앞을 자를 뿐).
+  const shownItems = useMemo(() => items.filter((p) => p.base_date >= from), [items, from]);
   const flowMarkers = useMemo(
     () =>
       returnPoints.flatMap((p, index) =>
@@ -123,18 +142,21 @@ export default function ReturnsPage() {
   //   2,274,791 → −1,836,144 로 뛰는데 그 값이 그날 손익과 정확히 같다).
   //   차트로 그리면 없던 절벽이 생긴다. 일별 손익을 직접 누적한다 —
   //   그러면 끝값이 상단 '주가 손익' 타일과 정확히 같아진다.
+  // ★2026-10-05 06-01 손익부터 넣는다(시작 = 05-31 종가). 누적은 시작일부터 세고,
+  //   칩은 그 뒤에 앞을 자른다 — 그래야 끝값이 칩과 상관없이 타일과 같다.
   const cumulativePnl = useMemo(() => {
     let sum = 0;
-    return items.map((p, index) => {
-      if (index > 0) sum += Number(p.pnl_krw ?? 0);
-      return { date: p.base_date, value: sum };
-    });
-  }, [items]);
+    return items
+      .map((p) => {
+        sum += Number(p.pnl_krw ?? 0);
+        return { date: p.base_date, value: sum };
+      })
+      .filter((p) => p.date >= from);
+  }, [items, from]);
 
   // 월별 집계 — 월말 예탁자산과 그 달의 **주가** 손익 합.
-  // ⚠️첫날 손익은 뺀다. 상단 '주가 손익' 타일도 빼고 세므로, 넣으면 표의 합과
-  //   타일이 어긋난다(실측 차이 ₩11,369 = 시작일이 06-04 이던 때 그날의 손익.
-  //   2026-10-01 부터 시작일은 06-01 이다 — investing.INVESTMENT_START).
+  // ★2026-10-05 첫날(06-01) 손익도 6월에 넣는다 — 상단 '주가 손익' 타일이 05-31 종가
+  //   기준으로 06-01 부터 세므로, 막대 합 = 타일. (예전엔 둘 다 첫날을 뺐다.)
   const monthly = useMemo(() => aggregateMonthly(items), [items]);
   // 막대는 왼쪽이 과거다(표는 최근 달이 위).
   const monthColumns = useMemo(
@@ -211,7 +233,8 @@ export default function ReturnsPage() {
           <StatTile
             label="원화 증감 (합)"
             value={formatKrwSigned(data?.gain_krw)}
-            hint="끝자산 − 시작자산 − 순입금"
+            // ★2026-10-05 시작자산 = 05-31 종가(첫 칸의 A0). 이 값 ÷ 원금 = 첫 칸 '원화 실질'.
+            hint={`끝자산 − 시작자산(${data?.start_base_date?.slice(5) ?? "—"} 종가) − 순입금`}
             actionHint="눌러서 이어지는 법 보기"
             onClick={() => setBridgeOpen(true)}
             accent="auto"
@@ -235,9 +258,9 @@ export default function ReturnsPage() {
           <HeaderChip active={metric === "cumulative"} onClick={() => setMetric("cumulative")}>
             누적손익
           </HeaderChip>
-          {data?.first_date && (
+          {shownItems.length > 0 && (
             <span className="ml-auto text-[11px] font-semibold text-ink-faint">
-              {data.first_date} ~ {data.last_date} ({items.length}일)
+              {shownItems[0].base_date} ~ {shownItems[shownItems.length - 1].base_date} ({shownItems.length}일)
             </span>
           )}
         </div>
@@ -292,12 +315,12 @@ export default function ReturnsPage() {
                   {account.isLoading ? "불러오는 중…" : "데이터가 없습니다"}
                 </div>
               )
-            ) : items.length > 0 ? (
+            ) : shownItems.length > 0 ? (
               <SeriesChart
                 height={300}
                 includeZero={metric === "cumulative"}
                 points={metric === "assets"
-                  ? items.map((p) => ({
+                  ? shownItems.map((p) => ({
                       date: p.base_date,
                       value:
                         p.deposit_assets_krw == null
@@ -362,7 +385,7 @@ export default function ReturnsPage() {
         }
         width={720}
       >
-        {monthPicked && <MonthDays days={monthDays} firstDate={items[0]?.base_date ?? null} />}
+        {monthPicked && <MonthDays days={monthDays} />}
       </Modal>
 
       {/* ── 헤더 '전체 목록' → 옛 월별 표 ───────────────────────────────── */}
@@ -414,19 +437,21 @@ export default function ReturnsPage() {
             <BridgeRow label="원화 증감" value={bridge?.asset_change_krw} note="끝자산 − 시작자산 − 순입금" strong />
           </div>
         </div>
+        {/* ★2026-10-05 출발점·끝점을 적는다 — 첫 칸(내 계좌)과 같은 05-31 종가에서 센다. */}
+        {data?.start_base_date && (
+          <p className="text-[11px] font-medium leading-snug text-ink-muted">
+            시작자산 {data.start_base_date} 종가 {formatKrwString(data.start_assets_krw)} → 끝자산{" "}
+            {data.last_date} {formatKrwString(data.end_assets_krw)} · 순입금{" "}
+            {formatKrwSigned(data.net_deposit_krw)}. 첫 칸 &apos;원화 실질&apos;과 같은 출발점이다.
+          </p>
+        )}
       </Modal>
     </>
   );
 }
 
 /** 그 달의 일별 행. 막대가 월로 묶어 잃은 '어느 날'을 여기서 돌려준다. */
-function MonthDays({
-  days,
-  firstDate,
-}: {
-  days: DailyPerformancePoint[];
-  firstDate: string | null;
-}) {
+function MonthDays({ days }: { days: DailyPerformancePoint[] }) {
   return (
     <div className="space-y-2">
       <div className="max-h-[56vh] overflow-y-auto">
@@ -434,35 +459,22 @@ function MonthDays({
           columns={["날짜", "예탁자산", "주가손익", "입금", "출금"]}
           empty="이 달에는 일별 성과가 없습니다"
         >
-          {days.map((p) => {
-            // ⚠️첫날은 기준선이다 — 그날 손익은 월 합에 들어가지 않는다.
-            const baseline = p.base_date === firstDate;
-            return (
-              <tr key={p.base_date} className="border-b border-hairline">
-                <Cell left>
-                  {p.base_date}
-                  {baseline && (
-                    <span
-                      title="첫날 손익은 첫날 마감 자산에 이미 들어 있어 세지 않습니다"
-                      className="ml-1.5 rounded bg-canvas-soft px-1 py-0.5 text-[9px] font-bold text-ink-muted"
-                    >
-                      기준선
-                    </span>
-                  )}
-                </Cell>
-                <Cell>{formatKrwString(p.deposit_assets_krw)}</Cell>
-                <Cell tone={baseline ? "muted" : toneOf(p.pnl_krw)}>
-                  {formatKrwSigned(p.pnl_krw)}
-                </Cell>
-                <Cell tone={Number(p.deposit_krw ?? 0) ? "up" : "muted"}>
-                  {formatKrwString(p.deposit_krw)}
-                </Cell>
-                <Cell tone={Number(p.withdrawal_krw ?? 0) ? "down" : "muted"}>
-                  {formatKrwString(p.withdrawal_krw)}
-                </Cell>
-              </tr>
-            );
-          })}
+          {/* ★2026-10-05 기준선이 05-31 종가로 옮겨 가 06-01 도 세는 날이다 — '기준선' 표시를 뗐다. */}
+          {days.map((p) => (
+            <tr key={p.base_date} className="border-b border-hairline">
+              <Cell left>{p.base_date}</Cell>
+              <Cell>{formatKrwString(p.deposit_assets_krw)}</Cell>
+              <Cell tone={toneOf(p.pnl_krw)}>
+                {formatKrwSigned(p.pnl_krw)}
+              </Cell>
+              <Cell tone={Number(p.deposit_krw ?? 0) ? "up" : "muted"}>
+                {formatKrwString(p.deposit_krw)}
+              </Cell>
+              <Cell tone={Number(p.withdrawal_krw ?? 0) ? "down" : "muted"}>
+                {formatKrwString(p.withdrawal_krw)}
+              </Cell>
+            </tr>
+          ))}
         </DataTable>
       </div>
     </div>
@@ -518,13 +530,13 @@ function BridgeRow({
 /** 월말 예탁자산과 그 달 주가손익 합. 최근 달이 위로. */
 function aggregateMonthly(items: { base_date: string; deposit_assets_krw: string | null; pnl_krw: string | null }[]) {
   const acc = new Map<string, { month: string; assets: number; pnl: number }>();
-  items.forEach((p, index) => {
+  items.forEach((p) => {
     const month = p.base_date.slice(0, 7);
     const entry = acc.get(month) ?? { month, assets: 0, pnl: 0 };
     // 마지막으로 본 값이 월말 값이다(items 는 날짜 오름차순).
     if (p.deposit_assets_krw != null) entry.assets = Number(p.deposit_assets_krw);
-    // ⚠️첫날은 기준선이다 — 그날 손익은 이미 첫날 마감 자산에 들어 있다.
-    if (index > 0) entry.pnl += Number(p.pnl_krw ?? 0);
+    // ★2026-10-05 첫날(06-01)도 센다 — 기준선은 서버가 붙인 05-31 종가다(items 밖).
+    entry.pnl += Number(p.pnl_krw ?? 0);
     acc.set(month, entry);
   });
   return [...acc.values()].reverse();

@@ -967,11 +967,46 @@ def get_performance(
             bridge=_empty_bridge(),
         )
 
-    start_assets = items[0].deposit_assets_krw
+    # ★2026-10-05 사용자 지정("5/31 기준으로 통일"): 시작 = 구간 **앞** 마지막 일별 행의
+    #   종가. 전체 구간이면 05-31 종가 = /account-return 의 A0(29,176,951)라서, 원화 증감이
+    #   그쪽 원화 실질 손익(krw_pnl_since_start_krw)과 같은 값이 된다. 첫날(06-01)의
+    #   손익·입출금도 이제 센다 — 예전엔 06-01 마감을 기준선으로 삼아 그날을 뺐고, 그래서
+    #   같은 화면의 원화 증감(−69,636)이 위 원화 실질(−447,590)과 어긋났다.
+    #   ⚠️앞 행의 자산 칸이 계좌 하나라도 비어 있으면 모른다(None) — /account-return 의
+    #   A0 규칙과 같다. 앞 행이 아예 없으면 옛 규칙(첫 행 = 기준선, 그날은 세지 않음).
+    before = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.count(),
+            func.count(AccountDailyPerformance.deposit_assets_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date < since,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date.desc())
+        .limit(1)
+    ).first()
+    if before is not None:
+        base_day, base_assets, base_rows, base_valued = before
+        baseline = DailyPerformanceOut(
+            base_date=base_day,
+            deposit_assets_krw=base_assets if base_valued == base_rows else None,
+            stock_value_krw=None, cumulative_pnl_krw=None, pnl_krw=None,
+            deposit_krw=None, withdrawal_krw=None,
+        )
+        counted = items
+    else:
+        baseline = items[0]
+        counted = items[1:]
+
+    start_assets = baseline.deposit_assets_krw
     end_assets = items[-1].deposit_assets_krw
-    # 첫날의 입출금은 시작 잔고에 이미 반영돼 있다 — 이중 계산을 피해 제외한다.
+    # 기준선 날의 입출금은 시작 잔고에 이미 반영돼 있다 — 기준선 뒤의 날만 센다.
     net_deposit = _sum(
-        [(i.deposit_krw or Decimal("0")) - (i.withdrawal_krw or Decimal("0")) for i in items[1:]]
+        [(i.deposit_krw or Decimal("0")) - (i.withdrawal_krw or Decimal("0")) for i in counted]
     )
     gain = (
         (end_assets - start_assets - (net_deposit or Decimal("0")))
@@ -988,7 +1023,8 @@ def get_performance(
                 deposit_krw=i.deposit_krw,
                 withdrawal_krw=i.withdrawal_krw,
             )
-            for i in items
+            # 기준선(앞 행)을 맨 앞에 둔다 — build 는 days[0] 을 기준선으로 쓰고 세지 않는다.
+            for i in ([baseline] if before is not None else []) + items
         ]
     )
 
@@ -997,6 +1033,7 @@ def get_performance(
         first_date=items[0].base_date,
         last_date=items[-1].base_date,
         start_assets_krw=start_assets,
+        start_base_date=baseline.base_date,
         end_assets_krw=end_assets,
         net_deposit_krw=net_deposit,
         gain_krw=gain.quantize(_MONEY, rounding=ROUND_HALF_UP) if gain is not None else None,
@@ -3893,6 +3930,36 @@ def get_report(
     if not periods:
         return empty
     chosen = next((p for p in periods if p.key == period), periods[0])
+
+    # ★2026-10-05 사용자 지정("5/31 기준으로 통일"): 투자 시작일 **앞** 마지막 일별 행
+    #   (05-31 종가 = /account-return 의 A0)을 기준선으로 맨 앞에 붙인다. 그러면 첫 달·
+    #   분기·연도의 시작 자산이 05-31 종가가 되고 06-01 의 손익·입출금도 센다 — 수익률
+    #   추이의 '주가 손익 · 환율 등 · 원화 증감'과 같은 출발점이다. 기간 목록은 위에서
+    #   이미 시작일 이후 행으로 만들었으므로 5월 기간은 생기지 않는다.
+    #   ⚠️앞 행이 없으면 아래 옛 규칙(첫날 = 기준선)이 그대로 쓰인다.
+    pre_start = db.execute(
+        select(
+            AccountDailyPerformance.base_date,
+            func.sum(AccountDailyPerformance.deposit_assets_krw),
+            func.sum(AccountDailyPerformance.deposit_krw),
+            func.sum(AccountDailyPerformance.withdrawal_krw),
+            func.sum(AccountDailyPerformance.pnl_krw),
+            func.sum(AccountDailyPerformance.dividend_krw),
+            func.sum(AccountDailyPerformance.commission_tax_krw),
+            func.sum(AccountDailyPerformance.buy_amount_krw),
+            func.sum(AccountDailyPerformance.sell_amount_krw),
+            func.sum(AccountDailyPerformance.stock_value_krw),
+        )
+        .where(
+            AccountDailyPerformance.account_id.in_(account_ids),
+            AccountDailyPerformance.base_date < inv.INVESTMENT_START,
+        )
+        .group_by(AccountDailyPerformance.base_date)
+        .order_by(AccountDailyPerformance.base_date.desc())
+        .limit(1)
+    ).first()
+    if pre_start is not None:
+        daily = [pre_start, *daily]
 
     zero = Decimal("0")
     opening: Decimal | None = None

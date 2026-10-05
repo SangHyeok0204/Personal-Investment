@@ -665,6 +665,52 @@ def test_performance_excludes_deposits_from_gain(client, db, kiwoom):
     assert Decimal(body["gain_krw"]) == Decimal("500000.00")
 
 
+def test_performance_starts_from_close_before_window(client, db, kiwoom):
+    """★2026-10-05 "5/31 기준으로 통일": 구간 앞 마지막 행의 종가가 시작자산이고,
+    구간 첫날의 손익·입출금도 센다 — /account-return 의 A0 와 같은 출발점."""
+    from app.models import AccountDailyPerformance
+    from datetime import date as _date, timedelta as _td
+
+    account_id = kiwoom["account"].id
+    today = _date.today()
+    db.add_all([
+        # 구간(days=3) 밖 — 기준선(종가 100만).
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today - _td(days=5),
+            deposit_assets_krw=Decimal("1000000"), pnl_krw=Decimal("99999"),
+            deposit_krw=Decimal("0"), withdrawal_krw=Decimal("0"),
+        ),
+        # 구간 첫날 — 손익 −2만, 입금 50만. 예전엔 이 날을 기준선으로 삼아 뺐다.
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today - _td(days=2),
+            deposit_assets_krw=Decimal("1480000"), pnl_krw=Decimal("-20000"),
+            deposit_krw=Decimal("500000"), withdrawal_krw=Decimal("0"),
+        ),
+        AccountDailyPerformance(
+            id=uuid.uuid4(), account_id=account_id, base_date=today,
+            deposit_assets_krw=Decimal("1530000"), pnl_krw=Decimal("40000"),
+            deposit_krw=Decimal("0"), withdrawal_krw=Decimal("0"),
+        ),
+    ])
+    db.commit()
+
+    body = client.get("/api/v1/portfolio/performance?days=3").json()
+    # 기준선 행은 items 에 넣지 않는다 — 시작자산과 날짜로만 나온다.
+    assert len(body["items"]) == 2
+    assert body["start_base_date"] == (today - _td(days=5)).isoformat()
+    assert Decimal(body["start_assets_krw"]) == Decimal("1000000")
+    # 첫날 입금도 순입금이다.
+    assert Decimal(body["net_deposit_krw"]) == Decimal("500000")
+    # 1,530,000 − 1,000,000 − 500,000 = 30,000
+    assert Decimal(body["gain_krw"]) == Decimal("30000.00")
+    bridge = body["bridge"]
+    # 첫날 손익(−2만)도 넣는다 — 기준선 행의 손익(99,999)은 넣지 않는다.
+    assert Decimal(bridge["price_pnl_krw"]) == Decimal("20000.00")
+    assert Decimal(bridge["asset_change_krw"]) == Decimal("30000.00")
+    # 잔차 = 원화 증감 − 주가 손익 → 세 칸이 이어진다.
+    assert Decimal(bridge["fx_effect_krw"]) == Decimal("10000.00")
+
+
 def _add_realized(db, account_id, **kw):
     from app.models import RealizedPnl
     from datetime import date as _date

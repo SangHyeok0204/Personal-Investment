@@ -417,6 +417,8 @@ export interface PerformanceSeries {
   first_date: string | null;
   last_date: string | null;
   start_assets_krw: string | null;
+  // ★2026-10-05 시작자산이 어느 날 종가인가 — 구간 앞 마지막 일별 행(전체면 05-31).
+  start_base_date?: string | null;
   end_assets_krw: string | null;
   net_deposit_krw: string | null;
   // (끝 - 시작 - 순입금). 입출금 영향을 뺀 실제 증감. **원화 기준**이다.
