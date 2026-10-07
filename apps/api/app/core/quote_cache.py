@@ -143,7 +143,7 @@ def _build_source() -> CompositePriceSource:
       토스에 당일 봉이 새로 생기고 야후와 갈린다 — SOXL 은 한때 +3.50%,
       한 시간 뒤엔 -2.12% 였다. 그동안 야후 값은 토스의 **전일 봉 종가와
       정확히 같았다**(NVDA 227.38). 즉 정규장이 닫힌 동안의 올바른 "현재가"는
-      야후 쪽이고, 지금 순서가 그걸 고른다. `is_thin_session_quote`.
+      야후 쪽이었다. `is_thin_session_quote` 가 그런 값에 '데이' 표시를 단다.
 
     ⚠️측정 시각을 처음엔 09:02/09:32 KST 로 적었는데 **기계 시계가 8시간 40분
       어긋나 있었다**(구글 HTTP Date 헤더로 확인). 실제로는 17:22/17:52 였다.
@@ -155,7 +155,8 @@ def _build_source() -> CompositePriceSource:
       포함한다. 미국장이 닫혀 있는 동안 그 값은 거래량이 정규장의 1% 미만인
       얇은 체결가다(DailyPriceAgent 실측: NVDA 371,568주 vs 정규장 9,400만주).
       그걸 "현재가"로 쓰면 하루 등락률이 통째로 틀린다.
-      → 정규장 중에는 토스 우선(사용자가 원한 소스), 닫혀 있으면 야후 우선.
+      → (옛 규칙) 정규장 중에는 토스, 닫혀 있으면 야후 우선이었다.
+      ★2026-10-07 사용자 결정으로 **항상 토스 우선** — 데이·프리장 값도 쓴다(표시는 '데이').
 
     ⚠️토스 키가 없으면 토스를 아예 끼우지 않는다. 키 없이 두면 5초마다 토큰
       발급이 실패해 쓸모없는 왕복만 생긴다.
@@ -176,8 +177,9 @@ def _build_source() -> CompositePriceSource:
         return CompositePriceSource([yahoo])
 
     toss = _shared_toss(client_id, client_secret)
-    order = [toss, yahoo] if us_regular_session_open() else [yahoo, toss]
-    return CompositePriceSource(order)
+    # ★2026-10-07 사용자 결정: 미국장이 닫혀 있어도(데이·프리장) **토스 우선**. 그 시간 값은 한국 데이마켓
+    #   체결가라 화면이 '데이' 표시를 단다(`is_thin_session_quote`). 토스가 못 주면 야후로 넘어간다.
+    return CompositePriceSource([toss, yahoo])
 
 
 class _SharedToss:
@@ -312,28 +314,6 @@ def _fill_52w(quotes: dict[str, Quote]) -> dict[str, Quote]:
     return out
 
 
-def _probe_toss_if_stuck(symbol: str, bind) -> None:
-    """토스가 막혀 있다고 기억하는데 이번 호출에서 불리지 않았으면(장 마감 중엔 야후가 먼저라 토스를 안 부른다)
-    쿨다운이 지난 뒤 **한 종목만** 물어 상태를 고친다. 값은 쓰지 않는다(장 마감 중 토스 값은 얇은 체결가).
-
-    ★2026-10-07: 사용자가 IP 를 등록했는데 연동 화면은 다음 정규장(22:30)까지 'IP 미허용'으로 남았다.
-    ⚠️'ok' 가 아닐 때만(막힘·오류·재시작 직후 모름), 쿨다운(10분)마다 한 번 — 'ok' 가 되면 멈춘다.
-      모름(None)도 넣는 이유: 재시작하면 메모리 상태가 비어 수집 상태의 옛 'IP 미허용' 줄을 아무도 고치지 않는다.
-    """
-    if _toss_status["state"] == "ok" or toss_in_cooldown():
-        return
-    client_id = credentials_store.read_env_value("TOSS_CLIENT_ID")
-    client_secret = credentials_store.read_env_value("TOSS_CLIENT_SECRET")
-    if not (client_id and client_secret):
-        return
-    probe = CompositePriceSource([_shared_toss(client_id, client_secret)])
-    try:
-        probe.quotes([symbol])
-        _note_toss(probe, bind)
-    except Exception:  # noqa: BLE001 — 상태 확인일 뿐, 시세 응답을 바꾸지 않는다
-        pass
-
-
 def get_quotes(
     symbols: list[str], with_range: bool = False, bind=None
 ) -> tuple[dict[str, Quote], int]:
@@ -372,7 +352,6 @@ def get_quotes(
         _note_toss(source, bind)
     finally:
         source.close()
-    _probe_toss_if_stuck(stale[0], bind)
 
     stored = time.monotonic()
     with _lock:

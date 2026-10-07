@@ -16,7 +16,7 @@ def test_price_sources_reflect_keys_and_session(client, monkeypatch):
 
     monkeypatch.setattr(quote_cache, "us_regular_session_open", lambda now=None: False)
     by = {s["id"]: s for s in client.get("/api/v1/brokerage/price-sources").json()["sources"]}
-    assert by["toss"]["rank"] == 2 and by["yahoo"]["rank"] == 1             # 장외: 야후 먼저
+    assert by["toss"]["rank"] == 1 and by["yahoo"]["rank"] == 2             # ★2026-10-07 장외에도 토스 먼저
 
     keys.clear()
     by = {s["id"]: s for s in client.get("/api/v1/brokerage/price-sources").json()["sources"]}

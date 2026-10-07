@@ -182,7 +182,8 @@ def get_price_sources() -> dict:
     #   사슬에서 빠져 있으면 순위도 None(지금 안 쓴다)으로 둔다.
     toss = quote_cache.toss_status()
     toss_live = toss_ok and not toss["cooldown"]
-    toss_rank = (1 if us_open else 2) if toss_live else None
+    # ★2026-10-07: 세션과 상관없이 토스 우선(데이·프리장 포함) — `quote_cache._build_source` 와 같다.
+    toss_rank = 1 if toss_live else None
     return {
         "us_regular_session_open": us_open,
         "sources": [
@@ -190,7 +191,7 @@ def get_price_sources() -> dict:
              "state": toss["state"] if toss_ok else None,
              "message": toss["message"] if toss_ok else None,
              "at": toss["at"] if toss_ok else None},
-            {"id": "yahoo", "configured": True, "rank": 2 if (toss_live and us_open) else 1},
+            {"id": "yahoo", "configured": True, "rank": 2 if toss_live else 1},
             {"id": "kiwoom-quote", "configured": kiwoom_ok, "rank": None},
         ],
     }

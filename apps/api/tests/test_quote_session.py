@@ -74,7 +74,7 @@ def test_toss_leads_during_us_regular_session(monkeypatch) -> None:
     assert _order(monkeypatch, session_open=True) == ["toss", "yahoo"]
 
 
-def test_yahoo_leads_when_us_market_is_closed(monkeypatch) -> None:
+def test_toss_leads_even_when_us_market_is_closed(monkeypatch) -> None:
     """⚠️미국장이 닫힌 동안 토스의 당일 봉은 한국 **데이마켓** 체결을 포함한다.
 
     토스 일봉은 미국 세션을 13:00 KST 로 라벨링한다(실측). 한국 데이마켓
@@ -82,7 +82,8 @@ def test_yahoo_leads_when_us_market_is_closed(monkeypatch) -> None:
     봉이 얇은 체결가로 먼저 생긴다. 그걸 현재가로 쓰면 하루 등락률이 통째로
     틀린다(DailyPriceAgent 실측: NVDA 371,568주 vs 정규장 9,400만주).
     """
-    assert _order(monkeypatch, session_open=False) == ["yahoo", "toss"]
+    # ★2026-10-07 사용자 결정: 그래도 데이·프리장 동안 토스를 쓴다 — 값에는 '데이' 표시(thin_session)가 붙는다.
+    assert _order(monkeypatch, session_open=False) == ["toss", "yahoo"]
 
 
 def test_toss_is_omitted_without_keys(monkeypatch) -> None:
