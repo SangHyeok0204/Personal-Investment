@@ -176,3 +176,22 @@ def test_composite_remembers_why_a_source_failed() -> None:
     assert isinstance(chain.last_errors["toss"], TossIpNotAllowed)  # 이유는 남는다
     assert chain.attempted == ["toss", "yahoo"]
     assert "yahoo" not in chain.last_errors
+
+
+def test_many_symbols_are_fetched_concurrently_with_one_token() -> None:
+    """★2026-10-07 관심종목 51개 첫 조회 15.7초 → 동시 요청. 모든 종목이 빠짐없이, 토큰은 한 번만."""
+    tokens = []
+    syms = [f"S{i}" for i in range(30)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth2/token"):
+            tokens.append(1)
+            return httpx.Response(200, json=TOKEN)
+        sym = request.url.params.get("symbol")
+        return httpx.Response(200, json={"result": {"candles": [bar("10"), bar("9")]}}) if sym != "S7" \
+            else httpx.Response(404, json={})
+
+    src = TossPriceSource("id", "secret", http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+                          min_interval=0.0, sleep=lambda _: None)
+    got = src.quotes(syms)
+    assert set(got) == set(syms) - {"S7"} and len(tokens) == 1

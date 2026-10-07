@@ -14,7 +14,9 @@ DailyPriceAgent(`src/sources/toss.py`)의 검증된 클라이언트를 **시세 
 """
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -80,6 +82,9 @@ class TossPriceSource(PriceSource):
         self._last_call = 0.0
         self._sleep = sleep
         self.last_ratelimit: dict = {}
+        # ★2026-10-07 동시 요청(아래 quotes) — 토큰 발급·페이싱 슬롯은 잠금으로 한 번에 하나만.
+        self._token_lock = threading.Lock()
+        self._pace_lock = threading.Lock()
 
     def close(self):
         if self._owns_http:
@@ -87,6 +92,10 @@ class TossPriceSource(PriceSource):
 
     # ── 토큰 ────────────────────────────────────────────────────────────────
     def _ensure_token(self):
+        with self._token_lock:
+            self._ensure_token_locked()
+
+    def _ensure_token_locked(self):
         if self._token and time.time() < self._token_exp - 60:
             return
         r = self._http.post(
@@ -109,19 +118,25 @@ class TossPriceSource(PriceSource):
     # ── 공통 GET (페이싱 → 401 재발급 1회 → 429 백오프 1회) ──────────────────
     def _get(self, path, params):
         self._ensure_token()
-        wait = self._min_interval - (time.time() - self._last_call)
-        if wait > 0:
-            self._sleep(wait)
         for attempt in (1, 2):
-            self._last_call = time.time()
+            # 페이싱: 요청 **시작** 간격만 min_interval 로 지킨다 — 응답 대기는 겹쳐도 된다(유량 한도는 req/s).
+            with self._pace_lock:
+                wait = self._min_interval - (time.time() - self._last_call)
+                if wait > 0:
+                    self._sleep(wait)
+                self._last_call = time.time()
+            used = self._token
             r = self._http.get(BASE + path, params=params,
-                               headers={"Authorization": f"Bearer {self._token}"})
+                               headers={"Authorization": f"Bearer {used}"})
             rl = {k: v for k, v in r.headers.items() if k.lower().startswith("x-ratelimit")}
             if rl:
                 self.last_ratelimit = rl
             if r.status_code == 401 and attempt == 1:
-                self._token = ""
-                self._ensure_token()
+                # ⚠️동시 요청이 각자 재발급하면 토큰이 서로를 무효화한다(클라이언트당 1개) — 아직 같은 토큰일 때만.
+                with self._token_lock:
+                    if self._token == used:
+                        self._token = ""
+                        self._ensure_token_locked()
                 continue
             if r.status_code == 429 and attempt == 1:
                 self._sleep(self._backoff_secs(r.headers))
@@ -189,12 +204,23 @@ class TossPriceSource(PriceSource):
 
         """
         out: dict[str, Quote] = {}
-        for symbol in dict.fromkeys(symbols):
+        uniq = list(dict.fromkeys(symbols))
+        if not uniq:
+            return out
+        # ★2026-10-07: 토스 우선(데이·프리장 포함)으로 바꾼 뒤 관심종목 51개 첫 조회가 15.7초 — 하나씩 차례로
+        #   부르느라 응답 대기가 쌓였다. 토큰을 먼저 한 번 받고(동시 발급 방지), 요청 시작 간격(페이싱)은 그대로
+        #   둔 채 응답 대기만 겹치게 4개씩 동시에 부른다(≈ 51×0.12초).
+        self._ensure_token()
+
+        def fetch(symbol):
+            return symbol, self._get("/api/v1/candles", {"symbol": symbol, "interval": "1d", "count": 2})
+
+        with ThreadPoolExecutor(max_workers=min(4, len(uniq))) as pool:
+            futures = [pool.submit(fetch, sym) for sym in uniq]
+        results = []
+        for symbol, fut in zip(uniq, futures):
             try:
-                res = self._get(
-                    "/api/v1/candles",
-                    {"symbol": symbol, "interval": "1d", "count": 2},
-                )
+                results.append(fut.result())
             except TossAuthError:
                 # ★2026-10-05: 토큰 단계 실패(IP 미허용 등)는 종목 탓이 아니다 — 한 번만 올린다.
                 #   ⚠️여기서 삼키면 종목마다 토큰 발급을 다시 시도하고(16종목=16회), 호출부는
@@ -203,6 +229,7 @@ class TossPriceSource(PriceSource):
             except Exception:
                 # 한 종목이 실패해도 나머지는 살린다(예: 그 티커만 404).
                 continue
+        for symbol, res in results:
             candles = (res or {}).get("candles") or []
             if not candles:
                 continue
