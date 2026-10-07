@@ -156,3 +156,24 @@ def test_sources_state(client, db):
         "nasdaq": "timeout",
         "sec": "ok",
     }
+
+
+def test_worker_running_a_long_job_is_not_shown_down(client, db):
+    """★2026-10-07 worker 생존 신호는 작업 사이에만 찍힌다 — 3시간 크롤 중에도 그 큐의 RUNNING 심장박동이
+    살아 있으면 '작동'이다. 심장박동도 끊겼으면 '멈춤'."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    db.execute(text(
+        "INSERT INTO source_status (source, kind, last_ok_at, detail, updated_at) VALUES "
+        "('worker:sec_crawl', 'worker', now() - interval '3 hours', '{\"queues\": [\"sec_crawl\"]}', now())"))
+    job = _uuid.uuid4()
+    db.execute(text(
+        "INSERT INTO jobs (id, job_type, status, queue, started_at, heartbeat_at) "
+        "VALUES (:i, 'EARNINGS_REVENUE', 'RUNNING', 'sec_crawl', now() - interval '3 hours', now())"), {"i": job})
+    db.commit()
+    state = lambda: {s["source"]: s["state"] for s in client.get("/api/v1/jobs/sources").json()["items"]}
+    assert state()["worker:sec_crawl"] == "alive"
+    db.execute(text("UPDATE jobs SET heartbeat_at = now() - interval '10 minutes' WHERE id = :i"), {"i": job})
+    db.commit()
+    assert state()["worker:sec_crawl"] == "down"

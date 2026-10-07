@@ -82,9 +82,14 @@ def job_stats(db: Session = Depends(get_db)) -> JobStatsOut:
 WORKER_ALIVE_WINDOW = timedelta(minutes=2)
 
 
-def _state(row: SourceStatus, now: datetime) -> str:
+def _state(row: SourceStatus, now: datetime, busy_queues: frozenset[str] = frozenset()) -> str:
     if row.kind == "worker":
-        return "alive" if row.last_ok_at and now - row.last_ok_at <= WORKER_ALIVE_WINDOW else "down"
+        if row.last_ok_at and now - row.last_ok_at <= WORKER_ALIVE_WINDOW:
+            return "alive"
+        # ★2026-10-07: worker 의 생존 신호는 작업과 작업 **사이**에만 찍힌다. 3시간짜리 크롤을 도는 동안
+        #   '멈춤'으로 보였다(EARNINGS_REVENUE 07:51~). 그 큐의 RUNNING 작업 심장박동이 살아 있으면 작동 중이다.
+        queues = set((row.detail or {}).get("queues") or [])
+        return "alive" if queues & busy_queues else "down"
     if row.last_error_at and (not row.last_ok_at or row.last_error_at > row.last_ok_at):
         return row.last_error_kind or "other"
     return "ok" if row.last_ok_at else "unknown"
@@ -96,12 +101,15 @@ def list_sources(db: Session = Depends(get_db)) -> SourceStatusListOut:
     """수집기(worker)와 외부 원천의 상태 — /data-operations 가 쓴다."""
     now = datetime.now(timezone.utc)
     rows = db.execute(select(SourceStatus).order_by(SourceStatus.kind.desc(), SourceStatus.source)).scalars()
+    busy = frozenset(q for (q,) in db.execute(
+        select(Job.queue).where(Job.status == "RUNNING", Job.heartbeat_at >= now - WORKER_ALIVE_WINDOW)
+    ).all() if q)
     return SourceStatusListOut(
         items=[
             SourceStatusOut(
                 source=r.source,
                 kind=r.kind,
-                state=_state(r, now),
+                state=_state(r, now, busy),
                 last_ok_at=r.last_ok_at,
                 last_error_at=r.last_error_at,
                 last_error_kind=r.last_error_kind,
