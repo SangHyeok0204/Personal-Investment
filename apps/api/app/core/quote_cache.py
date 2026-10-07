@@ -312,6 +312,28 @@ def _fill_52w(quotes: dict[str, Quote]) -> dict[str, Quote]:
     return out
 
 
+def _probe_toss_if_stuck(symbol: str, bind) -> None:
+    """토스가 막혀 있다고 기억하는데 이번 호출에서 불리지 않았으면(장 마감 중엔 야후가 먼저라 토스를 안 부른다)
+    쿨다운이 지난 뒤 **한 종목만** 물어 상태를 고친다. 값은 쓰지 않는다(장 마감 중 토스 값은 얇은 체결가).
+
+    ★2026-10-07: 사용자가 IP 를 등록했는데 연동 화면은 다음 정규장(22:30)까지 'IP 미허용'으로 남았다.
+    ⚠️'ok' 가 아닐 때만(막힘·오류·재시작 직후 모름), 쿨다운(10분)마다 한 번 — 'ok' 가 되면 멈춘다.
+      모름(None)도 넣는 이유: 재시작하면 메모리 상태가 비어 수집 상태의 옛 'IP 미허용' 줄을 아무도 고치지 않는다.
+    """
+    if _toss_status["state"] == "ok" or toss_in_cooldown():
+        return
+    client_id = credentials_store.read_env_value("TOSS_CLIENT_ID")
+    client_secret = credentials_store.read_env_value("TOSS_CLIENT_SECRET")
+    if not (client_id and client_secret):
+        return
+    probe = CompositePriceSource([_shared_toss(client_id, client_secret)])
+    try:
+        probe.quotes([symbol])
+        _note_toss(probe, bind)
+    except Exception:  # noqa: BLE001 — 상태 확인일 뿐, 시세 응답을 바꾸지 않는다
+        pass
+
+
 def get_quotes(
     symbols: list[str], with_range: bool = False, bind=None
 ) -> tuple[dict[str, Quote], int]:
@@ -350,6 +372,7 @@ def get_quotes(
         _note_toss(source, bind)
     finally:
         source.close()
+    _probe_toss_if_stuck(stale[0], bind)
 
     stored = time.monotonic()
     with _lock:

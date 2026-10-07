@@ -156,3 +156,17 @@ def test_toss_source_and_token_are_reused_across_polls(fakes) -> None:
     finally:
         qc.TossPriceSource = orig
     assert len(made) == 1 and len(calls) == 2
+
+
+def test_blocked_state_is_probed_and_cleared_while_market_closed(fakes, monkeypatch) -> None:
+    """★2026-10-07 장 마감 중엔 야후가 먼저라 토스를 안 불러 'IP 미허용'이 22:30 까지 남았다 —
+    쿨다운이 지나면 한 종목으로 확인해 상태를 고친다(값은 야후 것을 그대로 쓴다)."""
+    calls, mode, clock = fakes
+    qc.get_quotes(["AAA"])                                   # 장중: 토스 막힘 기록
+    assert qc.toss_status()["state"] == "ip_blocked"
+    monkeypatch.setattr(qc, "us_regular_session_open", lambda now=None: False)
+    mode["blocked"] = False                                  # 사용자가 IP 등록
+    _advance(clock, qc.TOSS_COOLDOWN_SECONDS + qc.TTL_SECONDS + 1)
+    got, _ = qc.get_quotes(["AAA"])
+    assert {q.source for q in got.values()} == {"yahoo"}       # 마감 중 값은 야후
+    assert qc.toss_status()["state"] == "ok"
