@@ -9,6 +9,8 @@ DailyPriceAgent(`src/sources/toss.py`)의 검증된 클라이언트를 **시세 
     같은 키를 쓰는 다른 수집기와 **동시 가동 금지**.
   - MARKET_DATA_CHART 그룹 실측 한도 20 req/s. min_interval=0.12(≈8/s)에서
     429 없이 Remaining 19 유지(2026-08-20 실측).
+  - ★2026-10-08 0.07(≈14/s)로 낮춤 — 토스 우선(데이·프리장 포함) 뒤 관심종목 51개가 페이싱만으로 6초
+    (51×0.12). 한도 20/s 아래이고, 429 가 나면 `_get` 의 백오프가 받는다.
   - 토스도 **IP 허용목록**을 쓴다. 미등록이면 토큰 발급이
     `403 access_denied / "IP address not allowed"` 로 거부된다(자격증명 문제 아님).
 """
@@ -71,7 +73,7 @@ class TossPriceSource(PriceSource):
     markets = ("KOSPI", "KOSDAQ", "KRX", "NASDAQ", "NYSE", "AMEX", "US")
 
     def __init__(self, client_id, client_secret, http_client=None,
-                 min_interval: float = 0.12, sleep=time.sleep):
+                 min_interval: float = 0.07, sleep=time.sleep):
         self._cid = client_id
         self._sec = client_secret
         self._owns_http = http_client is None
@@ -209,13 +211,13 @@ class TossPriceSource(PriceSource):
             return out
         # ★2026-10-07: 토스 우선(데이·프리장 포함)으로 바꾼 뒤 관심종목 51개 첫 조회가 15.7초 — 하나씩 차례로
         #   부르느라 응답 대기가 쌓였다. 토큰을 먼저 한 번 받고(동시 발급 방지), 요청 시작 간격(페이싱)은 그대로
-        #   둔 채 응답 대기만 겹치게 4개씩 동시에 부른다(≈ 51×0.12초).
+        #   둔 채 응답 대기만 겹치게 8개씩 동시에 부른다(2026-10-08 실측: 4개는 응답 0.5초 × 51/4 ≈ 6.5초가 병목).
         self._ensure_token()
 
         def fetch(symbol):
             return symbol, self._get("/api/v1/candles", {"symbol": symbol, "interval": "1d", "count": 2})
 
-        with ThreadPoolExecutor(max_workers=min(4, len(uniq))) as pool:
+        with ThreadPoolExecutor(max_workers=min(8, len(uniq))) as pool:
             futures = [pool.submit(fetch, sym) for sym in uniq]
         results = []
         for symbol, fut in zip(uniq, futures):
