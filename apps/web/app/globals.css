@@ -151,3 +151,25 @@
     animation: none;
   }
 }
+
+/* ★2026-10-09 랜딩(/) 애니메이션 — 배경은 천천히 밝아지며 살짝 당겨지고, 글자·버튼은 차례로 떠오른다. */
+@keyframes landing-bg-in {
+  from { opacity: 0; transform: scale(1.12); }
+  to   { opacity: 1; transform: scale(1.02); }
+}
+@keyframes landing-rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes landing-pop {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.landing-bg { animation: landing-bg-in 2.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.landing-rise { animation: landing-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.5s both; }
+.landing-delay-1 { animation-delay: 0.8s; }
+.landing-delay-2 { animation-delay: 1.1s; }
+.landing-pop { animation: landing-pop 0.35s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .landing-bg, .landing-rise, .landing-pop { animation: none; }
+}

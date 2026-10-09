@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
-import { Sidebar } from "@/components/layout/sidebar";
+import { AppShell } from "@/components/layout/app-shell";
 
 export const metadata: Metadata = {
   title: "My Portfolio",
@@ -24,13 +24,7 @@ export default function RootLayout({
       </head>
       <body>
         <Providers>
-          <div className="flex min-h-screen">
-            <Sidebar />
-            {/* 각 페이지가 자체 헤더/툴바를 렌더링한다. */}
-            <div className="flex min-w-0 flex-1 flex-col">
-              <main className="min-w-0 flex-1">{children}</main>
-            </div>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>
