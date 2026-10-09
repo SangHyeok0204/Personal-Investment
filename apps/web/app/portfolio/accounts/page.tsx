@@ -38,7 +38,7 @@ export default function AccountsPage() {
               items={[
                 "키움증권 — 주계좌 (REST OpenAPI)",
                 "키움증권 — ISA / 연금저축",
-                "토스증권 — DailyPriceAgent 의 toss 수집기 재사용",
+                "토스증권 — 계좌 연동(시세는 이미 토스 Open API 사용 중)",
                 "은행 예적금 — 수기 입력 또는 오픈뱅킹",
               ]}
             />
