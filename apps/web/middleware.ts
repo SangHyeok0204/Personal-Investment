@@ -15,6 +15,8 @@ export function middleware(req: NextRequest) {
 export const config = {
   // Node 런타임 — 서명 검증에 node:crypto, 루트 .env 읽기에 node:fs 를 쓴다(Next 15.5 정식 지원).
   runtime: "nodejs",
-  // 정적 파일·Next 내부·라우트 핸들러(/api/unlock)는 막지 않는다.
-  matcher: ["/((?!_next/|api/|.*\\..*).*)"],
+  // 공개 경로만 이름으로 뺀다 — Next 정적 파일, 입장 API, 랜딩 이미지·아이콘.
+  // ⚠️예전엔 '점이 든 경로 전부'를 뺐는데, /research/valuechain/foo.bar 처럼 동적 경로에 점을
+  //   넣으면 화면이 토큰 없이 열렸다(보안 리뷰 #3). 새 /api/* 라우트도 기본은 막힌다.
+  matcher: ["/((?!_next/static/|_next/image|_next/webpack-hmr|api/unlock$|landing\\.jpg$|icon\\.svg$|favicon\\.ico$).*)"],
 };

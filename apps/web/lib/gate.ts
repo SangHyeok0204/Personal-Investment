@@ -63,5 +63,7 @@ export function verifyToken(token: string | undefined, now = Date.now()): number
   if (dot <= 0) return null;
   const exp = Number(token.slice(0, dot));
   if (!Number.isInteger(exp) || exp * 1000 <= now) return null;
+  // 서명이 맞아도 1시간보다 먼 만료는 받지 않는다(키가 새 나가도 정책보다 오래 못 쓰게).
+  if (exp * 1000 > now + GATE_TTL_SECONDS * 1000 + 60_000) return null;
   return safeEqual(token.slice(dot + 1), sign(key, exp)) ? exp : null;
 }
