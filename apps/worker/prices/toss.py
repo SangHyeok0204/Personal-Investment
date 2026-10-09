@@ -16,6 +16,7 @@ DailyPriceAgent(`src/sources/toss.py`)의 검증된 클라이언트를 **시세 
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +26,8 @@ from decimal import Decimal, InvalidOperation
 import httpx
 
 from .base import PriceSource, Quote
+
+_log = logging.getLogger(__name__)
 
 BASE = "https://openapi.tossinvest.com"
 KST = timezone(timedelta(hours=9))
@@ -128,8 +131,12 @@ class TossPriceSource(PriceSource):
                     self._sleep(wait)
                 self._last_call = time.time()
             used = self._token
+            t0 = time.time()
             r = self._http.get(BASE + path, params=params,
                                headers={"Authorization": f"Bearer {used}"})
+            took = time.time() - t0
+            if took > 2.0 or r.status_code != 200:
+                _log.warning("toss %s %s %s %.1fs", path, params.get("productCode") or params.get("symbol") or "", r.status_code, took)
             rl = {k: v for k, v in r.headers.items() if k.lower().startswith("x-ratelimit")}
             if rl:
                 self.last_ratelimit = rl

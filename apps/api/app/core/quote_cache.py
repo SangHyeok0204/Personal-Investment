@@ -44,6 +44,7 @@ RANGE_TTL_SECONDS = 3600.0
 
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, Quote]] = {}
+_fetch_lock = threading.Lock()  # 상류에서 받아오는 구간 — get_quotes 참고
 # 심볼 → (저장시각, 52주저점, 52주고점). 저점/고점이 None 이어도 캐시한다 —
 # 못 받는 심볼을 매번 다시 묻지 않기 위해서다.
 _range_cache: dict[str, tuple[float, Decimal | None, Decimal | None]] = {}
@@ -346,17 +347,32 @@ def get_quotes(
     if not stale:
         return (_fill_52w(out) if with_range else out), 0
 
-    source = _build_source()
-    try:
-        fetched = source.quotes(stale)
-        _note_toss(source, bind)
-    finally:
-        source.close()
+    # ★2026-10-09: 받아오기는 한 번에 하나씩 — 기다린 요청은 캐시를 다시 본다.
+    #   예전엔 보유종목(5초 주기)·관심종목·알림이 동시에 오면 각자 **같은 종목을 처음부터** 다시 받아
+    #   토스 공유 잠금 뒤에 줄을 섰다(실측: /portfolio/quotes 4~7초, 최악 55초 — 토스 응답은 전부 2초 미만).
+    with _fetch_lock:
+        now = time.monotonic()
+        with _lock:
+            still: list[str] = []
+            for symbol in stale:
+                hit = _cache.get(symbol)
+                if hit and now - hit[0] < TTL_SECONDS:
+                    out[symbol] = hit[1]
+                else:
+                    still.append(symbol)
+        fetched: dict[str, Quote] = {}
+        if still:
+            source = _build_source()
+            try:
+                fetched = source.quotes(still)
+                _note_toss(source, bind)
+            finally:
+                source.close()
 
-    stored = time.monotonic()
-    with _lock:
-        for symbol, quote in fetched.items():
-            _cache[symbol] = (stored, quote)
+            stored = time.monotonic()
+            with _lock:
+                for symbol, quote in fetched.items():
+                    _cache[symbol] = (stored, quote)
     out.update(fetched)
     # ⚠️못 받은 심볼은 out 에 없다. 호출부가 "—" 로 그린다 — 0 으로 채우지 않는다.
     return (_fill_52w(out) if with_range else out), len(fetched)
