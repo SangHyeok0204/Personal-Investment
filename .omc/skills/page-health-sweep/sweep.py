@@ -9,6 +9,8 @@ with sync_playwright() as p:
     # ⚠️자동 갱신을 끈다 — 켜 두면 페이지를 새로 열 때마다 화면이 증권사 이력 동기화를 부른다
     #   (2026-10-04 실측: 스윕 한 번에 키움 동기화 32회).
     ctx.add_init_script("try{localStorage.setItem('pi:auto-refresh','0')}catch(e){}")
+    # ★2026-10-09 입장 게이트(middleware) — 쿠키 없으면 모든 화면이 랜딩(/)으로 간다.
+    ctx.add_cookies([{"name":"pi_unlocked","value":"1","domain":"localhost","path":"/"}])
     pg = ctx.new_page()
     for path in PAGES:
         errs, fails = [], []
