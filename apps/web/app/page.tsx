@@ -1,139 +1,47 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight } from "lucide-react";
-import { PageContainer } from "@/components/layout/page-header";
-import { Topbar } from "@/components/layout/topbar";
-import {
-  NotConnectedBanner,
-  PlannedList,
-  StatRow,
-  StatTile,
-  StubCard,
-  StubChart,
-  StubTable,
-} from "@/components/stub";
+import { ImageIcon } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 메인 화면 — "오늘".
+// 메인 화면(/) — 그림 한 장짜리 랜딩.
 //
-// ★2026-09-21 개조: 원본은 회의 마운트(사내 경로)의 HTML 문서 두 장을
-//   iframe 으로 붙이던 팀 대시보드 홈이었다. 개인 계좌 기준으로 바꾸면서 통째로
-//   교체했다 — 개인 대시보드의 첫 화면이 답해야 할 질문은 "내 자산이 지금 얼마고,
-//   오늘 뭐가 움직였고, 내가 볼 게 뭐냐" 세 가지다.
+// ★2026-10-09 사용자 요청: 왼쪽 위 브랜드(홈) 버튼을 누르면 그림 하나만 있는 화면.
+//   예전 "오늘" 요약 카드는 내렸다 — 숫자는 자산 현황(/portfolio)에 있다.
 //
-// 여기 숫자는 전부 비어 있다 — 키움 계좌 API 가 붙는 순간 StatRow 와 아래 카드가
-// 실데이터로 바뀐다. 자세한 건 /portfolio.
+// 이미지 교체: `apps/web/public/landing.jpg` 에 파일을 두면 된다(다른 이름·형식이면
+// 아래 LANDING_SRC 만 바꾼다). 파일이 없거나 못 읽으면 자리 표시(placeholder)가 보인다.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function useToday() {
-  // 서버/클라이언트 시각 차이로 hydration 이 깨지지 않게 마운트 후에만 찍는다.
-  const [text, setText] = useState<string | null>(null);
-  useEffect(() => {
-    setText(
-      new Date().toLocaleDateString("ko-KR", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        weekday: "long",
-      }),
-    );
-  }, []);
-  return text;
-}
-
-/** 다른 화면으로 넘기는 얕은 카드 — 홈에서 깊은 화면으로 가는 길만 만든다. */
-function JumpCard({
-  href,
-  title,
-  desc,
-}: {
-  href: string;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group flex items-center gap-3 rounded-xl border border-hairline bg-canvas px-4 py-3 shadow-card transition-colors hover:bg-ge-blue-bg"
-    >
-      <div className="min-w-0">
-        <div className="text-[13px] font-extrabold text-ge-navy">{title}</div>
-        <div className="mt-0.5 text-[11px] font-medium text-ink-faint">
-          {desc}
-        </div>
-      </div>
-      <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-ge-point opacity-0 transition-opacity group-hover:opacity-100" />
-    </Link>
-  );
-}
+const LANDING_SRC = "/landing.jpg";
 
 export default function HomePage() {
-  const today = useToday();
+  // ⚠️서버가 그린 <img> 는 hydration 전에 실패해 onError 를 놓친다 — 마운트 뒤 직접 불러 보고 결정한다.
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    const probe = new Image();
+    probe.onload = () => setLoaded(true);
+    probe.src = LANDING_SRC;
+  }, []);
 
   return (
-    <>
-      <Topbar title="오늘" subtitle={today ?? "\u00a0"} />
-      <PageContainer wide>
-        <NotConnectedBanner what="키움 계좌 API" />
-
-        <StatRow>
-          <StatTile label="총 평가금액" hint="전체 계좌 합산" />
-          <StatTile label="당일 손익" hint="전일 종가 대비" accent="up" />
-          <StatTile label="평가손익" hint="매입원가 대비" accent="up" />
-          <StatTile label="예수금" hint="주문 가능 금액" />
-        </StatRow>
-
-        <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-          <StubCard title="자산 추이" subtitle="최근 3개월">
-            <StubChart height={240} />
-          </StubCard>
-
-          <StubCard title="오늘 내 종목" subtitle="보유 종목 등락">
-            <StubTable
-              columns={["종목", "현재가", "등락률", "평가손익"]}
-              rows={6}
-            />
-          </StubCard>
-
-          <StubCard title="오늘 시장" subtitle="지수 · 환율 · 금리">
-            <StubTable columns={["지표", "현재", "전일대비"]} rows={6} />
-          </StubCard>
-
-          <StubCard title="바로 가기">
-            <div className="grid gap-2.5">
-              <JumpCard
-                href="/portfolio"
-                title="자산 현황"
-                desc="보유 종목 · 평가손익 · 배분"
-              />
-              <JumpCard
-                href="/macro"
-                title="매크로"
-                desc="금리 · 환율 · 원자재"
-              />
-              <JumpCard
-                href="/settings/connections"
-                title="계좌 연동"
-                desc="키움 · 토스 API 키 등록"
-              />
-            </div>
-          </StubCard>
-
-          <StubCard title="다음 할 일" className="xl:col-span-2">
-            <PlannedList
-              items={[
-                "키움 OpenAPI 키 발급 → /settings/connections 에서 등록",
-                "잔고·체결 수집 배치 붙이기 → 이 화면의 숫자가 살아난다",
-                "일별 잔고 스냅샷 적재 → 자산 추이 · 수익률(TWR) 계산의 전제",
-                "입출금 내역 확보 → 성과 분석이 원금 대비로 정확해진다",
-                "토스 계좌 합산 (DailyPriceAgent 의 toss 수집기 재사용)",
-              ]}
-            />
-          </StubCard>
+    <div className="flex h-screen items-center justify-center p-6">
+      {!loaded ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 text-slate-400">
+          <ImageIcon className="h-12 w-12" strokeWidth={1.5} />
+          <p className="text-sm font-semibold">랜딩 이미지 자리</p>
+          <p className="text-xs">
+            apps/web/public/landing.jpg 에 이미지를 넣으면 여기에 표시됩니다
+          </p>
         </div>
-      </PageContainer>
-    </>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element -- 크기를 모르는 사용자 이미지를 그대로 맞춘다
+        <img
+          src={LANDING_SRC}
+          alt="랜딩 이미지"
+          className="h-full w-full rounded-3xl object-cover"
+        />
+      )}
+    </div>
   );
 }
