@@ -9,8 +9,12 @@ with sync_playwright() as p:
     # ⚠️자동 갱신을 끈다 — 켜 두면 페이지를 새로 열 때마다 화면이 증권사 이력 동기화를 부른다
     #   (2026-10-04 실측: 스윕 한 번에 키움 동기화 32회).
     ctx.add_init_script("try{localStorage.setItem('pi:auto-refresh','0')}catch(e){}")
-    # ★2026-10-09 입장 게이트(middleware) — 쿠키 없으면 모든 화면이 랜딩(/)으로 간다.
-    ctx.add_cookies([{"name":"pi_unlocked","value":"1","domain":"localhost","path":"/"}])
+    # ★2026-10-09 입장 게이트 — 서명 토큰(1시간) 없으면 모든 화면이 랜딩(/)으로 간다.
+    #   .env 비밀번호로 /api/unlock 을 한 번 불러 토큰 쿠키를 받는다(값은 출력하지 않는다).
+    pw = next(l.split("=",1)[1].strip() for l in open(".env") if l.startswith("DASHBOARD_PASSWORD="))
+    r = ctx.request.post("http://localhost:3000/api/unlock", data={"password": pw})
+    if not r.ok:
+        sys.exit(f"unlock failed: {r.status}")
     pg = ctx.new_page()
     for path in PAGES:
         errs, fails = [], []
