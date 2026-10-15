@@ -1,6 +1,5 @@
 import {
   BookOpen,
-  LineChart,
   Newspaper,
   Settings,
   TrendingUp,
@@ -16,6 +15,7 @@ import type { LucideIcon } from "lucide-react";
 //   어떤 상태인가**이고, 시장/리서치는 그 판단을 돕는 보조 층위로 내려간다.
 //   그래서 순서를 내 자산 → 매매 → 성과 → 시장 → 리서치 → 뉴스 → 현금흐름 → 연동
 //   으로 뒤집었다(2026-10-01 매매/현금흐름은 걷었다 — 아래). 디자인(플라이아웃·색·라운드)은 원본 그대로 둔다.
+//   ★2026-10-15 성과 그룹도 걷었다 — 네 화면을 내 자산 › 성과 분석(/portfolio/performance) 한 화면으로.
 //
 // `href` 가 있으면 실제 라우팅되고, 없으면 아직 화면이 없는 자리(플라이아웃에서
 // 비활성 버튼으로 렌더)다. `status` 는 그 자리가 어떤 상태인지 표시한다:
@@ -100,36 +100,14 @@ export const navItems: NavItem[] = [
         status: "live",
         hint: "지급 건별 · 종목별 · 월별 · 세후",
       },
-    ],
-  },
-  {
-    label: "성과 분석",
-    icon: LineChart,
-    children: [
       {
-        label: "수익률 추이",
-        href: "/performance/returns",
-        status: "live",
-        hint: "TWR · MWR 시계열",
-      },
-      {
-        label: "벤치마크 비교",
-        href: "/performance/benchmark",
-        status: "live",
-        hint: "S&P 500 · 반도체(SOX) 대비 · 원화 환산",
-      },
-      {
+        // ★2026-10-15 사용자 결정: '성과 분석' 메뉴 그룹(수익률 추이 · 벤치마크 비교 · 성과 분석 ·
+        //   기간 리포트)을 걷고 이 한 화면으로 합쳤다. 옛 /performance/* 주소는 next.config.mjs
+        //   redirect 로 여기 섹션 #앵커 로 온다.
         label: "성과 분석",
-        href: "/performance/analysis",
+        href: "/portfolio/performance",
         status: "live",
-        hint: "위험지표 · 월별 · 종목 기여도",
-      },
-      {
-        label: "기간 리포트",
-        href: "/performance/report",
-        status: "live",
-        // 다른 화면과 겹치지 않는 부분은 **기간을 고른다**는 것이다.
-        hint: "월·분기·연도별",
+        hint: "수익률 · 벤치마크 · 월별 · 위험지표 · 기여도 · 기간 리포트",
       },
     ],
   },

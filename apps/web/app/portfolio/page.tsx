@@ -646,8 +646,9 @@ export default function PortfolioPage() {
                 tone={Number(performance.data.gain_krw ?? 0) >= 0 ? "up" : "down"}
               />
             </dl>
+            {/* ★2026-10-15 성과 분석 네 화면이 /portfolio/performance 한 화면으로 합쳐졌다. */}
             <Link
-              href="/performance/returns"
+              href="/portfolio/performance#returns"
               className="mt-2 inline-block text-[11px] font-bold text-ge-point hover:text-ink"
             >
               수익률 추이 자세히 →

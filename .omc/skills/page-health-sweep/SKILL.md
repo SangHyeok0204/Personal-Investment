@@ -17,6 +17,6 @@ description: 대시보드 전 페이지·API 건강 점검 — HTTP, 콘솔 오�
    재시작 제안(사용자 승인 후 `cd apps/web && nohup npm run dev > /tmp/pi-web-dev.log 2>&1 &`). 2026-10-05 8일 가동 6.7GB·홈 10초 사례.
 8. 결과는 `.omc/research/health-audit.md` 장부에 회차별로 남긴다. push 금지, exhibit.py 수정 금지.
 
-- ★2026-10-09 입장 게이트: sweep.py 가 .env 비밀번호로 `/api/unlock` 을 불러 1시간 서명 토큰(`pi_session`)을 받는다(없으면 모든 화면이 / 로 307; 5회 틀리면 1분 잠금). `/performance`·`/news` 는 섹션 경로라 404 가 정상 — 하위 페이지(`/performance/returns` 등)를 넘긴다.
+- ★2026-10-09 입장 게이트: sweep.py 가 .env 비밀번호로 `/api/unlock` 을 불러 1시간 서명 토큰(`pi_session`)을 받는다(없으면 모든 화면이 / 로 307; 5회 틀리면 1분 잠금). `/news` 는 섹션 경로라 404 가 정상 — 하위 페이지를 넘긴다. ★2026-10-15 `/performance/*` 는 `/portfolio/performance`(한 화면)로 307 — 스윕에는 `/portfolio/performance` 를 넘긴다.
 
 - ★2026-10-09 skillify: 회차 점검은 `bash .omc/skills/page-health-sweep/tick.sh` (가벼운 점검), 두 회차에 한 번 `FULL=1` 로 전 화면 스윕.

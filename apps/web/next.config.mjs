@@ -18,6 +18,16 @@ const nextConfig = {
       { source: "/market", destination: "/research/market?tab=market", permanent: false },
       { source: "/market/seasonality", destination: "/research/market?tab=seasonality", permanent: false },
       { source: "/ai-key-data", destination: "/research/market?tab=ai", permanent: false },
+      // ★2026-10-15 성과 분석 네 화면 → 내 자산 › 성과 분석 한 화면(/portfolio/performance).
+      //   옛 주소는 그 내용이 옮겨 간 섹션 #앵커 로 보낸다(앵커 id 는 components/performance/anchors.ts).
+      //   벤치마크 비교는 누적 비교가 '수익률 추이' 섹션에 들어갔으므로 #returns, 성과 분석은
+      //   위험지표가 있는 #periods, 리스크 스텁(골격만 있던 화면)은 #drawdown.
+      { source: "/performance", destination: "/portfolio/performance", permanent: false },
+      { source: "/performance/returns", destination: "/portfolio/performance#returns", permanent: false },
+      { source: "/performance/benchmark", destination: "/portfolio/performance#returns", permanent: false },
+      { source: "/performance/analysis", destination: "/portfolio/performance#periods", permanent: false },
+      { source: "/performance/report", destination: "/portfolio/performance#report", permanent: false },
+      { source: "/performance/risk", destination: "/portfolio/performance#drawdown", permanent: false },
     ];
   },
 };

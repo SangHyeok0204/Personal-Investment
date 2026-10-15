@@ -2,8 +2,6 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { PageContainer } from "@/components/layout/page-header";
-import { Topbar } from "@/components/layout/topbar";
 import { useAccount } from "@/components/layout/account-context";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -11,11 +9,11 @@ import {
   Cell,
   DataTable,
   Emphasized,
-  NotConnectedBanner,
+  HeaderChip,
   StatTile,
   StubCard,
 } from "@/components/stub";
-import { accountReturnOn, getAccountReturn, getReport, type Report } from "@/lib/api";
+import { accountReturnOn, getReport, type Report } from "@/lib/api";
 import {
   formatKrwCompactString,
   formatKrwSigned,
@@ -23,12 +21,14 @@ import {
   formatPercentString,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { pp, toneOfRatio } from "./format";
+import { useAccountReturn } from "./queries";
 
-// 기간 리포트 — 그 기간에 무슨 일이 있었나.
+// 7. 기간 리포트 — 그 기간에 무슨 일이 있었나.
 //
-// ★다른 화면과 겹치지 않는 부분은 **기간을 고른다**는 것이다. 성과 분석은
-//   전체를, 월별 현금흐름은 흐름만 본다. 여기는 한 달/분기/연도를 잘라
-//   자산 변화 · 수익률 · 매매 · 실현손익 · 신규/청산을 한 장에 모은다.
+// ★다른 섹션과 겹치지 않는 부분은 **기간을 고른다**는 것이다. 위 섹션들은 시작일부터
+//   전체를 본다. 여기는 한 달/분기/연도를 잘라 자산 변화 · 수익률 · 매매 · 실현손익 ·
+//   신규/청산을 한 장에 모은다.
 //
 // ⚠️**기간별 평가 기여도를 만들지 않는다.** 종목별로 "이번 달 얼마 기여했나"를
 //   내려면 보유 종목의 일별 시계열이 있어야 하는데 스냅샷이 6건뿐이다(실측).
@@ -37,52 +37,31 @@ import { cn } from "@/lib/utils";
 // ⚠️기간 끝을 오늘로 적지 않는다. 일별성과가 들어온 마지막 날까지만 잘라
 //   보여 준다 — "9월"이라고 써 놓고 9/20 까지만 담겨 있으면 그렇게 말해야 한다.
 //
-// ★2026-09-25 사용자 지시(전체 메뉴 공통 패턴): 화면에는 대표 숫자, 누르면 상세.
-//   벤치마크 대비 표는 수익률 칸, 종목별 실현손익 표는 실현손익 칸(과 '전체 목록'),
-//   매매·배당·비용은 현금 칸을 눌러 여는 팝업으로 옮겼다. 본문에는 자산 분해와
-//   신규/청산만 남는다.
-//   ⚠️**월별 막대는 두지 않는다.** 리포트는 기간 하나를 한 번에 받아 오므로 달마다
-//   숫자를 모으려면 달 수만큼 다시 불러야 한다 — 위의 기간 칩(월·분기·연도)이
-//   그 역할을 한다.
+// ⚠️**월별 막대는 두지 않는다.** 리포트는 기간 하나를 한 번에 받아 오므로 달마다
+//   숫자를 모으려면 달 수만큼 다시 불러야 한다 — 기간 칩(월·분기·연도)이 그 역할을 한다.
 //
-// ★2026-10-04 사용자 지정: 첫 칸은 **내 계좌 수익률**(/account-return — 시작일 이후 손익 ÷
-//   투입 원금)의 **기간 끝 값**이다. 이 정의는 시작일(6/01)부터 센 누적이라 '그 달만의
-//   수익률'이 아니다 — 칸에 6/01~기간 끝이라고 적는다. 기간 안의 연쇄 수익률(TWR)과 벤치마크
-//   대비는 '참고: 시간가중(TWR)'으로 남긴다. 기간 끝이 아직 진행 중(이번 달)이면 오늘 점이다.
+// ★2026-10-04 사용자 지정: 첫 칸은 **내 계좌 수익률**(/account-return)의 **기간 끝 값**이다.
+//   이 정의는 시작일(6/01)부터 센 누적이라 '그 달만의 수익률'이 아니다 — 칸에 6/01~기간 끝이라고
+//   적는다. 기간 안의 연쇄 수익률(TWR)과 벤치마크 대비는 '참고: 시간가중(TWR)'으로 남긴다.
+//   기간 끝이 아직 진행 중(이번 달)이면 오늘 점이다.
+//
+// ★2026-10-15 한 화면 통합: 옛 '벤치마크 대비' 팝업(첫 칸을 눌러 열던 것)은 **기간 선택에 맞춘
+//   값**이라 위 '기간별' 섹션(1M·3M·1Y… 최근 구간)과 같은 숫자가 아니다 — 걷지 않고 요약 카드 안
+//   한 줄로 줄였다. 같은 /account-return 은 위 섹션들과 한 번만 부른다(queries.ts).
 
-function tone(value: string | null | undefined): "up" | "down" | undefined {
-  if (value == null) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return undefined;
-  return n > 0 ? "up" : "down";
-}
-
-/** "+5.18%p" — 초과수익은 퍼센트가 아니라 **퍼센트포인트**다. */
-function pp(value: string | null): string {
-  if (value == null) return "—";
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return `${n > 0 ? "+" : ""}${(n * 100).toFixed(2)}%p`;
-}
-
-export default function ReportPage() {
-  const { accountId, connected } = useAccount();
+export function ReportSection() {
+  const { accountId } = useAccount();
   const [period, setPeriod] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [residualOpen, setResidualOpen] = useState(false);
-  const [panel, setPanel] = useState<"benchmarks" | "realized" | "trading" | null>(null);
+  const [panel, setPanel] = useState<"realized" | "trading" | null>(null);
 
   const report = useQuery({
     queryKey: ["report", accountId, period],
     queryFn: () => getReport(accountId, period),
     staleTime: 5 * 60_000,
   });
-
-  const account = useQuery({
-    queryKey: ["account-return", accountId],
-    queryFn: () => getAccountReturn(accountId),
-    staleTime: 60_000,
-  });
+  const account = useAccountReturn();
 
   const data = report.data;
   const p = data?.period ?? null;
@@ -96,174 +75,138 @@ export default function ReportPage() {
     data == null ? null : String(Number(data.dividend_krw) - Number(data.cost_krw));
 
   return (
-    <>
-      <Topbar title="기간 리포트" />
-      <PageContainer fit>
-        {!connected && !report.isLoading && <NotConnectedBanner what="일별 성과" />}
-
-        <div className="flex shrink-0 items-center gap-2 overflow-x-auto pb-0.5">
-          {(data?.periods ?? []).map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setPeriod(item.key)}
-              className={cn(
-                "shrink-0 rounded-full border px-3 py-1 text-[11px] font-bold transition-colors",
-                p?.key === item.key
-                  ? "border-ge-navy bg-ge-navy text-white"
-                  : "border-hairline bg-canvas text-ink-secondary hover:bg-canvas-soft",
-              )}
-            >
+    <section id="report" className="scroll-mt-28 space-y-3">
+      <div className="flex items-center gap-2 overflow-x-auto rounded-xl bg-ge-header px-4 py-2 shadow-card">
+        <h2 className="shrink-0 text-[13px] font-extrabold tracking-tight text-white">기간 리포트</h2>
+        <span className="mx-1 h-3.5 w-px shrink-0 bg-white/25" />
+        {(data?.periods ?? []).map((item) => (
+          <span key={item.key} className="shrink-0">
+            <HeaderChip active={p?.key === item.key} onClick={() => setPeriod(item.key)}>
               {item.label}
+            </HeaderChip>
+          </span>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        {/* ★2026-10-05 이름은 위 요약 첫 칸과 같게 — 값은 환율 제외(키움 손익)의 기간 끝 점. */}
+        <StatTile
+          label="내 계좌 (환율 제외)"
+          value={
+            acctPoint?.return_ratio == null ? null : formatPercentString(acctPoint.return_ratio)
+          }
+          // 보조: 원화 실질(환차 포함, 총자산 − 원금).
+          //   ★2026-10-05 한 줄이면 잘린다(1280px 실측) — 기간·TWR 과 원화 실질을 두 줄로.
+          hint={
+            acctPoint
+              ? `${account.data ? `${account.data.start.slice(5)} ` : ""}~ ${acctPoint.date.slice(5)} · 참고 TWR ${formatPercentString(data?.twr)}`
+              : "시작일 이후 손익 ÷ 투입 원금"
+          }
+          subHint={
+            acctPoint?.krw_return_ratio != null
+              ? `원화 실질 ${formatPercentString(acctPoint.krw_return_ratio)}`
+              : undefined
+          }
+          accent="auto"
+          loading={report.isLoading || account.isLoading}
+        />
+        <StatTile
+          label="자산 변화"
+          value={
+            data?.opening_assets_krw && data.closing_assets_krw
+              ? formatKrwSigned(
+                  String(Number(data.closing_assets_krw) - Number(data.opening_assets_krw)),
+                )
+              : null
+          }
+          hint={
+            data?.opening_assets_krw && data.closing_assets_krw
+              ? `${formatKrwCompactString(data.opening_assets_krw)} → ${formatKrwCompactString(data.closing_assets_krw)}`
+              : "시작 → 끝"
+          }
+          actionHint="눌러서 '그 외' 분해 보기"
+          onClick={() => setResidualOpen(true)}
+          accent="auto"
+          loading={report.isLoading}
+        />
+        <StatTile
+          label="실현손익"
+          value={formatKrwSigned(data?.realized_total_krw)}
+          hint={data ? `매수 ${data.buy_count} · 매도 ${data.sell_count}건` : "확정된 손익"}
+          actionHint="눌러서 종목별 보기"
+          onClick={() => setPanel("realized")}
+          accent="auto"
+          loading={report.isLoading}
+        />
+        <StatTile
+          label="계좌가 만든 현금"
+          value={formatKrwSigned(netCash)}
+          hint={
+            data
+              ? `배당 ${formatKrwString(data.dividend_krw)} − 비용 ${formatKrwString(data.cost_krw)}`
+              : "배당 − 수수료·세금"
+          }
+          actionHint="눌러서 매매·배당·비용 보기"
+          onClick={() => setPanel("trading")}
+          accent="auto"
+          loading={report.isLoading}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+        <StubCard
+          title={p ? `${p.label} 요약` : "요약"}
+          action={
+            <button
+              type="button"
+              onClick={() => setNotesOpen(true)}
+              className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
+            >
+              한계
             </button>
-          ))}
-        </div>
-
-        <div className="grid shrink-0 grid-cols-2 gap-2.5 lg:grid-cols-4">
-          {/* ★2026-10-05 이름은 벤치마크 화면과 같게 — 위 값은 환율 제외(키움 손익). */}
-          <StatTile
-            label="내 계좌 (환율 제외)"
-            value={
-              acctPoint?.return_ratio == null ? null : formatPercentString(acctPoint.return_ratio)
-            }
-            // 보조: 원화 실질(환차 포함, 총자산 − 원금). 위 값은 환율 제외(키움 손익).
-            //   ★2026-10-05 한 줄이면 잘린다(1280px 실측) — 기간·TWR 과 원화 실질을 두 줄로.
-            hint={
-              acctPoint
-                ? `${account.data ? `${account.data.start.slice(5)} ` : ""}~ ${acctPoint.date.slice(5)} · 참고 TWR ${formatPercentString(data?.twr)}`
-                : "시작일 이후 손익 ÷ 투입 원금"
-            }
-            subHint={
-              acctPoint?.krw_return_ratio != null
-                ? `원화 실질 ${formatPercentString(acctPoint.krw_return_ratio)}`
-                : undefined
-            }
-            actionHint="눌러서 벤치마크 대비 보기"
-            onClick={() => setPanel("benchmarks")}
-            accent="auto"
-            loading={report.isLoading || account.isLoading}
-          />
-          <StatTile
-            label="자산 변화"
-            value={
-              data?.opening_assets_krw && data.closing_assets_krw
-                ? formatKrwSigned(
-                    String(
-                      Number(data.closing_assets_krw) - Number(data.opening_assets_krw),
-                    ),
-                  )
-                : null
-            }
-            hint={
-              data?.opening_assets_krw && data.closing_assets_krw
-                ? `${formatKrwCompactString(data.opening_assets_krw)} → ${formatKrwCompactString(data.closing_assets_krw)}`
-                : "시작 → 끝"
-            }
-            actionHint="눌러서 '그 외' 분해 보기"
-            onClick={() => setResidualOpen(true)}
-            accent="auto"
-            loading={report.isLoading}
-          />
-          <StatTile
-            label="실현손익"
-            value={formatKrwSigned(data?.realized_total_krw)}
-            hint={
-              data
-                ? `매수 ${data.buy_count} · 매도 ${data.sell_count}건`
-                : "확정된 손익"
-            }
-            actionHint="눌러서 종목별 보기"
-            onClick={() => setPanel("realized")}
-            accent="auto"
-            loading={report.isLoading}
-          />
-          <StatTile
-            label="계좌가 만든 현금"
-            value={formatKrwSigned(netCash)}
-            hint={
-              data
-                ? `배당 ${formatKrwString(data.dividend_krw)} − 비용 ${formatKrwString(data.cost_krw)}`
-                : "배당 − 수수료·세금"
-            }
-            actionHint="눌러서 매매·배당·비용 보기"
-            onClick={() => setPanel("trading")}
-            accent="auto"
-            loading={report.isLoading}
-          />
-        </div>
-
-        <div
-          className={cn(
-            "grid min-h-0 flex-1 gap-3",
-            "grid-cols-1 auto-rows-[minmax(0,1fr)]",
-            "md:grid-cols-2 lg:auto-rows-auto",
-            "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]",
-          )}
+          }
         >
-          <StubCard
-            title={p ? `${p.label} 요약` : "요약"}
-            scrollBody
-            action={
-              <button
-                type="button"
-                onClick={() => setNotesOpen(true)}
-                className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
-              >
-                한계
-              </button>
-            }
-          >
-            {report.isLoading ? (
+          {report.isLoading ? (
+            <div className="h-[200px]">
               <CardEmpty text="불러오는 중…" />
-            ) : data == null || p == null ? (
+            </div>
+          ) : data == null || p == null ? (
+            <div className="h-[200px]">
               <CardEmpty text="표시할 기간이 없습니다" />
-            ) : (
-              <Summary data={data} onExplain={() => setResidualOpen(true)} />
-            )}
-          </StubCard>
+            </div>
+          ) : (
+            <Summary data={data} onExplain={() => setResidualOpen(true)} />
+          )}
+        </StubCard>
 
-          <StubCard
-            title="신규 · 청산"
-            subtitle={
-              data ? `포지션 변화 · 실현 ${data.realized.length}종목` : "포지션 변화"
-            }
-            scrollBody
-            action={
-              <button
-                type="button"
-                onClick={() => setPanel("realized")}
-                className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
-              >
-                실현 목록
-              </button>
-            }
-          >
-            {report.isLoading ? (
+        <StubCard
+          title="신규 · 청산"
+          subtitle={data ? `포지션 변화 · 실현 ${data.realized.length}종목` : "포지션 변화"}
+          action={
+            <button
+              type="button"
+              onClick={() => setPanel("realized")}
+              className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-white/25"
+            >
+              실현 목록
+            </button>
+          }
+        >
+          {report.isLoading ? (
+            <div className="h-[200px]">
               <CardEmpty text="불러오는 중…" />
-            ) : data == null ? (
+            </div>
+          ) : data == null ? (
+            <div className="h-[200px]">
               <CardEmpty text="표시할 내역이 없습니다" />
-            ) : (
-              <Changes data={data} />
-            )}
-          </StubCard>
-        </div>
-      </PageContainer>
+            </div>
+          ) : (
+            <Changes data={data} />
+          )}
+        </StubCard>
+      </div>
 
       {/* ── 요약 칸 → 상세 ───────────────────────────────────────────────── */}
-      <Modal
-        open={panel === "benchmarks"}
-        onClose={() => setPanel(null)}
-        title="벤치마크 대비"
-        subtitle={
-          p
-            ? `${p.label} · 참고: 시간가중(TWR) 기간 수익률 ${formatPercentString(data?.twr)} · 원화 환산`
-            : undefined
-        }
-        width={560}
-      >
-        {data && <Benchmarks data={data} />}
-      </Modal>
-
       <Modal
         open={panel === "realized"}
         onClose={() => setPanel(null)}
@@ -310,11 +253,7 @@ export default function ReportPage() {
         {data && <ResidualDetail data={data} />}
       </Modal>
 
-      <Modal
-        open={notesOpen}
-        onClose={() => setNotesOpen(false)}
-        title="이 리포트의 한계"
-      >
+      <Modal open={notesOpen} onClose={() => setNotesOpen(false)} title="이 리포트의 한계">
         <ul className="space-y-2">
           {(data?.notes ?? []).map((text) => (
             <li key={text} className="flex items-start gap-2.5">
@@ -326,7 +265,7 @@ export default function ReportPage() {
           ))}
         </ul>
       </Modal>
-    </>
+    </section>
   );
 }
 
@@ -369,33 +308,51 @@ function Summary({ data, onExplain }: { data: Report; onExplain: () => void }) {
         <Line label={data.best_day ?? "—"} value={data.best_day_krw} signed />
         <Line label={data.worst_day ?? "—"} value={data.worst_day_krw} signed />
       </div>
+
+      <Benchmarks data={data} />
     </div>
   );
 }
 
-/** 기간 수익률과 지수 수익률(원화 환산). 옛 요약 카드의 '벤치마크 대비'. */
+/** 기간 수익률과 지수 수익률(원화 환산) — 옛 '벤치마크 대비' 팝업을 한 줄로. */
 function Benchmarks({ data }: { data: Report }) {
   return (
     <div>
+      <p className="mb-1.5 text-[11px] font-bold text-ge-navy">
+        벤치마크 대비
+        <span className="ml-1.5 text-[10px] font-semibold text-ink-faint">
+          참고: 시간가중(TWR) 기간 수익률 {formatPercentString(data.twr)} · 원화 환산
+        </span>
+      </p>
       {data.benchmarks.length === 0 ? (
-        <p className="text-[11px] text-ink-faint">
-          이 기간은 비교할 지수 데이터가 없습니다.
-        </p>
+        <p className="text-[11px] text-ink-faint">이 기간은 비교할 지수 데이터가 없습니다.</p>
       ) : (
-        <DataTable columns={["지수", "지수 수익률", "초과 (참고 TWR)"]} align={["left", "right", "right"]}>
-          {data.benchmarks.map((b) => (
-            <tr key={b.name} className="border-b border-hairline">
-              <Cell left strong>
-                {b.name}
-              </Cell>
-              <Cell tone={tone(b.return_krw)}>{formatPercentString(b.return_krw)}</Cell>
-              {/* ⚠️단위가 %가 아니라 %p 다. 수익률의 차이이기 때문이다. */}
-              <Cell strong tone={tone(b.excess)}>
-                {pp(b.excess)}
-              </Cell>
-            </tr>
-          ))}
-        </DataTable>
+        data.benchmarks.map((b) => (
+          <div key={b.name} className="flex items-baseline justify-between gap-2 text-[12px]">
+            <span className="text-ink-secondary">
+              {b.name}
+              <span
+                className={cn(
+                  "ml-1.5 font-semibold tabular-nums",
+                  toneOfRatio(b.return_krw) === "up" && "text-bid",
+                  toneOfRatio(b.return_krw) === "down" && "text-ask",
+                )}
+              >
+                {formatPercentString(b.return_krw)}
+              </span>
+            </span>
+            {/* ⚠️단위가 %가 아니라 %p 다. 수익률의 차이이기 때문이다. */}
+            <span
+              className={cn(
+                "shrink-0 font-bold tabular-nums",
+                toneOfRatio(b.excess) === "up" && "text-bid",
+                toneOfRatio(b.excess) === "down" && "text-ask",
+              )}
+            >
+              초과 (참고 TWR) {pp(b.excess)}
+            </span>
+          </div>
+        ))
       )}
     </div>
   );
@@ -414,18 +371,16 @@ function Realized({ data }: { data: Report }) {
             <Cell left strong>
               <span className="flex items-center gap-1.5">
                 <span className="max-w-[220px] truncate">{r.name ?? r.ticker}</span>
-                <span className="shrink-0 text-[10px] font-bold text-ink-faint">
-                  {r.ticker}
-                </span>
+                <span className="shrink-0 text-[10px] font-bold text-ink-faint">{r.ticker}</span>
               </span>
             </Cell>
             <Cell tone="muted">{r.sell_count}</Cell>
-            <Cell strong tone={tone(r.pnl_krw)}>
+            <Cell strong tone={toneOfRatio(r.pnl_krw)}>
               {formatKrwSigned(r.pnl_krw)}
             </Cell>
             {/* ⚠️환차를 주가 손익과 더하지 않는다 — 종목이 올라서 번 건지
                 환율로 번 건지 구분이 사라진다. */}
-            <Cell tone={tone(r.fx_pnl_krw)}>{formatKrwSigned(r.fx_pnl_krw)}</Cell>
+            <Cell tone={toneOfRatio(r.fx_pnl_krw)}>{formatKrwSigned(r.fx_pnl_krw)}</Cell>
           </tr>
         ))}
       </DataTable>
@@ -475,9 +430,7 @@ function ChangeList({
                 >
                   {c.ticker}
                 </span>
-                <span className="truncate text-[11px] text-ink-secondary">
-                  {c.name ?? ""}
-                </span>
+                <span className="truncate text-[11px] text-ink-secondary">{c.name ?? ""}</span>
               </span>
               <span className="shrink-0 text-[10px] font-semibold text-ink-faint">
                 {c.first_date.slice(5)}
@@ -507,25 +460,18 @@ function ChangeList({
 function ResidualDetail({ data }: { data: Report }) {
   const r = data.residual;
   return (
-    <div className="space-y-3">
-      <div className="rounded-xl border border-hairline bg-canvas-soft/60 p-3">
-        <Line
-          label="환율"
-          value={r.fx_estimate_krw}
-          signed
-          note={`추정 · ${r.fx_days}일`}
-        />
-        <Line label="배당" value={r.dividend_krw} signed note="실측" />
-        <Line
-          label="수수료·세금"
-          value={r.cost_krw === "0" ? "0" : `-${r.cost_krw}`}
-          signed
-          note="실측"
-        />
-        <Line label="남는 것" value={r.leftover_krw} signed muted note="설명 안 됨" />
-        <div className="mt-1 border-t border-ink pt-1">
-          <Line label="그 외 (합)" value={r.total_krw} signed strong />
-        </div>
+    <div className="rounded-xl border border-hairline bg-canvas-soft/60 p-3">
+      <Line label="환율" value={r.fx_estimate_krw} signed note={`추정 · ${r.fx_days}일`} />
+      <Line label="배당" value={r.dividend_krw} signed note="실측" />
+      <Line
+        label="수수료·세금"
+        value={r.cost_krw === "0" ? "0" : `-${r.cost_krw}`}
+        signed
+        note="실측"
+      />
+      <Line label="남는 것" value={r.leftover_krw} signed muted note="설명 안 됨" />
+      <div className="mt-1 border-t border-ink pt-1">
+        <Line label="그 외 (합)" value={r.total_krw} signed strong />
       </div>
     </div>
   );
@@ -555,11 +501,7 @@ function Line({
         )}
       >
         {label}
-        {note && (
-          <span className="ml-1.5 text-[10px] font-semibold text-ink-faint">
-            {note}
-          </span>
-        )}
+        {note && <span className="ml-1.5 text-[10px] font-semibold text-ink-faint">{note}</span>}
       </span>
       <span
         className={cn(
@@ -574,6 +516,3 @@ function Line({
     </div>
   );
 }
-
-/** 서버 문구의 `**강조**` 만 굵게. dangerouslySetInnerHTML 을 쓰지 않는다. */
-
