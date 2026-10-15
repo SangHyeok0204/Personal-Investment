@@ -37,3 +37,4 @@ storage/llm/
 apps/collector/collector/market_signal/markets.ttl
 apps/web/tsconfig.tsbuildinfo
 .env.local
+storage/ohlcv/
