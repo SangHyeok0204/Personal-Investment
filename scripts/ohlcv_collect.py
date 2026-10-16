@@ -92,9 +92,21 @@ def l1_of() -> dict[str, str]:
     return {ticker.upper(): l1 for ticker, (l1, _color) in ticker_l1_map().items()}
 
 
+# 티커가 바뀐 종목 — 분류(밸류체인)는 옛 티커로 남아 있다. 파일·manifest 는 분류 티커로 두고 야후에서만 새 티커로 받는다.
+# ★2026-10-15 실측 404 → 야후 검색으로 새 티커 확인: BK → BNY(BNY Mellon), ASGN → EFOR(Everforth 로 사명 변경).
+TICKER_ALIASES: dict[str, str] = {
+    "BK": "BNY",
+    "ASGN": "EFOR",
+    # 야후 첫 거래일이 원래 회사 상장일과 같은 것으로 확인(DMC 1997-10-24, PLGO 2023-06-29).
+    "FDP": "DMC",     # Fresh Del Monte Produce → Del Monte Corporation
+    "FIHL": "PLGO",   # Fidelis Insurance → Pelagos Insurance Capital
+    "PSTG": "P",      # Pure Storage → Everpure(야후 첫 거래 2015-10 = Pure Storage 상장 시기)
+}
+
+
 def yahoo_symbol(ticker: str) -> str:
     # 야후는 클래스 주식을 BRK-B 처럼 하이픈으로 쓴다.
-    return ticker.replace(".", "-")
+    return TICKER_ALIASES.get(ticker, ticker).replace(".", "-")
 
 
 # ── 받기 ─────────────────────────────────────────────────────────────────────
@@ -319,7 +331,7 @@ def main() -> int:
     todo = []
     for t in universe:
         m = manifest.get(t)
-        if m and m.get("fetched_at") and m.get("status") != "error":
+        if m and m.get("fetched_at") and m.get("status") not in ("error", "not_found"):
             age = now - datetime.fromisoformat(m["fetched_at"])
             if age < timedelta(hours=args.stale_hours):
                 manifest[t]["l1"] = l1_map.get(t, UNCLASSIFIED)
@@ -350,7 +362,8 @@ def main() -> int:
                     break
                 continue
             entry = {"ticker": t, "l1": l1_map.get(t, UNCLASSIFIED), "status": status,
-                     "fetched_at": datetime.now(timezone.utc).isoformat(), "source": "yahoo"}
+                     "fetched_at": datetime.now(timezone.utc).isoformat(),
+                     "source": f"yahoo:{yahoo_symbol(t)}" if t in TICKER_ALIASES else "yahoo"}
             if rows:
                 write_ticker(t, rows)
                 entry.update(first_date=rows[0]["date"], last_date=rows[-1]["date"], rows=len(rows))
