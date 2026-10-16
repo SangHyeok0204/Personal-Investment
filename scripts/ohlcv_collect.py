@@ -14,7 +14,8 @@
 
 저장(storage/ohlcv/, git 에 안 올라간다):
   _tickers/{TICKER}.csv  종목별 원본 — 이게 정본이다. 다시 돌리면 여기서 이어 받는다.
-  {L1}.csv               L1 별 묶음(ticker,date,open,high,low,close,adj_close,volume) — 매 실행 끝에 다시 만든다.
+  parquet/l1={L1}/data.parquet  L1 별 묶음(ticker,date,open,high,low,close,adj_close,volume; zstd) — 매 실행 끝에 다시 만든다.
+  ohlcv.duckdb           조회용 DuckDB — 뷰 ohlcv(+ l1 열) · manifest · events. 데이터 자체는 Parquet 에 있다.
   _events.csv            분할·배당(ticker,date,type,value)
   _manifest.csv          종목별 L1·구간·행 수·상태·받은 시각
   _collect.log           실행 기록
@@ -273,30 +274,93 @@ def write_events(all_events: dict[str, list[dict]]) -> None:
                 w.writerow({k: e.get(k, "") for k in ["ticker", "date", "type", "value"]})
 
 
-def rebuild_l1_files(manifest: dict[str, dict]) -> dict[str, int]:
-    """L1 별 CSV 를 종목별 원본에서 다시 만든다 — 분류가 바뀌어도 종목이 맞는 파일로 간다."""
+PARQUET_DIR = OUT / "parquet"
+DUCKDB_PATH = OUT / "ohlcv.duckdb"
+
+
+def _sql_str(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def rebuild_l1_files(manifest: dict[str, dict], also_csv: bool = False) -> dict[str, int]:
+    """L1 별 Parquet 을 종목별 원본에서 다시 만든다 — 분류가 바뀌어도 종목이 맞는 파일로 간다.
+
+    ★2026-10-16 사용자 결정: 분석(pandas · DuckDB SQL)용으로 L1 별 CSV 대신 **L1 별 Parquet**(zstd).
+      parquet/l1={L1}/data.parquet — 하이브 분할이라 DuckDB 가 `l1` 을 열로 읽는다.
+      종목·날짜 순으로 정렬해 써서 종목 하나만 읽을 때 행 그룹을 건너뛴다.
+    `also_csv` 면 예전처럼 {L1}.csv 도 같이 쓴다(엑셀로 볼 때). 아니면 남아 있던 L1 CSV 는 지운다.
+    """
+    import duckdb
+
     by_l1: dict[str, list[str]] = {}
     for t, m in manifest.items():
         if (TICKERS_DIR / f"{t}.csv").exists():
             by_l1.setdefault(m["l1"], []).append(t)
-    counts: dict[str, int] = {}
+
     for old in OUT.glob("*.csv"):
-        if not old.name.startswith("_") and old.stem not in by_l1:
-            old.unlink()  # 종목이 하나도 안 남은 L1 파일
+        if not old.name.startswith("_") and (not also_csv or old.stem not in by_l1):
+            old.unlink()
+    PARQUET_DIR.mkdir(exist_ok=True)
+    for part in PARQUET_DIR.glob("l1=*"):
+        if part.name[len("l1="):] not in by_l1:  # 종목이 하나도 안 남은 L1
+            for f in part.iterdir():
+                f.unlink()
+            part.rmdir()
+
+    con = duckdb.connect()
+    counts: dict[str, int] = {}
     for l1, tickers in by_l1.items():
-        path = OUT / f"{l1}.csv"
-        tmp = path.with_suffix(".tmp")
-        n = 0
-        with tmp.open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["ticker", *FIELDS])
-            for t in sorted(tickers):
-                for r in read_ticker(t):
-                    w.writerow([t, *(r[c] for c in FIELDS)])
-                    n += 1
-        tmp.replace(path)
-        counts[l1] = n
+        files = "[" + ", ".join(_sql_str(str(TICKERS_DIR / f"{t}.csv")) for t in sorted(tickers)) + "]"
+        # ⚠️티커는 파일 이름에서 뽑는다(BRK.B 처럼 점이 든 티커도 있다 — 마지막 .csv 만 뗀다).
+        select = f"""
+            SELECT regexp_extract(filename, '([^/]+)\\.csv$', 1) AS ticker,
+                   date, open, high, low, close, adj_close,
+                   CAST(round(volume) AS BIGINT) AS volume
+            FROM read_csv({files}, header = true, filename = true, columns = {{
+                'date': 'DATE', 'open': 'DOUBLE', 'high': 'DOUBLE', 'low': 'DOUBLE',
+                'close': 'DOUBLE', 'adj_close': 'DOUBLE', 'volume': 'DOUBLE'}})
+            ORDER BY ticker, date"""
+        dest = PARQUET_DIR / f"l1={l1}"
+        dest.mkdir(exist_ok=True)
+        tmp = dest / "data.parquet.tmp"
+        con.execute(f"COPY ({select}) TO {_sql_str(str(tmp))} (FORMAT parquet, COMPRESSION zstd)")
+        tmp.replace(dest / "data.parquet")
+        if also_csv:
+            con.execute(f"COPY (SELECT * FROM read_parquet({_sql_str(str(dest / 'data.parquet'))})) "
+                        f"TO {_sql_str(str(OUT / f'{l1}.csv'))} (FORMAT csv, HEADER)")
+        counts[l1] = con.execute(
+            f"SELECT count(*) FROM read_parquet({_sql_str(str(dest / 'data.parquet'))})"
+        ).fetchone()[0]
+    con.close()
+    _refresh_duckdb_views()
     return counts
+
+
+def _refresh_duckdb_views() -> None:
+    """ohlcv.duckdb — 데이터는 Parquet 에 두고 뷰만 둔다(파일이 작고, Parquet 을 다시 쓰면 바로 반영된다).
+
+        import duckdb; con = duckdb.connect("storage/ohlcv/ohlcv.duckdb", read_only=True)
+        con.sql("SELECT l1, count(DISTINCT ticker) FROM ohlcv GROUP BY l1").df()
+    ⚠️DuckDB 파일은 쓰기 연결이 하나뿐이다 — 노트북 등에서 쓰기 모드로 열어 두면 여기서 못 고친다
+      (뷰는 이미 있으니 경고만 남기고 넘어간다). 조회는 read_only=True 로 열 것.
+    """
+    import duckdb
+
+    views = {
+        "ohlcv": f"SELECT * FROM read_parquet({_sql_str(str(PARQUET_DIR) + '/l1=*/data.parquet')}, hive_partitioning = true)",
+        "manifest": f"SELECT * FROM read_csv_auto({_sql_str(str(OUT / '_manifest.csv'))})",
+        "events": f"SELECT * FROM read_csv_auto({_sql_str(str(OUT / '_events.csv'))})",
+    }
+    try:
+        con = duckdb.connect(str(DUCKDB_PATH))
+    except duckdb.IOException as exc:
+        log(f"  ohlcv.duckdb 를 못 열었다(다른 곳에서 쓰기 모드로 열려 있다?) — 뷰 갱신 건너뜀: {exc}")
+        return
+    try:
+        for name, sql in views.items():
+            con.execute(f"CREATE OR REPLACE VIEW {name} AS {sql}")
+    finally:
+        con.close()
 
 
 # ── 실행 ─────────────────────────────────────────────────────────────────────
@@ -308,6 +372,8 @@ def main() -> int:
     ap.add_argument("--max", type=int, default=0, help="이번 실행에서 받을 최대 종목 수(0=제한 없음)")
     ap.add_argument("--stale-hours", type=float, default=12.0,
                     help="이 시간 안에 받은 종목은 건너뛴다")
+    ap.add_argument("--csv", action="store_true", help="L1 별 CSV 도 같이 쓴다(엑셀용)")
+    ap.add_argument("--rebuild-only", action="store_true", help="받지 않고 L1 Parquet·DuckDB 만 다시 만든다")
     args = ap.parse_args()
 
     TICKERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -327,6 +393,10 @@ def main() -> int:
         universe = held_and_watched()
 
     manifest = read_manifest()
+    if args.rebuild_only:
+        counts = rebuild_l1_files(manifest, also_csv=args.csv)
+        log(f"다시 만듦: L1 Parquet {len(counts)}개 — " + ", ".join(f"{k} {v:,}행" for k, v in sorted(counts.items())))
+        return 0
     now = datetime.now(timezone.utc)
     todo = []
     for t in universe:
@@ -377,8 +447,8 @@ def main() -> int:
 
     write_manifest(manifest)
     write_events(events)
-    counts = rebuild_l1_files(manifest)
-    log(f"끝: 받은 종목 {done}, L1 파일 {len(counts)}개 — " +
+    counts = rebuild_l1_files(manifest, also_csv=args.csv)
+    log(f"끝: 받은 종목 {done}, L1 Parquet {len(counts)}개 — " +
         ", ".join(f"{k} {v:,}행" for k, v in sorted(counts.items())))
     return 0
 

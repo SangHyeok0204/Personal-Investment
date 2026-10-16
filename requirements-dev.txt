@@ -1,3 +1,6 @@
 # 호스트 전용 개발 도구 (.venv). Docker 이미지(apps/*/requirements.txt)에는 넣지 않는다.
-# 설치: .venv/bin/pip install -r requirements-dev.txt
+# 설치: uv pip install --python .venv/bin/python -r requirements-dev.txt  (.venv 에 pip 이 없다)
 ruff==0.16.10
+# OHLCV 분석 저장소(scripts/ohlcv_collect.py) — L1 별 Parquet + DuckDB 조회
+duckdb==1.5.6
+pyarrow==26.0.0
