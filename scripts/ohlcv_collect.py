@@ -105,7 +105,16 @@ TICKER_ALIASES: dict[str, str] = {
 }
 
 
+# 키(파일 이름) → 야후 심볼을 직접 정한 것. WLS 해외 종목(2330.TW 등)은 키가 곧 야후 심볼이라 점을 바꾸면 안 된다
+# — scripts/ohlcv_wls.py 가 채운다.
+YAHOO_OVERRIDE: dict[str, str] = {}
+# 마지막으로 받은 응답의 메타(통화 등) — 야후 심볼별.
+LAST_META: dict[str, dict] = {}
+
+
 def yahoo_symbol(ticker: str) -> str:
+    if ticker in YAHOO_OVERRIDE:
+        return YAHOO_OVERRIDE[ticker]
     # 야후는 클래스 주식을 BRK-B 처럼 하이픈으로 쓴다.
     return TICKER_ALIASES.get(ticker, ticker).replace(".", "-")
 
@@ -136,6 +145,7 @@ def fetch(client: httpx.Client, ticker: str, start: int) -> tuple[list[dict], li
     if not result:
         return None
     node = result[0]
+    LAST_META[yahoo_symbol(ticker)] = node.get("meta") or {}
     tz = ZoneInfo(node.get("meta", {}).get("exchangeTimezoneName") or "America/New_York")
     stamps = node.get("timestamp") or []
     q = (node.get("indicators") or {}).get("quote") or [{}]
@@ -246,7 +256,7 @@ def read_manifest() -> dict[str, dict]:
 
 
 def write_manifest(rows: dict[str, dict]) -> None:
-    cols = ["ticker", "l1", "first_date", "last_date", "rows", "status", "fetched_at", "source"]
+    cols = ["ticker", "l1", "first_date", "last_date", "rows", "status", "fetched_at", "source", "currency"]
     with (OUT / "_manifest.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -294,7 +304,8 @@ def rebuild_l1_files(manifest: dict[str, dict], also_csv: bool = False) -> dict[
 
     by_l1: dict[str, list[str]] = {}
     for t, m in manifest.items():
-        if (TICKERS_DIR / f"{t}.csv").exists():
+        # l1 이 빈 종목은 WLS 로만 들어온 해외 종목 — L1 파일이 아니라 WLS 지역 파일(ohlcv_wls.py)에 간다.
+        if m.get("l1") and (TICKERS_DIR / f"{t}.csv").exists():
             by_l1.setdefault(m["l1"], []).append(t)
 
     for old in OUT.glob("*.csv"):
@@ -351,6 +362,11 @@ def _refresh_duckdb_views() -> None:
         "manifest": f"SELECT * FROM read_csv_auto({_sql_str(str(OUT / '_manifest.csv'))})",
         "events": f"SELECT * FROM read_csv_auto({_sql_str(str(OUT / '_events.csv'))})",
     }
+    # WLS(블룸버그 대회 지수) — scripts/ohlcv_wls.py 가 만든 지역별 Parquet 이 있을 때만.
+    if any((OUT / "parquet_wls").glob("region=*/data.parquet")):
+        views["wls_ohlcv"] = (f"SELECT * FROM read_parquet({_sql_str(str(OUT / 'parquet_wls') + '/region=*/data.parquet')},"
+                              " hive_partitioning = true)")
+        views["wls_map"] = f"SELECT * FROM read_csv_auto({_sql_str(str(OUT / '_wls_map.csv'))}, all_varchar = true)"
     try:
         con = duckdb.connect(str(DUCKDB_PATH))
     except duckdb.IOException as exc:
@@ -436,7 +452,8 @@ def main() -> int:
                      "source": f"yahoo:{yahoo_symbol(t)}" if t in TICKER_ALIASES else "yahoo"}
             if rows:
                 write_ticker(t, rows)
-                entry.update(first_date=rows[0]["date"], last_date=rows[-1]["date"], rows=len(rows))
+                entry.update(first_date=rows[0]["date"], last_date=rows[-1]["date"], rows=len(rows),
+                             currency=LAST_META.get(yahoo_symbol(t), {}).get("currency", ""))
                 events[t] = evs
             manifest[t] = {**manifest.get(t, {}), **entry}
             done += 1
