@@ -170,6 +170,8 @@ def fetch(client: httpx.Client, ticker: str, start: int) -> tuple[list[dict], li
             "adj_close": adj[i] if i < len(adj) else None,
             "volume": q["volume"][i],
         })
+    # ⚠️같은 날짜의 봉이 두 번 오는 시장이 있다(2026-10-18 실측: 호주·뉴질랜드 종목의 마지막 날) — 날짜당 마지막 것만.
+    bars = list({b["date"]: b for b in bars}.values())
     events: list[dict] = []
     ev = node.get("events") or {}
     for d in (ev.get("dividends") or {}).values():

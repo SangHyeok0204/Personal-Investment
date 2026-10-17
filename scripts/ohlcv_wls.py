@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import fcntl
 import random
 import sqlite3
@@ -61,6 +62,10 @@ EXCHANGE_SUFFIX: dict[str, list[str]] = {
     "HB": [".BD"], "CK": [".PR"], "CX": [".CL"], "PE": [".LM"],
 }
 PRICE_OK = (0.67, 1.5)
+# 검색으로 찾은 심볼은 더 좁게 — 넓으면 이름 비슷한 다른 회사가 통과한다(2026-10-18 실측: BHE IS 바라트 일렉트로닉스 →
+# BHEL.NS(바라트 헤비) 1.13, JKI IS JK 타이어 → JKIL.NS 1.27, HCP IS → HPBL.BO 0.71). 엑셀 가격이 기준일과 며칠
+# 어긋나 정상 매핑도 ±10% 안팎은 흔하다(대회 매핑 5,575개 중 963개가 5~10%) — 그래서 0.85~1.18.
+PRICE_OK_SEARCH = (0.85, 1.18)
 PRICE_UNIT = (67.0, 150.0)  # 100배(보조 단위) 차이
 MAP_COLS = ["bbg", "code", "exch", "region", "name_ko", "wls_weight", "wls_price", "key", "yahoo",
             "method", "price_ratio", "status", "checked_at"]
@@ -121,7 +126,8 @@ def candidates(row: dict, gtc: dict[str, str]) -> list[tuple[str, str]]:
 
 def allowed(sym: str, exch: str) -> bool:
     if exch in US_EXCH:
-        return "." not in sym
+        # ⚠️검색이 옵션 계약(NXDR261218P00005000)을 돌려준 적이 있다 — 보통 티커 모양만.
+        return re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", sym) is not None
     if exch in ("C", "C1", "C2"):
         return sym.endswith((".SS", ".SZ", ".BJ"))
     if exch == "HK":
@@ -150,7 +156,7 @@ def search(client: httpx.Client, code: str, exch: str) -> list[str]:
     raise oc.RateLimited("search")
 
 
-def price_check(rows: list[dict], wls_price, as_of: date) -> tuple[str, float | None]:
+def price_check(rows: list[dict], wls_price, as_of: date, method: str = "") -> tuple[str, float | None]:
     try:
         target = float(wls_price)
     except (TypeError, ValueError):
@@ -163,7 +169,8 @@ def price_check(rows: list[dict], wls_price, as_of: date) -> tuple[str, float | 
     if close in (None, "") or not target:
         return "price_mismatch", None
     ratio = float(close) / target
-    if PRICE_OK[0] <= ratio <= PRICE_OK[1]:
+    lo, hi = PRICE_OK_SEARCH if method == "search" else PRICE_OK
+    if lo <= ratio <= hi:
         return "ok", ratio
     if PRICE_UNIT[0] <= ratio <= PRICE_UNIT[1] or PRICE_UNIT[0] <= 1 / ratio <= PRICE_UNIT[1]:
         return "ok_unit", ratio
@@ -192,8 +199,12 @@ def rebuild_wls(wls_map: dict[str, dict], manifest: dict[str, dict]) -> dict[str
     """지역별 Parquet — 매핑된(검증 결과 무관, map_status 로 표시) 종목만."""
     import duckdb
 
+    # ⚠️검색이 다른 회사 심볼을 집어 오면 한 키를 블룸버그 티커 둘이 갖는다(2026-10-18 실측 6건: TC IS·TCS IS → TCS.NS).
+    #   검증을 통과한 쪽만 그 키를 갖는다 — 아니면 같은 일봉이 두 번 들어간다.
+    owned = {r["key"] for r in wls_map.values() if r.get("key") and r["status"] in GOOD}
     picked = [r for r in wls_map.values()
-              if r.get("key") and (oc.TICKERS_DIR / f"{r['key']}.csv").exists()]
+              if r.get("key") and (oc.TICKERS_DIR / f"{r['key']}.csv").exists()
+              and (r["status"] in GOOD or r["key"] not in owned)]
     PARQUET_WLS.mkdir(exist_ok=True)
     con = duckdb.connect()
     con.execute("CREATE TABLE m (bbg VARCHAR, ticker VARCHAR, yahoo VARCHAR, name_ko VARCHAR, "
@@ -231,6 +242,30 @@ def rebuild_wls(wls_map: dict[str, dict], manifest: dict[str, dict]) -> dict[str
     return counts
 
 
+def recheck(wls_map: dict[str, dict], as_of: date) -> None:
+    """저장된 일봉으로 검증 규칙을 다시 적용하고, 한 키를 둘이 가지면 규칙·대회 매핑 쪽을 남긴다."""
+    for r in wls_map.values():
+        if not r.get("key"):
+            continue
+        if r["method"] == "search" and not allowed(r["yahoo"], r["exch"]):
+            r.update(status="not_found", price_ratio="", key="", yahoo="")
+            continue
+        data = oc.read_ticker(r["key"])
+        if data:
+            status, ratio = price_check(data, r["wls_price"], as_of, r["method"])
+            r.update(status=status, price_ratio=f"{ratio:.4f}" if ratio else "")
+    by_key: dict[str, list[dict]] = {}
+    for r in wls_map.values():
+        if r.get("key") and r["status"] in GOOD:
+            by_key.setdefault(r["key"], []).append(r)
+    for rows in by_key.values():
+        if len(rows) > 1:
+            rows.sort(key=lambda r: (r["method"] == "search", abs(float(r["price_ratio"] or 9) - 1)))
+            for loser in rows[1:]:
+                loser.update(status="conflict")
+                oc.log(f"  충돌: {loser['bbg']} → {loser['yahoo']} 는 {rows[0]['bbg']} 가 가짐")
+
+
 # ── 실행 ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -241,6 +276,8 @@ def main() -> int:
     ap.add_argument("--stale-hours", type=float, default=12.0)
     ap.add_argument("--retry-failed", action="store_true", help="못 찾은·가격 불일치 종목도 다시 시도")
     ap.add_argument("--rebuild-only", action="store_true")
+    ap.add_argument("--recheck", action="store_true",
+                    help="받지 않고 저장본으로 가격 검증·충돌 규칙만 다시 적용(그 뒤 Parquet 다시 만들기)")
     ap.add_argument("--bbg", help="쉼표로 지정한 블룸버그 티커만(예: 'HDFCB IS,700 HK')")
     args = ap.parse_args()
 
@@ -254,7 +291,10 @@ def main() -> int:
 
     manifest = oc.read_manifest()
     wls_map = read_map()
-    if args.rebuild_only:
+    if args.recheck:
+        recheck(wls_map, date.fromisoformat(args.price_date))
+        write_map(wls_map)
+    if args.rebuild_only or args.recheck:
         counts = rebuild_wls(wls_map, manifest)
         oc.log("WLS 다시 만듦: " + ", ".join(f"{k} {v:,}행" for k, v in counts.items()))
         return 0
@@ -283,6 +323,7 @@ def main() -> int:
         todo = todo[: args.max]
     oc.log(f"WLS 시작: 엑셀 {len(rows)}종목(대회 매핑 {len(gtc)}), 이번에 받을 것 {len(todo)}종목")
 
+    owned_keys = {v["key"]: b for b, v in wls_map.items() if v.get("key") and v["status"] in GOOD}
     events: dict[str, list[dict]] = {}
     fails = done = 0
     first = True
@@ -306,6 +347,8 @@ def main() -> int:
                     yahoo, method = queue.pop(0)
                     tried.append(yahoo)
                     key = key_of(yahoo)
+                    if key in owned_keys and owned_keys[key] != r["bbg"]:
+                        continue  # 다른 블룸버그 티커가 이미 검증을 통과해 가진 심볼 — 다른 회사다
                     oc.YAHOO_OVERRIDE[key] = yahoo
                     m = manifest.get(key, {})
                     if (m.get("fetched_at") and m.get("status") not in ("error", "not_found")
@@ -318,7 +361,7 @@ def main() -> int:
                         fetch_status, data, evs = oc.collect_one(client, key)
                     if not data:
                         continue
-                    status, ratio = price_check(data, r["wls_price"], as_of)
+                    status, ratio = price_check(data, r["wls_price"], as_of, method)
                     if best is None or (status in GOOD and best[0] not in GOOD):
                         best = (status, ratio, key, yahoo, method, fetch_status, data, evs)
                     if status in GOOD:
