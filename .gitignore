@@ -38,3 +38,5 @@ apps/collector/collector/market_signal/markets.ttl
 apps/web/tsconfig.tsbuildinfo
 .env.local
 storage/ohlcv/
+# ★2026-11-02 채용 공고 크롤 스냅샷(finance-jobs 스킬) — 개인 데이터라 커밋하지 않는다.
+storage/jobs/

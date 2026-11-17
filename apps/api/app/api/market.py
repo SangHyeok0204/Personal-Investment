@@ -15,16 +15,18 @@
 
 import sys
 import threading
+from collections import OrderedDict
 import time
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path as PathParam, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppError
 from app.db.session import get_db
 from app.models import Asset, CurrentPosition
 
@@ -32,6 +34,7 @@ from app.core import ai_live
 from app.schemas import (
     AiSourceOut,
     AiStatusOut,
+    CandlesOut,
     MarketNewsOut,
     TopicArticleOut,
     TopicOut,
@@ -57,7 +60,7 @@ if str(_WORKER_DIR) not in sys.path:
 from prices import ai_data as ai_source  # noqa: E402
 from prices import earnings as earnings_source  # noqa: E402
 from prices import fred  # noqa: E402
-from prices.history import PERIODS, base_values, changes, fetch_series  # noqa: E402
+from prices.history import PERIODS, base_values, changes, fetch_candles, fetch_series  # noqa: E402
 
 router = APIRouter(prefix="/api/v1/market", tags=["market"])
 
@@ -511,6 +514,44 @@ def get_earnings(
     built = _build_earnings(wanted)
     with _earnings_lock:
         _earnings_cache[key] = (time.monotonic(), built)
+    return built
+
+
+# ── 관심종목 봉차트 (/candles/{symbol}) ─────────────────────────────────────
+#
+# ★2026-10-20 사용자 요청: 관심종목 행을 누르면 최근 N년 봉차트. 행을 누를 때만 부른다.
+#   화면은 10년치를 **한 번** 받고 1Y·3Y·5Y 버튼은 보이는 구간만 바꾼다(다시 받지 않는다).
+# ⚠️캐시는 종목 수를 묶는다(`_CANDLES_MAX`) — 이것저것 눌러 봐도 서버 메모리가 늘지 않게.
+#   10년 일봉 한 종목 ≈ 2,500봉 × 6열이라 64종목이어도 수 MB 다.
+_CANDLES_TTL_SECONDS = 3600.0
+_CANDLES_MAX = 64
+_candles_lock = threading.Lock()
+_candles_cache: "OrderedDict[tuple[str, int], tuple[float, CandlesOut]]" = OrderedDict()
+
+
+@router.get("/candles/{symbol}", response_model=CandlesOut)
+def get_candles(
+    # 티커 모양만 받는다 — 아무 문자열이나 야후까지 보내지 않게(실패는 캐시하지 않으므로).
+    symbol: str = PathParam(pattern=r"^[A-Za-z0-9.\-^=]{1,15}$"),
+    years: int = Query(default=10, ge=1, le=20),
+) -> CandlesOut:
+    """최근 `years` 년 일봉 OHLCV(야후). 1시간 캐시."""
+    key = (symbol.strip().upper(), years)
+    now = time.monotonic()
+    with _candles_lock:
+        hit = _candles_cache.get(key)
+        if hit is not None and now - hit[0] < _CANDLES_TTL_SECONDS:
+            _candles_cache.move_to_end(key)
+            return hit[1]
+    candles = fetch_candles(key[0], years=years)
+    if candles is None:
+        raise AppError(502, "CANDLES_UNAVAILABLE", f"{key[0]} 일봉을 받지 못했습니다.")
+    built = CandlesOut(**candles.__dict__)
+    with _candles_lock:
+        _candles_cache[key] = (time.monotonic(), built)
+        _candles_cache.move_to_end(key)
+        while len(_candles_cache) > _CANDLES_MAX:
+            _candles_cache.popitem(last=False)
     return built
 
 

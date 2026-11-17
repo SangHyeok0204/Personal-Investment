@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ★2026-11-06 사용자 요청: 채용 공고(/careers 의 원천 storage/jobs/postings.json)를 매 정시 다시 수집한다.
+       손으로 crawl-jobs.sh 를 돌릴 때만 바뀌어 11/03 에 멈춰 있었다. 잠자기 중 놓친 회차는 깨어난 뒤 한 번 돈다. -->
+  <key>Label</key><string>com.personal-investment.jobs-crawl</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/adg01/Developer/Personal-Investment/scripts/crawl-jobs.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Minute</key><integer>0</integer></dict>
+  <key>RunAtLoad</key><false/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>/Users/adg01/Library/Logs/personal-investment/jobs-crawl.log</string>
+  <key>StandardErrorPath</key><string>/Users/adg01/Library/Logs/personal-investment/jobs-crawl.log</string>
+</dict>
+</plist>

@@ -90,6 +90,7 @@ export function StatTile({
   value,
   hint,
   subHint,
+  hintStrong,
   accent,
   loading,
   onClick,
@@ -100,6 +101,8 @@ export function StatTile({
   hint?: string;
   /** ★2026-10-05 설명 둘째 줄(선택). 한 줄에 다 넣으면 좁은 칸에서 잘린다(성과 화면 1280px 실측). */
   subHint?: string;
+  /** ★2026-11-15 사용자 지시: 설명 줄을 숫자(수익률)로 쓸 때 — 보통 캡션보다 진한 회색. */
+  hintStrong?: boolean;
   /** "auto" 면 값의 부호를 보고 상승/하락 색을 고른다. */
   accent?: "up" | "down" | "neutral" | "auto";
   loading?: boolean;
@@ -161,7 +164,14 @@ export function StatTile({
         )}
       </div>
       {hint && (
-        <div className="mt-1 truncate text-[11px] font-medium text-ink-muted">{hint}</div>
+        <div
+          className={cn(
+            "mt-1 truncate text-[11px]",
+            hintStrong ? "font-semibold tabular-nums text-ink-secondary" : "font-medium text-ink-muted",
+          )}
+        >
+          {hint}
+        </div>
       )}
       {subHint && (
         <div className="truncate text-[11px] font-medium text-ink-muted">{subHint}</div>

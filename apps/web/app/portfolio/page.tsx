@@ -44,6 +44,7 @@ import {
   formatQuantityString,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useAccountReturn } from "@/components/performance/queries";
 
 // 자산 현황 — **한 화면에 압축**한다(2026-09-21 사용자 지시).
 //
@@ -211,6 +212,11 @@ export default function PortfolioPage() {
   //   누적, **총기간 = 실현 + 평가**. 시작일 시점 평가익(unrealizedAtStart)은 깎지 않는다 —
   //   총기간 선은 시작일에 0 이 아니라 그날 평가손익에서 출발한다.
   //   (한때 평가손익을 '시작일 이후 변화'로 보였더니 영웅문 숫자와 달라 되돌렸다.)
+  const accountReturn = useAccountReturn();
+  const totalRate =
+    accountReturn.data?.return_ratio != null
+      ? formatPercentString(accountReturn.data.return_ratio)
+      : null;
   const totalPeriodKrw =
     realizedKrw != null && pnlKrw != null ? String(Number(realizedKrw) + Number(pnlKrw)) : null;
 
@@ -354,7 +360,9 @@ export default function PortfolioPage() {
           <StatTile
             label="평가손익"
             value={formatKrwSigned(pnlKrw)}
-            hint={pnlRate != null ? `보유분 · 원가 대비 ${pnlRate}` : "보유분 · 키움 기준"}
+            // ★2026-11-15 사용자 지시: 설명 문구 대신 수익률만(진한 회색). 원가 대비 — 키움 값.
+            hint={pnlRate ?? undefined}
+            hintStrong
             accent="auto"
             loading={summary.isLoading}
             onClick={() => setUnrealizedOpen(true)}
@@ -363,7 +371,10 @@ export default function PortfolioPage() {
           <StatTile
             label="총기간 손익"
             value={formatKrwSigned(totalPeriodKrw)}
-            hint={`실현(${pnlStartShort ?? "시작"}~) + 평가`}
+            // ★2026-11-15 사용자 지시: 수익률만. 정본 '내 계좌 수익률'(성과 분석과 같은 값) —
+            //   (총기간 손익 − 시작 시점 평가익) ÷ (시작 자산 + 순외부입금).
+            hint={totalRate ?? undefined}
+            hintStrong
             accent="auto"
             loading={summary.isLoading || breakdown.isLoading}
             onClick={() => setTotalOpen(true)}
@@ -494,11 +505,27 @@ export default function PortfolioPage() {
                     />
                     {/* 평가손익은 0 에서 출발하지 않는다 — 시작 시점 수준을 적어 두어야
                         "총기간 − 실현 = 평가 − 이 값" 이 화면에서 읽힌다. */}
-                    <Figure
-                      label={`${pnlStartShort ?? "시작"} 시점 평가손익`}
-                      value={formatKrwSigned(unrealizedAtStart)}
-                      tone={toneOf(unrealizedAtStart)}
-                    />
+                    {/* ★2026-11-15 사용자 지적: 커서를 옮겨도 이 칸만 그대로였다(시작 시점 값은 상수).
+                        커서가 있으면 그날까지의 평가손익 **변화**(그날 평가 − 시작 시점 평가)를 보인다. */}
+                    {(() => {
+                      const delta =
+                        pnlHoverPoint?.unrealized_krw != null && unrealizedAtStart != null
+                          ? String(Number(pnlHoverPoint.unrealized_krw) - Number(unrealizedAtStart))
+                          : null;
+                      return pnlHoverPoint ? (
+                        <Figure
+                          label={`평가손익 변화(${pnlStartShort ?? "시작"}~)${dayTag(pnlHoverPoint)}`}
+                          value={formatKrwSigned(delta)}
+                          tone={toneOf(delta)}
+                        />
+                      ) : (
+                        <Figure
+                          label={`${pnlStartShort ?? "시작"} 시점 평가손익`}
+                          value={formatKrwSigned(unrealizedAtStart)}
+                          tone={toneOf(unrealizedAtStart)}
+                        />
+                      );
+                    })()}
                     {/* 키움이 지금 보여 주는 평가손익(보유분 전체) — 변화 = 이 값 − 시작 시점 값. */}
                     <Figure
                       label={pnlHoverPoint ? `평가손익${dayTag(pnlHoverPoint)}` : "현재 평가손익(키움)"}

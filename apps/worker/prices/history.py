@@ -115,6 +115,74 @@ def fetch_series(
         client.close()
 
 
+@dataclass(frozen=True)
+class Candles:
+    """한 심볼의 일봉 OHLCV — **열 단위** 배열(같은 인덱스가 같은 날). 오름차순, 결측 봉은 뺐다.
+
+    ★열 단위로 둔다 — 봉마다 객체를 만들면 10년치(≈2,500봉)가 JSON 에서 키 이름만 수만 번 반복된다.
+    """
+
+    symbol: str
+    currency: str
+    time: list[str]          # YYYY-MM-DD (거래소 현지 날짜)
+    open: list[float]
+    high: list[float]
+    low: list[float]
+    close: list[float]
+    volume: list[int]
+
+
+def fetch_candles(symbol: str, *, years: int = 10, timeout: float = 12.0) -> Candles | None:
+    """최근 `years` 년 일봉 OHLCV. 못 받으면 None(예외를 내지 않는다).
+
+    ⚠️`range=10y` 처럼 긴 range 를 주면 야후가 일봉을 월봉으로 바꿔 줄 때가 있다
+      (`scripts/ohlcv_collect.py` 실측) — period1/period2 로 구간을 직접 준다.
+    ⚠️날짜는 `gmtoffset` 으로 **거래소 현지** 날짜로 바꾼다. UTC 로 자르면 아시아 종목이 하루 밀린다.
+    ⚠️OHLC 중 하나라도 null 인 봉은 뺀다(휴장·누락). 0 으로 채우면 폭락 봉이 그려진다.
+    """
+    now = int(datetime.now(timezone.utc).timestamp())
+    start = now - int(years * 365.25 * 86400)
+    try:
+        with httpx.Client(timeout=timeout, headers={"User-Agent": _UA}) as client:
+            response = client.get(
+                f"{BASE}/{symbol}",
+                params={"period1": start, "period2": now, "interval": "1d", "events": "history"},
+            )
+        if response.status_code != 200:
+            return None
+        result = (response.json().get("chart") or {}).get("result") or []
+        if not result:
+            return None
+        node = result[0]
+        meta = node.get("meta") or {}
+        stamps = node.get("timestamp") or []
+        q = ((node.get("indicators") or {}).get("quote") or [{}])[0]
+    except Exception:
+        return None
+
+    offset = int(meta.get("gmtoffset") or 0)
+    out = Candles(symbol=symbol, currency=meta.get("currency") or "",
+                  time=[], open=[], high=[], low=[], close=[], volume=[])
+    rows = zip(stamps, q.get("open") or [], q.get("high") or [], q.get("low") or [],
+               q.get("close") or [], q.get("volume") or [])
+    last_day = None
+    for stamp, o, h, low, c, v in rows:
+        if None in (o, h, low, c):
+            continue
+        day = datetime.fromtimestamp(stamp + offset, tz=timezone.utc).date().isoformat()
+        if day == last_day:      # 같은 날 봉이 두 번 오면(장중 마지막 봉) 뒤의 것으로
+            for col in (out.time, out.open, out.high, out.low, out.close, out.volume):
+                col.pop()
+        last_day = day
+        out.time.append(day)
+        out.open.append(round(float(o), 4))
+        out.high.append(round(float(h), 4))
+        out.low.append(round(float(low), 4))
+        out.close.append(round(float(c), 4))
+        out.volume.append(int(v or 0))
+    return out if out.time else None
+
+
 # 화면에 세울 기간. (라벨, 달력일수). YTD 는 일수가 아니라 따로 계산한다.
 PERIODS: list[tuple[str, int]] = [
     ("1D", 1),

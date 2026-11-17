@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ★2026-10-30 사용자 요청: 대시보드(웹 :3000 + API :8000)를 하루 2번 껐다 켠다(next dev 가 오래 떠 있으면 느려짐).
+       06:30 = 미국장 마감 뒤·07:10 이후 수집 작업 전, 18:30 = 16:30 키움 이력 동기화 뒤. -->
+  <key>Label</key><string>com.personal-investment.dashboard-restart</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/adg01/Developer/Personal-Investment/scripts/restart-dashboard.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+  <key>RunAtLoad</key><false/>
+  <!-- 스크립트가 띄운 서버(nohup)가 스크립트 종료 뒤에도 살아 있어야 한다 — 프로세스 그룹을 거두지 않는다. -->
+  <key>AbandonProcessGroup</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/adg01/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>/Users/adg01/Library/Logs/personal-investment/dashboard-restart.log</string>
+  <key>StandardErrorPath</key><string>/Users/adg01/Library/Logs/personal-investment/dashboard-restart.log</string>
+</dict>
+</plist>

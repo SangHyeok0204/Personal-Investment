@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLiveQueryOptions } from "@/components/layout/auto-refresh-context";
+import { CandleChart } from "@/components/charts/candle-chart";
 import { Cell, DataTable, StubCard } from "@/components/stub";
 import {
   addWatchlist,
@@ -27,6 +28,8 @@ import {
 //   일 종가 vs 5·20·60거래일 전 종가다. 당일 등락만 실시간이다. 이력이 모자라면 "—".
 // ★2026-10-04 행 색 = 밸류체인 분류 L1 기준색(왼쪽 띠 + 아주 옅은 배경 + 티커 옆 칩).
 //   분류에 없는 티커(ETF 등)는 색이 없다 — 추측해 칠하지 않는다.
+// ★2026-10-20 사용자 요청: 행을 누르면 바로 아래에 일봉 봉차트(`CandleChart`)가 펼쳐진다.
+//   한 번에 하나만 연다 — 차트(canvas)를 여러 개 띄워 메모리를 쓰지 않게. 다시 누르면 닫힌다.
 
 function pct(value: string | null, digits = 2): string {
   if (value == null) return "—";
@@ -125,6 +128,7 @@ export function WatchlistTab() {
   const [ticker, setTicker] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [chartId, setChartId] = useState<string | null>(null);
   // 기본: 당일 등락 내림차순.
   const [sort, setSort] = useState<{ column: number; dir: "asc" | "desc" }>({
     column: 4,
@@ -320,9 +324,12 @@ export function WatchlistTab() {
         }
       >
         {sorted.map((i) => (
+          <Fragment key={i.id}>
           <tr
-            key={i.id}
-            className="border-b border-hairline transition-colors hover:bg-canvas-soft"
+            onClick={() => setChartId((cur) => (cur === i.id ? null : i.id))}
+            aria-expanded={chartId === i.id}
+            title="누르면 봉차트"
+            className="cursor-pointer border-b border-hairline transition-colors hover:bg-canvas-soft"
             // L1 색을 아주 옅게(hex 알파 0x0D ≈ 5%). 글자 대비를 해치지 않는 선.
             style={i.l1_color ? { backgroundColor: `${i.l1_color}0D` } : undefined}
           >
@@ -387,6 +394,8 @@ export function WatchlistTab() {
               <RangeBar position={i.fifty_two_week_position} />
             </Cell>
             <Cell className="py-1.5">
+              {/* 삭제 버튼을 눌러도 행 클릭(봉차트)으로 번지지 않게 */}
+              <span onClick={(e) => e.stopPropagation()}>
               {confirmId === i.id ? (
                 <span className="inline-flex items-center gap-1.5">
                   <button
@@ -416,8 +425,17 @@ export function WatchlistTab() {
                   ×
                 </button>
               )}
+              </span>
             </Cell>
           </tr>
+          {chartId === i.id && (
+            <tr className="border-b border-hairline bg-canvas-soft">
+              <td colSpan={COLUMNS.length} className="p-2">
+                <CandleChart symbol={i.ticker} name={i.asset_name} />
+              </td>
+            </tr>
+          )}
+          </Fragment>
         ))}
       </DataTable>
     </StubCard>

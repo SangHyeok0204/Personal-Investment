@@ -116,6 +116,11 @@ def crawl_dates(days: list[date], *, on_day=None, launch_timeout_ms: int = 90000
                 pass
             if any(t in (page.title() or "").lower() for t in _BLOCKED_TITLES) or page.locator(_TABLE).count() == 0:
                 raise InvestingBlocked(f"Cloudflare 통과 실패 — 제목 '{page.title()}'")
+            # ★2026-10-28: 표 선택자는 자리표시 행에도 바로 맞는다 — 첫 표가 실제로 찰 때까지 기다린 뒤 날짜를 바꾼다
+            #   (실측: 열고 2초 뒤에 찼다). 로드 중에 날짜를 바꾸면 첫 날짜가 빈손으로 끝날 수 있다.
+            started = time.monotonic()
+            while time.monotonic() - started < SETTLE_TIMEOUT and not any(_hdr(x) for x in _read_raw(page)):
+                time.sleep(SETTLE_POLL)
             _block_noise(page)
             _cookie(page)
             for day in days:
@@ -152,12 +157,81 @@ def _cookie(page) -> None:
         pass
 
 
-def _first_row(page) -> str:
-    try:
-        rows = page.locator(f"{_TABLE} tbody tr")
-        return rows.nth(1).text_content()[:100] if rows.count() > 1 else ""
-    except Exception:
-        return ""
+# ★2026-10-28: 날짜를 바꾼 뒤 '1.5초 고정 대기'를 버리고, **요청한 날의 표가 다 찼는지** 보고 읽는다.
+#   실측(10-29 표, 사용자 승인 1회 진단): 적용 후 1.5·3·5·8초에는 종목 없는 자리표시 35행뿐이었고, 12초에야
+#   223행이 찼다. 고정 1.5초로 읽으면 자리표시·반쯤 찬 표를 읽어 매출 컨센이 거의 매칭되지 않았다
+#   (10-22~28 회차당 신규 0~2건, rows_seen 이 같은 날짜에도 크게 흔들림).
+SETTLE_TIMEOUT = 45.0   # 이 시간 안에 안정되지 않으면 그때까지 본 표로 판정한다(날짜가 안 바뀌었으면 아래에서 재시도)
+#   ⚠️2026-10-28 실측: 10-29 표는 적용 후 13.2초, 10-30 은 4.1초에 찼다. 25초로는 서버가 느린 날 놓쳤다(1일치 확인 0행).
+SETTLE_POLL = 1.0
+SETTLE_REPEATS = 3      # 그날 행 수가 연속 3번 같으면 다 찬 것으로 본다
+
+_READ_ROWS = """(sel) => {
+    const t = document.querySelector(sel);
+    if (!t) return [];
+    return [...t.querySelectorAll('tbody tr')].map(tr => {
+        const tds = [...tr.querySelectorAll('td')];
+        return {cells: tds.map(td => td.innerText.replace(/\\s+/g, ' ').trim()),
+                paths: tds[7] ? tds[7].querySelectorAll('path').length : 0};
+    });
+}"""
+
+
+def _hdr(x: dict) -> date | None:
+    cells = x.get("cells") or []
+    return header_date(cells[1] if len(cells) > 1 else "")
+
+
+def day_count(raw: list[dict], day: date) -> int | None:
+    """표에서 `day` 머리행 아래 종목 행 수. 그날 머리행이 아직 없으면 None(자리표시·옛 날짜 표)."""
+    seen, count, current = False, 0, None
+    for x in raw:
+        h = _hdr(x)
+        if h:
+            current = h
+            seen = seen or h == day
+            continue
+        if current == day and len(x.get("cells") or []) > 1 and parse_company_ticker(x["cells"][1])[1]:
+            count += 1
+    return count if seen else None
+
+
+def settled(counts: list[int | None], repeats: int = SETTLE_REPEATS) -> bool:
+    """그날 머리행이 보이고, 그날 행 수가 마지막 `repeats` 번 연속 같으면 다 찼다."""
+    tail = counts[-repeats:]
+    return len(tail) == repeats and tail[0] is not None and all(c == tail[0] for c in tail)
+
+
+def _read_raw(page) -> list[dict]:
+    # ⚠️`textContent` 는 빈 글자로 온다(실측) — `innerText` 로, 한 번의 스크립트로 모든 행을 읽는다
+    return page.evaluate(_READ_ROWS, _TABLE)
+
+
+def _wait_settled(page, day: date) -> list[dict]:
+    started, counts, raw = time.monotonic(), [], []
+    while time.monotonic() - started < SETTLE_TIMEOUT:
+        time.sleep(SETTLE_POLL)
+        raw = _read_raw(page)
+        counts.append(day_count(raw, day))
+        if settled(counts):
+            break
+    return raw
+
+
+def rows_for_day(raw: list[dict], day: date) -> list[InvestingRow]:
+    """★행의 날짜는 **표 안의 날짜 머리행**('Wednesday, August 26, 2026')으로 정한다 — 요청한 날로 붙이면,
+    날짜 바꾸기가 조용히 실패했을 때 옛 표의 행이 엉뚱한 날짜로 들어간다(실측: 긴 회차에서 NVDA 8/26 누락)."""
+    rows, current = [], None
+    for x in raw:
+        h = _hdr(x)
+        if h:
+            current = h
+            continue
+        if current == day:
+            r = rows_from_cells(x["cells"], x["paths"], day)
+            if r:
+                rows.append(r)
+    return rows
 
 
 def _one_day(page, day: date) -> list[InvestingRow]:
@@ -165,7 +239,6 @@ def _one_day(page, day: date) -> list[InvestingRow]:
     for attempt in range(3):
         try:
             page.keyboard.press("Escape")                              # 로그인 팝업 닫기(원본 방법 1)
-            before = _first_row(page)
             btn = page.locator("button:has(span:text('Custom dates'))")
             btn.wait_for(state="visible", timeout=10000)
             btn.click()
@@ -181,42 +254,14 @@ def _one_day(page, day: date) -> list[InvestingRow]:
             time.sleep(1)
             if page.locator("#date-picker-start-day").is_visible():
                 page.keyboard.press("Enter")
-            for _ in range(10):
-                time.sleep(random.uniform(0, 1))
-                if _first_row(page) != before:
-                    break
-            try:
-                page.wait_for_selector(f"{_TABLE} tbody tr", timeout=8000)
-            except Exception:
-                return []                                             # 그날 발표 없음
-            time.sleep(1.5)
-            # ⚠️`textContent` 는 빈 글자로 온다(실측) — `innerText` 로, 한 번의 스크립트로 모든 행을 읽는다
-            raw = page.evaluate("""(sel) => {
-                const t = document.querySelector(sel);
-                if (!t) return [];
-                return [...t.querySelectorAll('tbody tr')].map(tr => {
-                    const tds = [...tr.querySelectorAll('td')];
-                    return {cells: tds.map(td => td.innerText.replace(/\\s+/g, ' ').trim()),
-                            paths: tds[7] ? tds[7].querySelectorAll('path').length : 0};
-                });
-            }""", _TABLE)
-            # ★행의 날짜는 **표 안의 날짜 머리행**('Wednesday, August 26, 2026')으로 정한다 — 요청한 날로 붙이면,
-            #   날짜 바꾸기가 조용히 실패했을 때 옛 표의 행이 엉뚱한 날짜로 들어간다(실측: 긴 회차에서 NVDA 8/26 누락).
-            rows, current = [], None
-            for x in raw:
-                hdr = header_date(x["cells"][1] if len(x["cells"]) > 1 else "")
-                if hdr:
-                    current = hdr
-                    continue
-                if current == day:
-                    r = rows_from_cells(x["cells"], x["paths"], day)
-                    if r:
-                        rows.append(r)
-            if current is None or not any(header_date(x["cells"][1] if len(x["cells"]) > 1 else "") == day
-                                          for x in raw):
+            raw = _wait_settled(page, day)
+            if day_count(raw, day) is None:
+                # 그날 머리행이 끝내 안 보였다 — 다른 날짜 표가 남았거나(날짜 바꾸기 실패) 자리표시 행뿐(아직 로드 중)이면
+                # 다시 시도한다. ⚠️자리표시만 보고 '그날 발표 없음'으로 끝내면 안 된다(10-28 1일치 확인에서 0행이 된 원인).
                 if raw and attempt < 2:
                     raise RuntimeError(f"표가 {day} 로 바뀌지 않음")        # 다시 시도
-            return rows
+                return []
+            return rows_for_day(raw, day)
         except Exception:
             if attempt == 2:
                 raise

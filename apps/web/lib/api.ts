@@ -1071,6 +1071,24 @@ export function getEpsHistory(symbol: string): Promise<EpsHistoryRow[]> {
   return request<EpsHistoryRow[]>(`/api/v1/market/earnings/${symbol}/history`);
 }
 
+/** 일봉 OHLCV — 열 단위 배열(같은 인덱스가 같은 날, 오름차순). 관심종목 봉차트용. */
+export type Candles = {
+  symbol: string;
+  currency: string;
+  time: string[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  volume: number[];
+};
+
+export function getCandles(symbol: string, years = 10): Promise<Candles> {
+  return request<Candles>(
+    `/api/v1/market/candles/${encodeURIComponent(symbol)}?years=${years}`,
+  );
+}
+
 // ── AI 생태계 지표 ───────────────────────────────────────────────────────────
 
 export interface Accelerator {

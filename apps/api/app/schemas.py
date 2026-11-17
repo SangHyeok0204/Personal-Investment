@@ -2134,6 +2134,19 @@ class MacroHistoryOut(BaseModel):
     missing: list[str]
 
 
+class CandlesOut(BaseModel):
+    """관심종목 봉차트용 일봉 OHLCV — 열 단위 배열(같은 인덱스가 같은 날, 오름차순)."""
+
+    symbol: str
+    currency: str
+    time: list[str]
+    open: list[float]
+    high: list[float]
+    low: list[float]
+    close: list[float]
+    volume: list[int]
+
+
 # ── AI Key Data v2 (S5) — 소스별 /market/ai/{source} ────────────────────────
 
 class AiSeriesOut(BaseModel):

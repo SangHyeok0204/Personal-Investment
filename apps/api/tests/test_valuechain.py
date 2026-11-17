@@ -251,7 +251,10 @@ def test_api_taxonomy_sector(api, db):
 
 
 def test_load_all_perf_guard():
-    """13 섹터(≈2.5k 기업) 콜드 로드 < 2s, mtime 캐시 웜 로드 < 50ms."""
+    """13 섹터(≈2.5k 기업) 콜드 로드 < 5s, mtime 캐시 웜 로드 < 50ms.
+
+    ★2026-11-16 사용자 결정: 콜드 한도 2s → 5s. 배터리·부하에서 2.0~4.1s 로 흔들려 훅을 막았다
+    (실측). 급격한 저하(수십 초)는 여전히 잡는다."""
     vc._cache.clear()
     t = time.perf_counter()
     vc.load_all()
@@ -259,7 +262,7 @@ def test_load_all_perf_guard():
     t = time.perf_counter()
     vc.load_all()
     warm = time.perf_counter() - t
-    assert cold < 2.0, cold
+    assert cold < 5.0, cold
     assert warm < 0.05, warm
 
 

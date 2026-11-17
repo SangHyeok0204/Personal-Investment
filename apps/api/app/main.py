@@ -26,6 +26,8 @@ from app.api import (
     coverage,
     etf,
     news,
+    strategy,
+    careers,
 )
 from app.core.daily_sync import daily_sync_loop
 from app.core.seasonality_sync import seasonality_sync_loop
@@ -120,3 +122,5 @@ app.include_router(valuechain.router)
 app.include_router(coverage.router)
 app.include_router(etf.router)
 app.include_router(news.router)
+app.include_router(strategy.router)
+app.include_router(careers.router)

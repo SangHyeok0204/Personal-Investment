@@ -225,7 +225,9 @@ def test_history_collapses_to_one_point_per_day(client, db, kiwoom):
     ])
     db.commit()
 
-    body = client.get("/api/v1/portfolio/history?days=30").json()
+    # ⚠️NOW 은 고정 날짜(2026-09-21)이고 API 의 창은 '실제 오늘' 기준이다 — days=30 이면 10-21 부터 빈 결과로 깨졌다.
+    #   창을 최대(1825일)로 넓혀 fixture 날짜를 늘 덮는다(CLAUDE.md §6: '오늘' 기준이 아니라 fixture 를 단언).
+    body = client.get("/api/v1/portfolio/history?days=1825").json()
     assert len(body["items"]) == 2
     assert Decimal(body["items"][-1]["total_assets_krw"]) == Decimal("2980000")
 

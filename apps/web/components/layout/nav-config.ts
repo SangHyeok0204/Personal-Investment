@@ -1,7 +1,9 @@
 import {
   BookOpen,
+  Briefcase,
   Newspaper,
   Settings,
+  Target,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -222,6 +224,41 @@ export const navItems: NavItem[] = [
     ],
   },
   {
+    // ★2026-10-28 사용자 요청: 뉴스/영상과 연동/설정 사이에 [투자 전략]. 롱온리 장기투자 —
+    //   "지금 이 상태에서 사면 n개월 이상 90% 이익이었나". 1단계는 지수·종목 1개, 바스켓은 다음 단계.
+    label: "투자 전략",
+    icon: Target,
+    children: [
+      {
+        label: "타점 승률",
+        href: "/strategy/entry-odds",
+        status: "live",
+        prefix: true,
+        hint: "고점 대비 낙폭별 n개월 보유 승률",
+      },
+      {
+        // ★2026-10-29 전략1 — 바스켓 A − B 의 n일 지표 괴리가 상·하위 10% 면 싼 쪽 매수, 5·10일 뒤 +5% 적중률
+        label: "바스켓 괴리",
+        href: "/strategy/basket-spread",
+        status: "live",
+        hint: "괴리가 벌어지면 싼 바스켓 매수 · hit ratio",
+      },
+      {
+        // ★2026-10-29 전략2 — 연속 하락·볼린저 하단 이탈 뒤 매수의 5·10일 수익
+        label: "웅덩이 매수",
+        href: "/strategy/dip-buy",
+        status: "live",
+        hint: "연속 하락 · 볼린저 하단 이탈 뒤 매수",
+      },
+    ],
+  },
+  {
+    // ★2026-11-02 사용자 요청: [채용 공고] — finance-jobs 스킬 크롤 결과 중 지금 지원 가능한 신입/인턴 공고 표.
+    label: "채용 공고",
+    icon: Briefcase,
+    href: "/careers",
+  },
+  {
     label: "연동/설정",
     icon: Settings,
     href: "/settings",
@@ -230,7 +267,7 @@ export const navItems: NavItem[] = [
         label: "계좌 연동",
         href: "/settings/connections",
         status: "live",
-        hint: "증권사 계좌 · 시세 소스",
+        hint: "계좌 · 데이터 소스 카드",
       },
       {
         label: "수집 상태",

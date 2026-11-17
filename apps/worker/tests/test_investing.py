@@ -3,10 +3,18 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import text
-
 from handlers import earnings_revenue as er
-from prices.investing import InvestingBlocked, InvestingRow, header_date, parse_company_ticker, rows_from_cells
+from prices.investing import (
+    InvestingBlocked,
+    InvestingRow,
+    day_count,
+    header_date,
+    parse_company_ticker,
+    rows_for_day,
+    rows_from_cells,
+    settled,
+)
+from sqlalchemy import text
 from tests.test_earnings_calendar import EARN_DDL
 from tests.test_sec_collect import SEC_DDL
 
@@ -19,6 +27,36 @@ def test_parsing():
     assert (r.ticker, r.eps, r.revenue, r.revenue_forecast, r.timing) == ("NVDA", "2.22", "96.2B", "91.9B", "After Market")
     assert rows_from_cells(["", "Sunday, September 27, 2026", "", "", "", "", ""], 0, date(2026, 9, 27)) is None
     assert er.money("91.9B") == 91900000000 and er.money("6M") == 6000000 and er.money("") is None
+
+
+def _tr(name: str) -> dict:
+    return {"cells": ["", name, "1.0 /", "0.9", "10B /", "9.5B", "1T", ""], "paths": 1}
+
+
+def _hd(text: str) -> dict:
+    return {"cells": ["", text, "", "", "", "", ""], "paths": 0}
+
+
+def test_table_settle_detection():
+    """★2026-10-28 실측: 날짜 적용 직후 표는 종목 없는 자리표시 행 → 다른 날 표 → 요청한 날 표가 점점 찬다.
+    요청한 날 머리행이 보이고 그날 행 수가 연속 3번 같을 때만 읽는다."""
+    day = date(2026, 10, 29)
+    placeholder = [{"cells": ["", "", "", ""], "paths": 0}] * 35
+    other_day = [_hd("Tuesday, October 27, 2026"), _tr("Intel ( INTC )")]
+    partial = [_hd("Thursday, October 29, 2026"), _tr("Starbucks ( SBUX )")]
+    full = partial + [_tr("Entegris ( ENTG )"), _tr("Sandisk ( SNDK )")]
+
+    assert day_count(placeholder, day) is None          # 자리표시 — 아직 아무것도 없다
+    assert day_count(other_day, day) is None            # 날짜가 안 바뀐 표
+    assert day_count(partial, day) == 1 and day_count(full, day) == 3
+
+    assert not settled([None, None, None])
+    assert not settled([1, 3, 3])                        # 아직 차는 중
+    assert settled([None, 1, 3, 3, 3])
+    assert settled([0, 0, 0])                            # 그날 머리행만 있고 발표 없음 — 다 찬 것으로 본다
+
+    rows = rows_for_day(other_day + full, day)           # 옛 날짜 행은 버린다
+    assert [r.ticker for r in rows] == ["SBUX", "ENTG", "SNDK"]
 
 
 def test_weekday_window():
